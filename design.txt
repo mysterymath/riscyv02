@@ -1,0 +1,282 @@
+5-bit lower immediates. 11-bit upper immediates. 8 16-bit registers. 8-bit ALU.
+
+8 16-bit registers: 8x SN74LS670, 98 gates each, ~2352 transistors. About half
+a 6502, as it should be.
+
+Okay, that gives us one simulataneous read and write port.
+
+Okay, let's look at the classic risc pipeline.
+
+We'll need two cycles to fetch:
+fetch lo
+fetch hi
+
+After these two cycles have executed, we'll have the instruction latched into a
+16-bit register.
+TODO: Source.
+
+Now, we'd *immediately* like to begin fetching the next instruction. That means
+that we lose access to the opcode. That means that you can't just place the
+opcode somewhere; it's a PIPELINE.
+
+What that means is that each stage will have a set of registers as its inputs
+and a set of registers as its outputs. So, what are these for the fetch stages?
+
+fetch lo: inputs: none, outputs: inst lo
+fetch hi: inputs: inst lo, outputs: inst lo, inst hi
+
+Now, if we actually made registers for these, we could, without other concerns,
+start fetch lo of the next insructoin immediately after fetch lo of the
+previous:
+
+fetch lo
+fetch hi | fetch lo
+
+That would work fine on the inside, but we can't actually do two fetches at the
+same time on the outside. In such cases, we must defer issuing the next
+instruction; and that means we're free to **pass through** an input to the
+output using only a single register.
+
+So, let's just name the next stage next, and decide it doesn't do anything.
+
+fetch lo: inputs: none, outputs: inst lo
+fetch hi: inputs: none, outputs: inst lo, inst hi
+next:   inputs: inst lo, inst hi, outputs: opcode, rd1, rs1, rs2, imm | fetch lo: inputs none, outputs: inst lo
+
+Now, it's fine to have an output and input of the same reg at the same time;
+one completes as the clock; the other begins at the clock, so they don't
+actually overlap.
+
+Our do nothing next stage needs to output all of the parts of the instruction,
+since it doesn't do anything. We're not aiming for a very high fmax, because
+our old slow DRAMs are old and slow. The goal is to produce a better 6502, so
+we want as much work in each pipeline stage as we can stomach. Only needs to go
+at 1MhZ, after all!
+
+The more next does, the fewer outputs it needs. Our goal is to do an ALU
+operation, but to do that, we may need up to 2 register operands. So, it should
+fetch the first one.
+
+fetch lo: inputs: none, outputs: inst lo
+fetch hi: inputs: none, outputs: inst lo, inst hi
+read_reg: inputs: inst lo, inst hi, outputs: opcode, rd1, rs1 value, rs2, imm | fetch lo: inputs none, outputs: inst lo
+
+Next, we can read the other register and do the low ALU operation:
+
+fetch lo:            inputs: none, outputs: inst lo
+fetch hi:            inputs: none, outputs: inst lo, inst hi
+read reg:            inputs: inst lo, inst hi, outputs: opcode, rd1, rs1 lo, rs1 hi, rs2, imm | fetch lo: inputs none, outputs: inst lo
+alu lo; read reg 2:  inputs: rd1, rs1 lo, rs1 hi, rs2, imm, outputs: opcode, rd1, alu_lo, rs1 hi,  | fetch hi: inputs none, outputs: inst lo, inst hi
+
+Okay, all well and good. But what's the *shape* of the overall pipeline? Stuff
+needs to be there, even if it's not used. So, let's pack each instruction type
+as tight as it will go, then name the pipeline.
+
+reg reg arithmetic:
+fetch lo
+fetch hi
+read reg 1
+alu lo; read reg 2
+alu hi; write destination
+
+reg imm arithmetic:
+fetch lo
+fetch hi
+read reg 1; alu lo
+alu hi; write destination
+
+jal:
+fetch lo
+fetch hi; alu lo; write dest
+
+jalr:
+fetch lo
+fetch hi; write dest
+read reg; alu lo
+alu hi
+
+beq:
+fetch lo
+fetch hi; alu lo
+alu hi; read reg 1
+read reg 2; alu lo
+alu hi; 
+
+loadb:
+fetch lo
+fetch hi; alu lo
+
+Resources: ALU, register file read, register file write, memory
+
+Let's be simple!!!!
+
+Fetch low
+Fetch hi
+Decode
+read reg 1
+read reg 2
+alu lo
+alu hi
+write reg
+alu lo (branch)
+alu hi (branch)
+
+Offset that by two, what do we get?
+
+Fetch low
+Fetch hi
+Decode            | Fetch low
+read reg 1        | Fetch hi
+read reg 2        | decode
+alu lo            | read reg 1
+alu hi            | read reg 2
+write reg         | alu lo
+alu lo (branch)   | alu hi ERROR
+alu hi (branch)   
+
+Alright, so an observation is that most of our operations come in pairs. A
+resource is used for two cycles, and we don't want those to be able to line up. So:
+
+fetch low
+fetch hi
+decode 1         | fetch lo
+decode 2         | fetch hi
+read reg 1       | decode 1
+read reg 2       | decode 2
+alu lo           | read reg 1
+alu hi           | read reg 2
+write 1          | alu lo
+write 2          | alu hi
+alu lo (branch)  | write 1
+alu hi (branch)  | write 2
+                 | alu lo (branch)
+                 | alu hi (branch)
+
+Okay, so another observation. It's not just two instructions that overlap, it's
+all of them. In a full pipeline, every pair of stages overlaps with every other
+pair. That means that alu (branch) overlaps with alu, which isn't okay.
+
+Now, an alu (branch) only actually needs to happen on a taken branch. If a
+branch occurs, some set of instruction will be further along than this one.
+Assume none of them can be branches. We need to delay the next instruction
+anyway so that its fetch starts after alu hi (branch). So none of the next
+instructions can overlap with it either. All good.
+
+Actually, we can think about this as just the classic risc pipeline, except
+each phase has two cycles.
+
+fetch
+decode / read
+execute
+memory access
+writeback
+
+How about unconditional jumps? Writeback sets the PC and flushes the pipeline.
+
+Branches work the same way; just that the writeback flush only occurs if the
+branch is actually taken.
+
+Flushing the pipeline can be done by changing the input of all cycles to what
+they would be if the canonical NOP were issued, addi x0, x0, 0. Fetch's output
+is changed to this opcode, the outputs of decode are changed to imm 0, x0, and
+x0, and the results of execute are changed to 0.
+
+How much work is thrown away? 3 cycles for the next instruction, 2 for the one
+after that, and 1 for the one after that. So a 6 cycle penalty.
+
+Memory accesses are in-order, so there are no memory hazards. What about registers?
+
+Say we read a r1 in the decode phase. Any previous instruction that hasn't yet
+written to r1 is a hazard. We detect the hazard after the following instruction
+has been decoded; we can't know about it yet in the previous instruction.
+
+Accordingly, the simplest thing to do is to stall fetch and decode in place
+(don't toggle their flips) until writeback of the previous instruction is finished.
+
+This actually means that we need to keep around the set of registers that are
+currently in process of being written. Later decodes will stall until that set
+empties of any register read by the instruction. The decode then introduces its
+own writes into the set, and writeback clears them. It's more a bag then.
+
+How many writebacks could clear before a decode? Three; previous instructions
+in flight could be in the execute, memory access, or write back stages. We can
+keep with each state a 3-bit register that names the writeback register (if
+any). These then move along the last three stages of the pipeline, and they
+eventually fall off the end after writeback.
+
+That's going to be quite expensive to compare to the decoded read register set.
+Is forwarding cheaper? Yes, but it only applies if the result is from execute,
+not memory access.
+
+Hmm, let's just combine execute and memory access then; we can do a load on the
+cycle the ALU operation completes.
+
+fetch
+decode / read
+execute / memory access
+writeback
+
+This reveals an error in thinking earlier; fetch can't overlap with memory
+access. That's not too much of an issue though; we can just have fetch read a
+NOP during a memory access. This inserts a bubble of 2 cycles into the
+pipeline.
+
+Actually, we can simplify the whole thing. We can simulataneous do a writeback
+with any other operation; writes to PC are already special-cased, and we have a
+two port register file.
+
+So, our pipeline only needs three stages:
+
+fetch
+decode / read
+execute / memory access / writeback
+
+Let's call these:
+fetch
+decode
+execute
+
+Here's a fun way to think of a conditional branch. At the end of the execute
+phase, we know whether the branch will be taken, but we don't know where to
+yet. We do know that the rest of the pipeline is useless. But, we already know
+everything we need to about the decoded form of the branch target; just as well
+as the decode phase. So, we can convert it to a JAL x0, target and feed it
+right into the execute phase. We still replace fetch and decode with NOPs.
+
+What are the effects of this? Well, we've thrown away a fetch, a fetch and
+decode. We also need to run the next execute phase before we can actually do a
+fetch. That execute phase will also make fetch read a nop. So, the overall
+latency add is 4 phases = 8 cycles. But that's the minimum; it takes exactly
+four phases to compute the branch condition and target. AWESOME.
+
+Can we still have RAW hazards? No! A previous cycle's execute feeds data in to
+the next cycle's decode if they're simultaneously active. Just make sure to
+read/write bytes in the same order.
+
+Okay, so jumps, loads/stores, and branches need to manipulate the pipeline. The
+need arises in execute for branches and decode for the others.
+
+For a jump, the fetches during its decode and execute would be wrong. The
+correct next instruction isn't known until execute completes. Accordingly, the
+decode step should cause the next fetch (during execute) to see a NOP as input
+instead of fetching, and it should cause the concurrent fetch step to output a
+NOP instead of what it fetched.
+
+For a branch not taken, it has no effect; it's like an arithmetic instruction.
+
+For a taken branch, we could logically think of its execute step as inserting a
+new JAL x0, tgt into the pipeline to be fetched, decoded, and executed.
+However, this determination is made when the execute of the branch finishes. At
+that point, the fetch and decode for that logical instruction have just
+finished, based on the instruction after the branch. That's perfect; the
+execute of the branch is concurrent with the decode of the logical JAL. We can
+have the taken branch cause the effects of decoding a JAL, except that it's
+triggered by the branch condition, not the opcode. That's all the branch
+execute step needs to do to effect the branch.
+
+Similarly, we can have the decode phase of a non-zero shift change the output
+of the fetch stage to be that of a shift with a lesser amount. Each stage would
+execute in sequence, so it would take between 2 and 14 cycles to issue a shift.
+We could also use this trick to convert variable shifts into fixed ones; this
+has no penalty, since the first shift operation can be done in the first
+instruction.
