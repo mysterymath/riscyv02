@@ -1,0 +1,29 @@
+rf:
+     AND2X2                          1
+     AOI21X1                        16
+     AOI22X1                        16
+     BUFX2                          16
+     INVX1                          89
+     LATCH                         112
+     NAND2X1                        22
+     NAND3X1                         7
+     NOR2X1                         25
+     OAI21X1                        15
+     OAI22X1                        32
+Transistors: 1950
+
+Estimates:
+AND2X2: 12
+AOI21X1: 6
+AOI22X1: 8
+BUFX2: 4
+INVX1: 2
+LATCH: 8
+NAND2X1: 4
+NAND3X1: 6
+NOR2X1: 4
+OAI21X1: 6
+OAI22X1: 8
+
+
+
