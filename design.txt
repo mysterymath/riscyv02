@@ -280,3 +280,24 @@ execute in sequence, so it would take between 2 and 14 cycles to issue a shift.
 We could also use this trick to convert variable shifts into fixed ones; this
 has no penalty, since the first shift operation can be done in the first
 instruction.
+
+Okay, here's an observation. If we wanted a classic RISC-style adder in the
+decode stage for addresses, it would only need to be 8-bits, since we have two
+cycles available. That means that we need 7 FAX1 and 1 HAX1, or 7*24+11=179
+transistors. That's a pretty small price to pay for how much it simplifies the
+pipeline; it's a considerably better bargain than a barrel shifter.
+
+If we do that, then by the time the decode of an uncoditional branch finishes,
+we know the target. That means we can cue the fetch of the real target and
+convert the incorrect fetch into a NOP, for a 2 cycle total penalty.
+
+Similarly, we can use static branch prediction for conditional branches:
+predict backwards branches are taken and that forward are not. This allows
+treating them like unconditional jumps if backedge prediction succeeds, for a
+two cycle penalty, or the usual zero cycle penalty if forward edge prediction
+succeeds. On failure, still need to discard a fetch and a fetch and decode, so
+the total penalty is 6 cycles.
+
+Seems worth it; it brings our usual taken branch penalty much closer to the
+6502's ideal 1 cycle. We should need to branch much less often, so that should
+help even things out.

@@ -26,6 +26,21 @@ alu:
      NOR3X1                          5
      OAI21X1                         7
      XOR2X1                         11
+Transistors: 784
+
+barrel_shift:
+     AND2X2                          4
+     AOI21X1                        16
+     AOI22X1                        12
+     BUFX2                          16
+     INVX1                          16
+     MUX2X1                         14
+     NAND2X1                        55
+     NAND3X1                        46
+     NOR2X1                         12
+     OAI21X1                        42
+Transistors: 1280
+
 
 Estimates:
 AND2X2: 12
