@@ -10,20 +10,39 @@ rf:
      NOR2X1                         25
      OAI21X1                        15
      OAI22X1                        32
-Transistors: 1950
+Transistors: 2014
+
+alu:
+     AND2X2                          1
+     AOI21X1                         1
+     AOI22X1                        16
+     BUFX2                           9
+     FAX1                            8
+     INVX1                          20
+     MUX2X1                          1
+     NAND2X1                        14
+     NAND3X1                        17
+     NOR2X1                          8
+     NOR3X1                          5
+     OAI21X1                         7
+     XOR2X1                         11
 
 Estimates:
 AND2X2: 12
 AOI21X1: 6
 AOI22X1: 8
-BUFX2: 4
+BUFX2: 8
+FAX1: 24
 INVX1: 2
 LATCH: 8
+MUX2X1: 6
 NAND2X1: 4
 NAND3X1: 6
 NOR2X1: 4
+NOR3X1: 6
 OAI21X1: 6
 OAI22X1: 8
+XOR2X1: 6
 
 
 
