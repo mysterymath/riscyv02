@@ -301,3 +301,40 @@ the total penalty is 6 cycles.
 Seems worth it; it brings our usual taken branch penalty much closer to the
 6502's ideal 1 cycle. We should need to branch much less often, so that should
 help even things out.
+
+Okay, let's actually get busy with the opcodes. Recall, 3 bits per register (2
+for U-type), 5-bit immediates, and 11-bit upper immediates.
+
+xxxx000 LUI
+xxxx001 AUIPC
+xxxx010 JAL
+xx00011 ADDI
+xx00100 SLTI
+xx00101 SLTIU
+xx00110 ANDI
+xx00111 ORI
+xx01011 XORI
+xx01100 SLI
+xx01101 SRI
+xx01110 JALR
+xx01111 BEQ
+xx10011 BNE
+xx10100 BLT
+xx10101 BLTU
+xx10110 BGE
+xx10111 BGEU
+xx11011 LB
+xx11100 LBU
+xx11101 LW
+xx11110 SB
+xx11111 SW
+0100011 ADD
+0100100 SLT
+0100101 SLTU
+0100110 AND
+0100111 OR
+0101011 XOR
+0101100 SLL
+0101101 SRL
+0101110 SUB
+0101111 SRA
