@@ -60,13 +60,37 @@ always @*
 always @(posedge clk) begin
   if (!cyc) begin
     op <= {inst[15:14], inst[7:6], inst[2:0]};
-    rd_num <= inst[5:3];
+    case op([2:0])
+      LUI, ADDI, AUIPC
+    endcase
     rs2_num <= inst[13:11];
     rs1_val <= rf_r;
-    case (op[4:0])
-      ADDI, SLTI, SLTIU, ANDI, ORI, XORI, SLI, SRI:
-        rs2_imm_val <= {{11{inst[15]}}, inst[15:11]};
-    endcase
+    case op([2:0])
+      // U-type
+      LUI, AUIPC: begin
+        rs2_imm_val <= {inst[15:5], 5'b0};
+        rd_num <= {1'b0, inst[4:3]};
+      end
+      // J-type
+      JAL: begin
+        rs2_imm_val <= {{5{inst[15]}}, inst[12:5], inst[13], inst[14], 1'b0};
+        rd_num <= {1'b0, inst[4:3]};
+      end
+      default: begin
+        rd_num <= inst[5:3];
+        case (op[4:0])
+          // I-type
+          ADDI, SLTI, SLTIU, ANDI, ORI, XORI, SLI, SRI, JALR:
+            rs2_imm_val <= {{12{inst[15]}}, inst[14:11]};
+          // S-type
+          SB, SW:
+            rs2_imm_val <= {{12{inst[15]}}, inst[14], inst[5:3]};
+          // B-type
+          BEQ, BNE, BLT, BLTU, BGE, BGEU:
+            rs2_imm_val <= {{12{inst[15]}}, inst[3], inst[14], inst[5:4], 1'b0};
+        endcase
+      end
+      endcase
   end else begin
   end
 end
