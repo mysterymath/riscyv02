@@ -15,6 +15,8 @@ output reg [15:0] rs2_imm_val;
 output reg [2:0] rf_r_num;
 input [15:0] rf_r;
 
+reg [2:0] rs2_num;
+
 parameter [2:0] LUI   = 3'b000
 parameter [2:0] AUIPC = 3'b001
 parameter [2:0] JAL   = 3'b010
@@ -57,8 +59,9 @@ always @*
 
 always @(posedge clk) begin
   if (!cyc) begin
-    op <= {inst[12:11], inst[7:6], inst[2:0]};
+    op <= {inst[15:14], inst[7:6], inst[2:0]};
     rd_num <= inst[5:3];
+    rs2_num <= inst[13:11];
     rs1_val <= rf_r;
     case (op[4:0])
       ADDI, SLTI, SLTIU, ANDI, ORI, XORI, SLI, SRI:

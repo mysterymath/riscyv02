@@ -341,41 +341,58 @@ xx11111 SW
 
 Alright, IMMEDIATELY this is going to suck for decode. We can make it suck
 less. The first three opcodes demand that rd occupy bits 3-5. We can just place
-a register there regardless. We can have it be rd or rs2.
+rd there regardless.
 
 Furthermore, the immediates demand that the immediate be [15:10]. So rs1 must be below
 that, at [9:7]. Let's make that uniform.
 
-xxxxxxxxxx000 LUI
-xxxxxxxxxx001 AUIPC
-xxxxxxxxxx010 JAL
-xxxxx00xxx011 ADDI
-xxxxx00xxx100 SLTI
-xxxxx00xxx101 SLTIU
-xxxxx00xxx110 ANDI
-xxxxx00xxx111 ORI
-xxxxx01xxx011 XORI
-xxxxx01xxx100 SLI
-xxxxx01xxx101 SRI
-xxxxx01xxx110 JALR
-xxxxx01xxx111 BEQ
-xxxxx10xxx011 BNE
-xxxxx10xxx100 BLT
-xxxxx10xxx101 BLTU
-xxxxx10xxx110 BGE
-xxxxx10xxx111 BGEU
-xxxxx11xxx011 LB
-xxxxx11xxx100 LBU
-xxxxx11xxx101 LW
-xxxxx11xxx110 SB
-xxxxx11xxx111 SW
-01xxx00xxx011 ADD
-01xxx00xxx100 SLT
-01xxx00xxx101 SLTU
-01xxx00xxx110 AND
-01xxx00xxx111 OR
-01xxx01xxx011 XOR
-01xxx01xxx100 SLL
-01xxx01xxx101 SRL
-01xxx01xxx110 SUB
-01xxx01xxx111 SRA
+That means rs2 must be at [15:13]... same as the immediate. We want to always
+extend by the sign bit though, even for S type instructions, which have a rs2.
+So, let's move the high two bits of the opcode for reg reg instructions to the
+top of the word.  
+
+xxxxxxxx xxxxx000 LUI
+xxxxxxxx xxxxx001 AUIPC
+xxxxxxxx xxxxx010 JAL
+xxxxxxxx 00xxx011 ADDI
+xxxxxxxx 00xxx100 SLTI
+xxxxxxxx 00xxx101 SLTIU
+xxxxxxxx 00xxx110 ANDI
+xxxxxxxx 00xxx111 ORI
+xxxxxxxx 01xxx011 XORI
+xxxxxxxx 01xxx100 SLI
+xxxxxxxx 01xxx101 SRI
+xxxxxxxx 01xxx110 JALR
+xxxxxxxx 01xxx111 BEQ
+xxxxxxxx 10xxx011 BNE
+xxxxxxxx 10xxx100 BLT
+xxxxxxxx 10xxx101 BLTU
+xxxxxxxx 10xxx110 BGE
+xxxxxxxx 10xxx111 BGEU
+xxxxxxxx 11xxx011 LB
+xxxxxxxx 11xxx100 LBU
+xxxxxxxx 11xxx101 LW
+xxxxxxxx 11xxx110 SB
+xxxxxxxx 11xxx111 SW
+01xxxxxx 00xxx011 ADD
+01xxxxxx 00xxx100 SLT
+01xxxxxx 00xxx101 SLTU
+01xxxxxx 00xxx110 AND
+01xxxxxx 00xxx111 OR
+01xxxxxx 01xxx011 XOR
+01xxxxxx 01xxx100 SLL
+01xxxxxx 01xxx101 SRL
+01xxxxxx 01xxx110 SUB
+01xxxxxx 01xxx111 SRA
+
+AWESOME!
+
+We'll use a RISC-V-like encoding scheme for immediates.
+
+I-type: [15:11] = imm[4:0]
+S-type: [15:14] = imm[4:3], [5:3] = imm[2:0]
+B-type: [15] = imm[5], [14] = imm[3], [5:4] = imm[2:1], [3] = imm[4] (remember branch immediates start at 1, not 0)
+U-type: [15:5] = imm[15:5]
+J-type: [15] = imm[11], [14:12] = imm[3:1], [11] = imm[4], [10:5] = imm[10:5]
+
+That's really cool.
