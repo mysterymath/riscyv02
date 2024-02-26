@@ -351,48 +351,153 @@ extend by the sign bit though, even for S type instructions, which have a rs2.
 So, let's move the high two bits of the opcode for reg reg instructions to the
 top of the word.  
 
-xxxxxxxx xxxxx000 LUI
-xxxxxxxx xxxxx001 AUIPC
-xxxxxxxx xxxxx010 JAL
-xxxxxxxx 00xxx011 ADDI
-xxxxxxxx 00xxx100 SLTI
-xxxxxxxx 00xxx101 SLTIU
-xxxxxxxx 00xxx110 ANDI
-xxxxxxxx 00xxx111 ORI
-xxxxxxxx 01xxx011 XORI
-xxxxxxxx 01xxx100 SLI
-xxxxxxxx 01xxx101 SRI
-xxxxxxxx 01xxx110 JALR
-xxxxxxxx 01xxx111 BEQ
-xxxxxxxx 10xxx011 BNE
-xxxxxxxx 10xxx100 BLT
-xxxxxxxx 10xxx101 BLTU
-xxxxxxxx 10xxx110 BGE
-xxxxxxxx 10xxx111 BGEU
-xxxxxxxx 11xxx011 LB
-xxxxxxxx 11xxx100 LBU
-xxxxxxxx 11xxx101 LW
-xxxxxxxx 11xxx110 SB
-xxxxxxxx 11xxx111 SW
-01xxxxxx 00xxx011 ADD
-01xxxxxx 00xxx100 SLT
-01xxxxxx 00xxx101 SLTU
-01xxxxxx 00xxx110 AND
-01xxxxxx 00xxx111 OR
-01xxxxxx 01xxx011 XOR
-01xxxxxx 01xxx100 SLL
-01xxxxxx 01xxx101 SRL
-01xxxxxx 01xxx110 SUB
-01xxxxxx 01xxx111 SRA
+iiiiiiii iiidd000 LUI
+iiiiiiii iiidd001 AUIPC
+iiiiiiii iiidd010 JAL
+iiiiilll 00ddd011 ADDI
+iiiiilll 00ddd100 SLTI
+iiiiilll 00ddd101 SLTIU
+iiiiilll 00ddd110 ANDI
+iiiiilll 00ddd111 ORI
+iiiiilll 01ddd011 XORI
+iiiiilll 01ddd100 SLI
+iiiiilll 01ddd101 SRI
+iiiiilll 01ddd110 JALR
+iirrrlll 01iii111 BEQ
+iirrrlll 10iii011 BNE
+iirrrlll 10iii100 BLT
+iirrrlll 10iii101 BLTU
+iirrrlll 10iii110 BGE
+iirrrlll 10iii111 BGEU
+iiiiilll 11ddd011 LB
+iiiiilll 11ddd100 LBU
+iiiiilll 11ddd101 LW
+iirrrlll 11iii110 SB
+iirrrlll 11iii111 SW
+01rrrlll 00ddd011 ADD
+01rrrlll 00ddd100 SLT
+01rrrlll 00ddd101 SLTU
+01rrrlll 00ddd110 AND
+01rrrlll 00ddd111 OR
+01rrrlll 01ddd011 XOR
+01rrrlll 01ddd100 SLL
+01rrrlll 01ddd101 SRL
+01rrrlll 01ddd110 SUB
+01rrrlll 01ddd111 SRA
 
-AWESOME!
+THIS DOESN"T WORK. ADD overlaps with ADDI! We have too many I and B instructions to possible work.
 
-We'll use a RISC-V-like encoding scheme for immediates.
+Okay, maybe we can pull a bit out of the immediate of branches? There's no need
+for these to be 5 bits; we can't combine them with an 11 bit immediate. That
+would give us a branch range of +- 8 instructions, that's terrible. Even with 5
+bits, we only get +- 16 instructions.
 
-I-type: [15:11] = imm[4:0]
-S-type: [15:14] = imm[4:3], [5:3] = imm[2:0]
-B-type: [15] = imm[5], [14] = imm[3], [5:4] = imm[2:1], [3] = imm[4] (remember branch immediates start at 1, not 0)
-U-type: [15:5] = imm[15:5]
-J-type: [15] = imm[11], [14] = imm[3], [13] = imm[4], [12:5] = imm[10:5]
+BUT, it's not as bad as all that. What is does a branch to a loop header
+bigger than 8 instructions actually look like?
 
-That's really cool.
+BNE x1, x2, end
+JAL x0, loop
+end:
+
+This is 4 bytes to encode, rather than the 6502's 2. BUT, the JAL is predicted!
+That gives a taken loop branch penalty of 4 cycles, vs the 2 if it were in
+range, and vs the 6502's 1+1.
+
+Let's rearrange the necessary ones first.
+
+iiiiiiii iiidd000 LUI
+iiiiiiii iiidd001 AUIPC
+iiiiiiii iiidd010 JAL
+iiiiilll 00ddd011 ADDI
+iiiiilll 00ddd100 SLTI
+iiiiilll 00ddd101 SLTIU
+iiiiilll 00ddd110 ANDI
+iiiiilll 00ddd111 ORI
+iiiiilll 01ddd011 XORI
+iiiiilll 01ddd100 SLI
+iiiiilll 01ddd101 SRI
+iiiiilll 01ddd110 JALR
+iiiiilll 01ddd111 LB
+iiiiilll 10ddd011 LBU
+iiiiilll 10ddd100 LW
+iirrrlll 10iii101 SB
+iirrrlll 10iii110 SW
+
+iirrrlll TBD BEQ
+iirrrlll TBD BNE
+iirrrlll TBD BLT
+iirrrlll TBD BLTU
+iirrrlll TBD BGE
+iirrrlll TBD BGEU
+
+Now, how many REG REG opcodes do we have? 10. Let's add an INT instruction w/ TBD semantics, so 11. 
+
+OKay, this whole discussion sucks. Compare and branches are just too wide to
+have a good branch range. We want the range to be a loop, but it's a max of 16
+instructions, and more likely 8.
+
+So, instead, let's separate comparison and branching. BNE is by far the most
+common branch, so that will be our basis. We'll add it as a U type and call it
+BNZ.
+
+Let's make a dedicated opcode type for this. Let's steal a bit from the
+immediate for the register and another to reduce the opcode usage.
+
+Then, we just need reg reg operations to set each of the branch conditions.
+
+iiiiiiii iiidd000 LUI
+iiiiiiii iiidd001 AUIPC
+iiiiiiii iiidd010 JAL
+iiiiiiii i0ddd011 BNZ
+
+iiiiilll 00ddd100 ADDI
+iiiiilll 00ddd101 SLTI
+iiiiilll 00ddd110 SLTIU
+iiiiilll 00ddd111 ANDI
+iiiiilll 01ddd011 ORI
+iiiiilll 01ddd100 XORI
+iiiiilll 01ddd101 SLI
+iiiiilll 01ddd110 SRI
+iiiiilll 01ddd111 JALR
+iiiiilll 10ddd100 LB
+iiiiilll 10ddd101 LBU
+iiiiilll 10ddd110 LW
+iirrrlll 10iii111 SB
+iirrrlll 11iii011 SW
+
+00rrrlll 11ddd100 ADD
+00rrrlll 11ddd101 SEQ
+00rrrlll 11ddd110 SNE
+00rrrlll 11ddd111 SLT
+01rrrlll 11ddd100 SLTU
+01rrrlll 11ddd101 SGE
+01rrrlll 11ddd110 SGEU
+01rrrlll 11ddd111 AND
+10rrrlll 11ddd100 OR
+10rrrlll 11ddd101 XOR
+10rrrlll 11ddd110 SLL
+10rrrlll 11ddd111 SRL
+10rrrlll 11ddd100 SUB
+11rrrlll 11ddd101 SRA
+11rrrlll 11ddd110 INT
+
+Okay, looks like it all fits!
+
+But, BLT is the same as !BGE. So having a BNZ would allow us to kill SGE, SGEU,
+and SNE. But a J type uses so much more space it hardly seems worth.
+
+But, is this design actually any better? It leaves BNZ fast with a wide range,
+but every other branch now needs a 2 cycle penalty for the compare. But before,
+we only paid a two cycle penalty if the branch was out of range. So this
+actaully seems worse on balance.
+
+We could look at it this way: our branch range is very short, because our
+branches are really just compares in disguise. The following JAL actually has
+the branch target in it. What we gain is very fast branching around small
+loops; that's very good.
+
+That's not exactly true though. If we have say a break statement, there's no
+way to convert that to a branch and jump that predicts that the jump isn't
+taken. The branch would inherently need to be forward, and the that means it is
+predicted not taken. So the payoff is that the above reduces the amount of
+times that we lose control of the predictor. That's worth it.
