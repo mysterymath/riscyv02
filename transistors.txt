@@ -41,12 +41,26 @@ barrel_shift:
      OAI21X1                        42
 Transistors: 1280
 
+pc:
+     AND2X2                          1
+     AOI21X1                        16
+     AOI22X1                        16
+     BUFX2                          16
+     DFFPOSX1                       16
+     HAX1                           16
+     INVX1                           2
+     NAND2X1                         4
+     NAND3X1                        16
+     NOR2X1                          3
+Transistors: 860
 
 Estimates:
 AND2X2: 12
 AOI21X1: 6
 AOI22X1: 8
 BUFX2: 8
+DFFPOSX1: 12
+HAX1: 11
 FAX1: 24
 INVX1: 2
 LATCH: 8
