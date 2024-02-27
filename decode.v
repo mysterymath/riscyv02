@@ -1,4 +1,4 @@
-module decode(clk, cyc, inst, op, rd_num, rs1_val, rs2_imm_val, rf_r_num, rf_r);
+module decode(clk, cyc, inst, op, rd_num, rs1_val, rs2_imm_val, freeze, branch, branch_target, rf_r_num, rf_r, alu_op, alu_l, alu_r, alu_c_in);
 
 // Logical interface
 input clk;
@@ -9,11 +9,27 @@ output reg [2:0] rd_num;
 output reg [15:0] rs1_val;
 output reg [15:0] rs2_imm_val;
 
+// Interface to freeze processor
+output freeze;
+
+// Interface to report branch.
+output branch;
+output reg [15:1] branch_target;
+
 // Interface to register file
 output reg [2:0] rf_r_num;
 input [15:0] rf_r;
 
+// Interface to use ALU while execute frozen
+output reg [2:0] alu_op;
+output reg [7:0] alu_l;
+output reg [7:0] alu_r;
+output reg alu_c_in;
+
+// State between decode cycles.
 reg [2:0] rs2_num;
+reg have_branch_target;
+reg alu_c_out;
 
 parameter TRAP  = 5'b00000;
 parameter MOVI  = 5'b00001;
@@ -63,6 +79,14 @@ always @*
   else
     rf_r_num <= rs2_num;
 
+// Trick from RISC-V to keep most bits aligned with immediates.
+wire [15:1] branch_offset;
+assign branch_offset = {{8{inst[15]}}, inst[8], inst[14:9]};
+
+// Backwards brnaches and unconditional jumps are predicted.
+wire branch_predicted;
+assign branch_predicted = inst[4:0] == JAL || inst[4:0] == JALR || branch_offset[15];
+
 always @(posedge clk) begin
   // Value on first cycle is garbage from inst in previous second cycle, but
   // no matter.
@@ -85,12 +109,15 @@ always @(posedge clk) begin
       LUI, AUIPC:
         rs2_imm_val <= {inst[15:8], 8'b0};
       BZ, BNZ, JAL: begin
-        // Trick from RISC-V to keep most bits aligned with immediates above.
-        rs2_imm_val <= {{8{inst[15]}}, inst[8], inst[14:9], 1'b0};
+        rs2_imm_val <= pc_offset;
       end
       LB, LBU, LW, SB, SW:
         rs2_imm_val <= {{12{inst[15]}}, inst[14:11]};
     endcase
+
+    if (branch_predicted) begin
+    end
+
   end else begin
     case (op)
       ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU:
