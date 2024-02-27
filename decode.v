@@ -53,16 +53,32 @@ parameter SLT   = 5'b11110;
 parameter SLTU  = 5'b11111;
 
 always @*
+  // rs1
   if (!cyc)
-    rf_r_num <= inst[10:8]; // rs1
+    case (inst[4:0])
+      TRAP, MOVI, ADDI, ANDI, ORI, XORI, SLI, SRI, JALR, SLTI, SLTIU, LUI,
+        AUIPC, BZ, BNZ, JAL, CSR, LB, LBU, LW, SB, SW:
+        rf_r_num <= inst[7:5];
+      default:
+        rf_r_num <= inst[10:8];
+    endcase
   else
     rf_r_num <= rs2_num;
 
 always @(posedge clk) begin
-  rs2_num <= inst[13:11];  // Value doesn't matter on first cycle.
+  // Value on first cycle is garbage from inst in previous second cycle, but
+  // no matter.
+  rs2_num <= inst[13:11];
   // TODO: TRAP
   if (!cyc) begin
     op <= inst[4:0];
+
+    case (inst[4:0])
+      TRAP, BZ, BNZ, SB, SW: rd_num <= 3'b0;
+      JALR: rd_num <= 3'b1;
+      default: rd_num <= inst[7:5];
+    endcase
+
     rs1_val <= rf_r;
 
     case (inst[4:0])
