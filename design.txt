@@ -501,3 +501,157 @@ way to convert that to a branch and jump that predicts that the jump isn't
 taken. The branch would inherently need to be forward, and the that means it is
 predicted not taken. So the payoff is that the above reduces the amount of
 times that we lose control of the predictor. That's worth it.
+
+This gives us a final branch range of +-256 instructions, or +- 512 bytes.
+That's much better than the 6502, too.
+
+Alright, this sucks ass as as an ISA. There's a tone of things not pulling
+their weight; the immediates are too small, SLTI doesn't make any sense, since
+we can't effectively SGTI into a branch anymore, etc etc.
+
+OKAY. Let's start again.
+
+This time, let's start with a constraint: 8-bit immediates. This suffices for
+both lower *and* upper immediates, and it greatly simplifies single byte ALU
+operations. The downside is that we need 2-address code, but that seems like a
+small price compared to the disadvantages of all the above.
+
+So, right away this means that compare and branch instructions are out. On the
+other hand, we only need two broad instruction formats: immediate and two reg.
+Right away, we may be able to support a BNZ and a BZ, and we may be able to
+support a full gamut of immediate comparisons too. We don't need a set ne;
+that's just a subtraction. We can invert any branch, so we don't need set eq
+either.
+
+What opcodes does that give?
+
+Immediate (20):
+MOVI
+ADDI
+ANDI
+ORI
+XORI
+SLI
+SRI
+JALR
+SLTI
+SLTIU
+LUI
+AUIPC
+LB
+LBU
+LW
+SB
+SW
+JAL
+BZ
+BNZ
+
+Reg reg (11):
+ADD
+SUB
+AND
+OR
+XOR
+SLL
+SRL
+SRA
+SLT
+SLTU
+INT
+
+We thus only need 5 bits for opcode, and that's exactly what we have left over
+for immediate. Reg reg is very comfy by comparison, even with three registers.
+
+How does loss of three address immediate instructions affect us? Well, for most
+operations, in the worst case, we just need to preserve the original in another 
+register using an add x2, x1, x0 (still have full moves).
+
+We can no longer materialize an 8-bit immediate into a register via addi xn,
+x0, imm; that hurts a lot. We need that. So let's add a MOVI.
+
+JALR intrinsically needs two registers to work, but the alternative link
+register is only a nice to have. Let's just hard code the link register.
+
+iiiiiiii ddd00000 MOVI
+iiiiiiii ddd00001 ADDI
+iiiiiiii ddd00010 ANDI
+iiiiiiii ddd00011 ORI
+iiiiiiii ddd00100 XORI
+iiiiiiii ddd00101 SLI
+iiiiiiii ddd00110 SRI
+iiiiiiii ddd00111 JALR
+iiiiiiii ddd01000 SLTI
+iiiiiiii ddd01001 SLTIU
+iiiiiiii ddd01010 LUI
+iiiiiiii ddd01011 AUIPC
+iiiiiiii ddd01100 LB
+iiiiiiii ddd01101 LBU
+iiiiiiii ddd01110 LW
+iiiiiiii ddd01111 SB
+iiiiiiii ddd10000 SW
+iiiiiiii ddd10001 JAL
+iiiiiiii ddd10010 BZ
+iiiiiiii ddd10011 BNZ
+
+xxlllrrr ddd10100 ADD
+xxlllrrr ddd10101 SUB
+xxlllrrr ddd10110 AND
+xxlllrrr ddd11111 OR
+xxlllrrr ddd11000 XOR
+xxlllrrr ddd11001 SLL
+xxlllrrr ddd11010 SRL
+xxlllrrr ddd11011 SRA
+xxlllrrr ddd11100 SLT
+xxlllrrr ddd11101 SLTU
+xxlllrrr ddd11110 INT
+
+Okay, wow. That's really really nice actually. Note that MOVI sign extends... tricky that.
+WHOA but we forgot about loads and stores; we can no longer load through a
+pointer without destroying it. Is that okay?
+
+Well, for everthing except the stack pointer, that means a 2 cycle penalty. For
+the stack pointer, it's categorically not okay.
+
+For store, it doesn't even make any sense. Stores through pointers are
+*intrinsically* two register.
+
+This means a new instruction format with three registers and a 5-bit immediate.
+
+iiiiiiii ddd00000 MOVI
+iiiiiiii ddd00001 ADDI
+iiiiiiii ddd00010 ANDI
+iiiiiiii ddd00011 ORI
+iiiiiiii ddd00100 XORI
+iiiiiiii ddd00101 SLI
+iiiiiiii ddd00110 SRI
+iiiiiiii ddd00111 JALR
+iiiiiiii ddd01000 SLTI
+iiiiiiii ddd01001 SLTIU
+iiiiiiii ddd01010 LUI
+iiiiiiii ddd01011 AUIPC
+iiiiiiii ddd01100 BZ
+iiiiiiii ddd01101 BNZ
+iiiiiiii ddd01110 JAL
+
+iiiiirrr ddd01111 LB
+iiiiirrr ddd10000 LBU
+iiiiirrr ddd10001 LW
+iiiiirrr lll10010 SB
+iiiiirrr lll10011 SW
+
+xxlllrrr ddd10100 ADD
+xxlllrrr ddd10101 SUB
+xxlllrrr ddd10110 AND
+xxlllrrr ddd11111 OR
+xxlllrrr ddd11000 XOR
+xxlllrrr ddd11001 SLL
+xxlllrrr ddd11010 SRL
+xxlllrrr ddd11011 SRA
+xxlllrrr ddd11100 SLT
+xxlllrrr ddd11101 SLTU
+xxlllrrr ddd11110 INT
+
+Okay phew; it all still fits. That means we can access +- 16 bytes off the side
+of any pointer, which works for small structs. We can materialize larger
+offsets with adds, no problem.
