@@ -54,6 +54,22 @@ pc:
      NOR2X1                          3
 Transistors: 860
 
+decode:
+     AND2X2                          2
+     AOI21X1                         7
+     AOI22X1                         3
+     BUFX2                          45
+     DFFPOSX1                       43
+     INVX1                          37
+     NAND2X1                        59
+     NAND3X1                        24
+     NOR2X1                         12
+     OAI21X1                        72
+     OAI22X1                        11
+     OR2X2                           1
+Transistors: 1994
+
+
 Estimates:
 AND2X2: 12
 AOI21X1: 6
@@ -72,6 +88,5 @@ NOR3X1: 6
 OAI21X1: 6
 OAI22X1: 8
 XOR2X1: 6
-
-
+OR2X2: 6
 

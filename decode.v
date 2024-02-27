@@ -1,5 +1,3 @@
-`include "rf.v"
-
 module decode(clk, cyc, inst, op, rd_num, rs1_val, rs2_imm_val, rf_r_num, rf_r);
 
 // Logical interface
@@ -57,7 +55,7 @@ always @*
   if (!cyc)
     case (inst[4:0])
       TRAP, MOVI, ADDI, ANDI, ORI, XORI, SLI, SRI, JALR, SLTI, SLTIU, LUI,
-        AUIPC, BZ, BNZ, JAL, CSR, LB, LBU, LW, SB, SW:
+        AUIPC, BZ, BNZ, JAL, INT, LB, LBU, LW, SB, SW:
         rf_r_num <= inst[7:5];
       default:
         rf_r_num <= inst[10:8];
@@ -74,7 +72,7 @@ always @(posedge clk) begin
     op <= inst[4:0];
 
     case (inst[4:0])
-      TRAP, BZ, BNZ, SB, SW: rd_num <= 3'b0;
+      TRAP, BZ, BNZ, INT, SB, SW: rd_num <= 3'b0;
       JALR: rd_num <= 3'b1;
       default: rd_num <= inst[7:5];
     endcase
@@ -101,4 +99,4 @@ always @(posedge clk) begin
   end
 end
 
-endmodule;
+endmodule

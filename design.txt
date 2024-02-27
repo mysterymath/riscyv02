@@ -634,7 +634,7 @@ iiiiiiii ddd01100 AUIPC
 iiiiiiii rrr01101 BZ
 iiiiiiii rrr01110 BNZ
 iiiiiiii ddd01111 JAL
-iiiiiiii ddd10000 CSR
+iiiiiiii rrr10000 INT
 
 iiiiirrr ddd10001 LB
 iiiiirrr ddd10010 LBU
