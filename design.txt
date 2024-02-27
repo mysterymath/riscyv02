@@ -618,40 +618,43 @@ For store, it doesn't even make any sense. Stores through pointers are
 
 This means a new instruction format with three registers and a 5-bit immediate.
 
-iiiiiiii ddd00000 MOVI
-iiiiiiii ddd00001 ADDI
-iiiiiiii ddd00010 ANDI
-iiiiiiii ddd00011 ORI
-iiiiiiii ddd00100 XORI
-iiiiiiii ddd00101 SLI
-iiiiiiii ddd00110 SRI
-iiiiiiii ddd00111 JALR
-iiiiiiii ddd01000 SLTI
-iiiiiiii ddd01001 SLTIU
-iiiiiiii ddd01010 LUI
-iiiiiiii ddd01011 AUIPC
-iiiiiiii ddd01100 BZ
-iiiiiiii ddd01101 BNZ
-iiiiiiii ddd01110 JAL
+xxxxxxxx xxx00000 TRAP
+iiiiiiii ddd00001 MOVI
+iiiiiiii ddd00010 ADDI
+iiiiiiii ddd00011 ANDI
+iiiiiiii ddd00100 ORI
+iiiiiiii ddd00101 XORI
+iiiiiiii ddd00110 SLI
+iiiiiiii ddd00111 SRI
+iiiiiiii rrr01000 JALR
+iiiiiiii ddd01001 SLTI
+iiiiiiii ddd01010 SLTIU
+iiiiiiii ddd01011 LUI
+iiiiiiii ddd01100 AUIPC
+iiiiiiii rrr01101 BZ
+iiiiiiii rrr01110 BNZ
+iiiiiiii ddd01111 JAL
+iiiiiiii ddd10000 CSR
 
-iiiiirrr ddd01111 LB
-iiiiirrr ddd10000 LBU
-iiiiirrr ddd10001 LW
-iiiiirrr lll10010 SB
-iiiiirrr lll10011 SW
+iiiiirrr ddd10001 LB
+iiiiirrr ddd10010 LBU
+iiiiirrr ddd10011 LW
+iiiiirrr lll10100 SB
+iiiiirrr lll10101 SW
 
-xxlllrrr ddd10100 ADD
-xxlllrrr ddd10101 SUB
-xxlllrrr ddd10110 AND
-xxlllrrr ddd11111 OR
-xxlllrrr ddd11000 XOR
-xxlllrrr ddd11001 SLL
-xxlllrrr ddd11010 SRL
-xxlllrrr ddd11011 SRA
-xxlllrrr ddd11100 SLT
-xxlllrrr ddd11101 SLTU
-xxlllrrr ddd11110 INT
+xxlllrrr ddd10110 ADD
+xxlllrrr ddd10111 SUB
+xxlllrrr ddd11000 AND
+xxlllrrr ddd11001 OR
+xxlllrrr ddd11010 XOR
+xxlllrrr ddd11011 SLL
+xxlllrrr ddd11100 SRL
+xxlllrrr ddd11101 SRA
+xxlllrrr ddd11110 SLT
+xxlllrrr ddd11111 SLTU
 
 Okay phew; it all still fits. That means we can access +- 16 bytes off the side
 of any pointer, which works for small structs. We can materialize larger
 offsets with adds, no problem.
+
+Okay, from now on, the normative reference for this is decode.v.
