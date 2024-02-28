@@ -69,6 +69,24 @@ decode:
      OR2X2                           1
 Transistors: 1994
 
+fetch:
+     AND2X2                         25
+     AOI21X1                         2
+     AOI22X1                         7
+     BUFX2                          62
+     DFFPOSX1                       31
+     INVX1                          21
+     MUX2X1                          3
+     NAND2X1                        72
+     NAND3X1                         2
+     NOR2X1                          2
+     NOR3X1                          1
+     OAI21X1                        37
+     OR2X2                          32
+     XNOR2X1                        11
+     XOR2X1                         17
+Transistors:
+
 
 Estimates:
 AND2X2: 12
@@ -87,6 +105,7 @@ NOR2X1: 4
 NOR3X1: 6
 OAI21X1: 6
 OAI22X1: 8
-XOR2X1: 6
 OR2X2: 6
+XNOR2X1: 8
+XOR2X1: 6
 
