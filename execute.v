@@ -65,6 +65,8 @@ assign op = inst[4:0];
 
 reg [2:0] rd;
 
+reg [15:0] imm;
+
 always @* begin
   case (op)
     MOVI, ADDI, ANDI, ORI, XORI, SLI, SRI, JALR, SLTI, SLTIU, LUI,
@@ -91,6 +93,15 @@ always @* begin
   endcase
 
   case (op)
+    LUI, AUIPC:
+      imm = {inst[15:8], 8'b0};
+    LB, LBU, LW, SB, SW:
+      imm = {{11{inst[15]}}, inst[15:11]};
+    default:
+      imm = {{8{inst[15]}}, inst[15:8]};
+  endcase
+
+  case (op)
     SLTI, SLTIU, SUB, SLT, SLTU: alu_op = ALU_SUB;
     ANDI, AND: alu_op = ALU_AND;
     ORI, OR: alu_op = ALU_OR;
@@ -107,6 +118,7 @@ always @* begin
       alu_l = !cyc ? {pc_val[7:1], 1'b0} : pc_val[15:8];
     default:
       alu_l = !cyc ? rf_r1[7:0] : rf_r1[15:8];
+  endcase
 end
 
 endmodule
