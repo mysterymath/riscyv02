@@ -28,10 +28,10 @@ output reg [15:0] rf_w;
 parameter INT    = 5'b00000;
 parameter LI     = 5'b00001;
 parameter ADDI   = 5'b00010;
-parameter ADDIA  = 5'b00011;
-parameter ANDI   = 5'b00100;
-parameter ORI    = 5'b00101;
-parameter XORI   = 5'b00110;
+parameter ANDI   = 5'b00011;
+parameter ORI    = 5'b00100;
+parameter XORI   = 5'b00101;
+parameter XORIA  = 5'b00110;
 parameter SLI    = 5'b00111;
 parameter SRI    = 5'b01000;
 parameter JALR   = 5'b01001;
@@ -77,28 +77,26 @@ reg [7:0] alu_o_prev_cyc;
 
 always @* begin
   case (op)
-    LI, ADDI, ANDI, ORI, XORI, SLI, SRI, JALR, SLTI, SLTIU, LUI,
-      AUIPC, BZ, BNZ, JAL, INT:
-      rf_r1_num = inst[7:5];
-    default:
-      rf_r1_num = inst[10:8];
+    LB, LBU, LW, SB, SW: rf_r1_num = 3'b100;
+    ADD, SUB, AND, OR, XOR, SLL, SRA, SLT, SLTU: rf_r1_num = inst[10:8];
+    default: rf_r1_num = inst[7:5];
   endcase
 
   case (op)
-    SB, SW:
-      rf_r2_num = inst[7:5];
-    default:
-      rf_r2_num = inst[13:11];
+    SB, SW: rf_r2_num = inst[7:5];
+    default: rf_r2_num = inst[13:11];
   endcase
 
   if (!cyc)
     rf_w_num = 3'b0;
   else
     case (op)
-      BZ, BNZ, INT, SB, SW:
+      INT, BZ, BNZ, SB, SW:
         rf_w_num = 3'b0;
+      XORIA, SLTI, SLTIU:
+        rf_w_num = 3'b011;
       JALR:
-        rf_w_num = 3'b1; // link register
+        rf_w_num = 3'b1;
       default:
         rf_w_num = inst[7:5];
     endcase
@@ -106,8 +104,6 @@ always @* begin
   case (op)
     LUI, AUIPC:
       imm = {inst[15:8], 8'b0};
-    LB, LBU, LW, SB, SW:
-      imm = {{11{inst[15]}}, inst[15:11]};
     default:
       imm = {{8{inst[15]}}, inst[15:8]};
   endcase
@@ -116,7 +112,7 @@ always @* begin
     SLTI, SLTIU, BZ, BNZ, SUB, SLT, SLTU: alu_op = ALU_SUB;
     ANDI, AND: alu_op = ALU_AND;
     ORI, OR: alu_op = ALU_OR;
-    XORI, XOR: alu_op = ALU_XOR;
+    XORI, XORIA, XOR: alu_op = ALU_XOR;
     SLI, SLL: alu_op = ALU_ROL;
     SRL, SRA: alu_op = ALU_ROR;
     default: alu_op = ALU_ADD;
@@ -140,10 +136,7 @@ always @* begin
       alu_r = !cyc ? imm[7:0] : imm[15:8];
   endcase
 
-  case(op)
-    default:
-      rf_w <= {alu_o, alu_o_prev_cyc};
-  endcase
+  rf_w = {alu_o, alu_o_prev_cyc};
 end
 
 always @(posedge clk)
