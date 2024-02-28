@@ -1,17 +1,21 @@
 module execute(
-  clk, cyc, inst, non_predicted_pc,
-  alu_op,
-  rf_r1_num, rf_r2_num);
+  clk, cyc, inst, pc_val,
+  alu_op, alu_l,
+  rf_r1_num, rf_r2_num, rf_r1);
 
 input clk;
 input cyc;
 input [15:0] inst;
-input [15:1] non_predicted_pc;
+// The non-predicted PC value in case of a branch, and the PC value at the
+// start of the executing instruction otherwise.
+input [15:1] pc_val;
 
 output reg [2:0] alu_op;
+output reg [7:0] alu_l;
 
 output reg rf_r1_num;
 output reg rf_r2_num;
+input [15:0] rf_r1;
 
 parameter TRAP  = 5'b00000;
 parameter MOVI  = 5'b00001;
@@ -95,6 +99,14 @@ always @* begin
     SRL, SRA: alu_op = ALU_ROR;
     default: alu_op = ALU_ADD;
   endcase
+
+  case(op)
+    SRI, SRL, SRA:
+      alu_l = !cyc ? rf_r1[15:8] : rf_r1[7:0];
+    AUIPC:
+      alu_l = !cyc ? {pc_val[7:1], 1'b0} : pc_val[15:8];
+    default:
+      alu_l = !cyc ? rf_r1[7:0] : rf_r1[15:8];
 end
 
 endmodule

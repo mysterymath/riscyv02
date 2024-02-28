@@ -100,18 +100,18 @@ rf w/ 2 read ports:
 Transistors: 2994
 
 synchronous rf w/ 2 read ports:
-     AND2X2                          1
-     AOI21X1                        61
+     AOI21X1                        62
      AOI22X1                         2
      BUFX2                          32
      DFFPOSX1                      112
-     INVX1                         212
-     NAND2X1                       140
-     NAND3X1                        31
-     NOR2X1                         45
-     OAI21X1                       155
-     OAI22X1                        64
-Transistors: 4786
+     INVX1                         206
+     NAND2X1                       138
+     NAND3X1                        37
+     NOR2X1                         41
+     OAI21X1                       158
+     OAI22X1                        60
+     OR2X2                           2
+Transistors: 4778
 
 Estimates:
 AND2X2: 12
