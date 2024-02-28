@@ -85,7 +85,7 @@ fetch:
      OR2X2                          32
      XNOR2X1                        11
      XOR2X1                         17
-Transistors:
+Transistors: 
 
 
 Estimates:
