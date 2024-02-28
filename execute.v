@@ -1,5 +1,6 @@
 module execute(
-  clk, cyc, inst, non_predicted_pc);
+  clk, cyc, inst, non_predicted_pc,
+  alu_op);
 
 input clk;
 input cyc;
@@ -7,7 +8,7 @@ input [15:0] inst;
 input [15:1] non_predicted_pc;
 
 output reg [2:0] alu_op;
-output [7:0] alu_l;
+output reg [7:0] alu_l;
 
 parameter TRAP  = 5'b00000;
 parameter MOVI  = 5'b00001;
@@ -55,6 +56,39 @@ parameter [2:0] ALU_ROR = 3'd6;
 wire [4:0] op;
 assign op = inst[4:0];
 
+reg [2:0] rs1;
+always @* begin
+  case (op)
+    TRAP, MOVI, ADDI, ANDI, ORI, XORI, SLI, SRI, JALR, SLTI, SLTIU, LUI,
+      AUIPC, BZ, BNZ, JAL, INT:
+      rs1 <= inst[7:5];
+    default:
+      rs1 <= inst[10:8];
+  endcase
+end
+
+wire [2:0] rs2;
+always @* begin
+  case (op)
+    SB, SW:
+      rs2 <= inst[7:5];
+    default:
+      rs2 <= inst[13:11];
+  endcase
+end
+
+reg [2:0] rd;
+always @* begin
+  case (op)
+    TRAP, BZ, BNZ, INT, SB, SW:
+      rd <= 3'b0;
+    JALR:
+      rd <= 3'b1; // link register
+    default:
+      rd <= rs1;
+  endcase
+end
+
 // We take our NOP to be ADDI x0, 0.
 
 always @* begin
@@ -67,4 +101,9 @@ always @* begin
     SRL, SRA: alu_op = ALU_ROR;
     default: alu_op <= ALU_ADD;
   endcase
+
+  if (!cyc)
+    case (op)
 end
+
+endmodule
