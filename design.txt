@@ -693,3 +693,47 @@ until the load or store has finished.
 
 This gives a 1 or 2 cycle penalty for loads/stores, no (!!!) penalty for
 predicted branches, and a 2 cycle penalty for mis-predicted branches.
+
+Okay, now let's make an ISA wishlist. 16 registers! HUGE register file;
+probably expensive (twice the size of the z80). Can't address all of them;
+would need to shuffle data in and out of them slowly. They would essentially be
+spill locations that save the two cycle penalty for using the stack. Still,
+nice to have.
+
+SLTI and SLTIU should really be three address instructions. They generate a
+comparison result. Accordingly, a version of ADDI should too; it does double
+duty as an actual add and as a comparator.
+
+An alternative link register would be nice for jumping to CSR spill routines,
+but it's very marginal.
+
+We can currently only store within a +- 16-byte region around a pointer. That
+includes the stack pointer; our addressable region has only 16 bytes, or 8
+words. But, we'll only have 1 or 2 CSRs. 
+
+Okay, so more broadly, we'd really like 8-bit immediates *and* two registers.
+But we can't have that. We can only specify one register with an 8-bit
+immediate. So we need to fix either the source or destination to something.
+WLOG, fix the destination.
+
+If we fix the destination to the source, it destroys it. If we fix the
+destination to an accumulator, it doesn't. But, our complaint is that we have
+these instructions that operate on values such that the result is almost always
+more temporary than its arguments. These are preciesly the instructions that
+should output to an accumulator (let's use x3).
+
+If an instruction is roughly as likely to want to preserve and destroy its
+source, it should destroy it. Two argument instructions are much better
+tolerated in compilers than fixed operands.
+
+Accordingly, we have that SLTI, SLTIU, LB, LBU, and LW should have rd=x3. What
+about stores? These have rs1 and rs2, not rd. But the same argument holds; we
+can't reasonably set rs2=rs1, so set it to the accumulator, x3, instead.
+
+One more thing: ADDI has a very strong non-destructive comparison use, as does
+SLTI and SLTIU. But, note that if we make a non-destructive ADDI, then we can
+use it as a LI (load immediate) using rs1=r0. We can only load the accumulator,
+but the economy is too juicy to ignore.
+
+That gives us another instruction; what might we use it for? Eh, save it for a
+rainy day. Eh, a dedicated LI seems nice enough. Let's take it back.

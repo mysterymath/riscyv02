@@ -25,23 +25,23 @@ input [15:0] rf_r1;
 input [15:0] rf_r2;
 output reg [15:0] rf_w;
 
-parameter TRAP  = 5'b00000;
-parameter MOVI  = 5'b00001;
-parameter ADDI  = 5'b00010;
-parameter ANDI  = 5'b00011;
-parameter ORI   = 5'b00100;
-parameter XORI  = 5'b00101;
-parameter SLI   = 5'b00110;
-parameter SRI   = 5'b00111;
-parameter JALR  = 5'b01000;
-parameter SLTI  = 5'b01001;
-parameter SLTIU = 5'b01010;
-parameter LUI   = 5'b01011;
-parameter AUIPC = 5'b01100;
-parameter BZ    = 5'b01101;
-parameter BNZ   = 5'b01110;
-parameter JAL   = 5'b01111;
-parameter INT   = 5'b10000;
+parameter INT    = 5'b00000;
+parameter LI     = 5'b00001;
+parameter ADDI   = 5'b00010;
+parameter ADDIA  = 5'b00011;
+parameter ANDI   = 5'b00100;
+parameter ORI    = 5'b00101;
+parameter XORI   = 5'b00110;
+parameter SLI    = 5'b00111;
+parameter SRI    = 5'b01000;
+parameter JALR   = 5'b01001;
+parameter SLTI   = 5'b01010;
+parameter SLTIU  = 5'b01011;
+parameter LUI    = 5'b01100;
+parameter AUIPC  = 5'b01101;
+parameter BZ     = 5'b01110;
+parameter BNZ    = 5'b01111;
+parameter JAL    = 5'b10000;
 
 parameter LB    = 5'b10001;
 parameter LBU   = 5'b10010;
@@ -77,7 +77,7 @@ reg [7:0] alu_o_prev_cyc;
 
 always @* begin
   case (op)
-    MOVI, ADDI, ANDI, ORI, XORI, SLI, SRI, JALR, SLTI, SLTIU, LUI,
+    LI, ADDI, ANDI, ORI, XORI, SLI, SRI, JALR, SLTI, SLTIU, LUI,
       AUIPC, BZ, BNZ, JAL, INT:
       rf_r1_num = inst[7:5];
     default:
@@ -148,6 +148,5 @@ end
 
 always @(posedge clk)
   alu_o_prev_cyc <= alu_o;
-end
 
 endmodule
