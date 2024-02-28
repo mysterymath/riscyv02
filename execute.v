@@ -73,6 +73,8 @@ assign op = inst[4:0];
 
 reg [15:0] imm;
 
+reg [7:0] alu_o_prev_cyc;
+
 always @* begin
   case (op)
     MOVI, ADDI, ANDI, ORI, XORI, SLI, SRI, JALR, SLTI, SLTIU, LUI,
@@ -89,14 +91,17 @@ always @* begin
       rf_r2_num = inst[13:11];
   endcase
 
-  case (op)
-    BZ, BNZ, INT, SB, SW:
-      rf_w_num = 3'b0;
-    JALR:
-      rf_w_num = 3'b1; // link register
-    default:
-      rf_w_num = inst[7:5];
-  endcase
+  if (!cyc)
+    rf_w_num = 3'b0;
+  else
+    case (op)
+      BZ, BNZ, INT, SB, SW:
+        rf_w_num = 3'b0;
+      JALR:
+        rf_w_num = 3'b1; // link register
+      default:
+        rf_w_num = inst[7:5];
+    endcase
 
   case (op)
     LUI, AUIPC:
@@ -134,6 +139,15 @@ always @* begin
     default:
       alu_r = !cyc ? imm[7:0] : imm[15:8];
   endcase
+
+  case(op)
+    default:
+      rf_w <= {alu_o, alu_o_prev_cyc};
+  endcase
+end
+
+always @(posedge clk)
+  alu_o_prev_cyc <= alu_o;
 end
 
 endmodule
