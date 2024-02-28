@@ -1,4 +1,5 @@
-module rf(r1_num, r2_num, w_num, w_en, w, r1, r2);
+module rf(clk, r1_num, r2_num, w_num, w_en, w, r1, r2);
+input clk;
 input [2:0] r1_num;
 input [2:0] r2_num;
 input [2:0] w_num;
@@ -17,7 +18,7 @@ endgenerate
 wire [15:0] r_r[6:0];
 generate
   for(i = 0; i < 7; i++)
-    register r_i(r_w_en[i], r_r[i], w);
+    register r_i(clk, r_w_en[i], r_r[i], w);
 endgenerate
 
 assign r1 = r1_num == 3'b0 ? 16'b0 : r_r[r1_num-1];
@@ -25,16 +26,14 @@ assign r2 = r2_num == 3'b0 ? 16'b0 : r_r[r2_num-1];
 
 endmodule
 
-module register(w_en, r, w);
+module register(clk, w_en, r, w);
+input clk;
 input w_en;
 input [15:0] w;
-output [15:0] r;
-LATCH latches [15:0]({16{w_en}}, w, r);
-endmodule
+output reg [15:0] r;
 
-(* blackbox *)
-module LATCH(CLK, D, Q);
-input CLK;
-input D;
-output Q;
+always @(posedge clk)
+  if (w_en)
+    r <= w;
+
 endmodule
