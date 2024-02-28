@@ -1,6 +1,6 @@
 module execute(
   clk, cyc, inst, pc_val,
-  alu_op, alu_l,
+  alu_op, alu_l, alu_r,
   rf_r1_num, rf_r2_num, rf_r1);
 
 input clk;
@@ -12,6 +12,7 @@ input [15:1] pc_val;
 
 output reg [2:0] alu_op;
 output reg [7:0] alu_l;
+output reg [7:0] alu_r;
 
 output reg rf_r1_num;
 output reg rf_r2_num;
@@ -78,9 +79,9 @@ always @* begin
 
   case (op)
     SB, SW:
-      rf_r1_num = inst[7:5];
+      rf_r2_num = inst[7:5];
     default:
-      rf_r1_num = inst[13:11];
+      rf_r2_num = inst[13:11];
   endcase
 
   case (op)
@@ -102,7 +103,7 @@ always @* begin
   endcase
 
   case (op)
-    SLTI, SLTIU, SUB, SLT, SLTU: alu_op = ALU_SUB;
+    SLTI, SLTIU, BZ, BNZ, SUB, SLT, SLTU: alu_op = ALU_SUB;
     ANDI, AND: alu_op = ALU_AND;
     ORI, OR: alu_op = ALU_OR;
     XORI, XOR: alu_op = ALU_XOR;
@@ -118,6 +119,15 @@ always @* begin
       alu_l = !cyc ? {pc_val[7:1], 1'b0} : pc_val[15:8];
     default:
       alu_l = !cyc ? rf_r1[7:0] : rf_r1[15:8];
+  endcase
+
+  case(op)
+    BZ, BNZ, ADD, SUB, AND, OR, XOR, SLT, SLTU:
+      alu_r = !cyc ? rf_r2[7:0] : rf_r2[15:8];
+    SLL, SRL, SRA:
+      alu_r = rf_r2[7:0];
+    default:
+      alu_r = !cyc ? imm[7:0] : imm[15:8];
   endcase
 end
 
