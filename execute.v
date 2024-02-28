@@ -6,6 +6,9 @@ input cyc;
 input [15:0] inst;
 input [15:1] non_predicted_pc;
 
+output reg [2:0] alu_op;
+output [7:0] alu_l;
+
 parameter TRAP  = 5'b00000;
 parameter MOVI  = 5'b00001;
 parameter ADDI  = 5'b00010;
@@ -40,3 +43,28 @@ parameter SRL   = 5'b11100;
 parameter SRA   = 5'b11101;
 parameter SLT   = 5'b11110;
 parameter SLTU  = 5'b11111;
+
+parameter [2:0] ALU_ADD = 3'd0;
+parameter [2:0] ALU_SUB = 3'd1;
+parameter [2:0] ALU_AND = 3'd2;
+parameter [2:0] ALU_OR = 3'd3;
+parameter [2:0] ALU_XOR = 3'd4;
+parameter [2:0] ALU_ROL = 3'd5;
+parameter [2:0] ALU_ROR = 3'd6;
+
+wire [4:0] op;
+assign op = inst[4:0];
+
+// We take our NOP to be ADDI x0, 0.
+
+always @* begin
+  case (op)
+    SLTI, SLTIU, SUB, SLT, SLTU: alu_op <= ALU_SUB;
+    ANDI, AND: alu_op <= ALU_AND;
+    ORI, OR: alu_op <= ALU_OR;
+    XORI, XOR: alu_op <= ALU_XOR;
+    SLI, SLL: alu_op = ALU_ROL;
+    SRL, SRA: alu_op = ALU_ROR;
+    default: alu_op <= ALU_ADD;
+  endcase
+end

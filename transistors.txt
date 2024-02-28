@@ -70,22 +70,34 @@ decode:
 Transistors: 1994
 
 fetch:
-     AND2X2                         25
-     AOI21X1                         2
-     AOI22X1                         7
+     AND2X2                          7
+     AOI21X1                        10
+     AOI22X1                        13
      BUFX2                          62
      DFFPOSX1                       31
-     INVX1                          21
-     MUX2X1                          3
-     NAND2X1                        72
-     NAND3X1                         2
-     NOR2X1                          2
-     NOR3X1                          1
-     OAI21X1                        37
-     OR2X2                          32
-     XNOR2X1                        11
-     XOR2X1                         17
-Transistors: 
+     INVX1                          33
+     NAND2X1                        47
+     NAND3X1                        12
+     NOR2X1                         26
+     OAI21X1                        76
+     OR2X2                           3
+     XNOR2X1                        13
+     XOR2X1                          4
+Transistors: 2148
+
+rf w/ 2 read ports:
+     AND2X2                          1
+     AOI21X1                        61
+     AOI22X1                         2
+     BUFX2                          32
+     INVX1                         100
+     LATCH                         112
+     NAND2X1                        28
+     NAND3X1                        31
+     NOR2X1                         45
+     OAI21X1                        43
+     OAI22X1                        64
+Transistors: 2994
 
 
 Estimates:
