@@ -1,9 +1,11 @@
-module rf(r_num, w_num, w_en, w, r);
-input [2:0] r_num;
+module rf(r1_num, r2_num, w_num, w_en, w, r1, r2);
+input [2:0] r1_num;
+input [2:0] r2_num;
 input [2:0] w_num;
 input w_en;
 input [15:0] w;
-output [15:0] r;
+output [15:0] r1;
+output [15:0] r2;
 
 wire r_w_en[6:0];
 genvar i;
@@ -18,7 +20,8 @@ generate
     register r_i(r_w_en[i], r_r[i], w);
 endgenerate
 
-assign r = r_num == 3'b0 ? 16'b0 : r_r[r_num-1];
+assign r1 = r1_num == 3'b0 ? 16'b0 : r_r[r1_num-1];
+assign r2 = r2_num == 3'b0 ? 16'b0 : r_r[r2_num-1];
 
 endmodule
 
