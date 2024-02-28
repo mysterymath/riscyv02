@@ -1,7 +1,10 @@
 module execute(
   clk, cyc, inst, pc_val,
   alu_op, alu_l, alu_r,
-  rf_r1_num, rf_r2_num, rf_r1);
+  alu_o,
+  rf_r1_num, rf_r2_num, rf_w_num,
+  rf_r1, rf_r2,
+  rf_w);
 
 input clk;
 input cyc;
@@ -13,10 +16,14 @@ input [15:1] pc_val;
 output reg [2:0] alu_op;
 output reg [7:0] alu_l;
 output reg [7:0] alu_r;
+input [7:0] alu_o;
 
 output reg rf_r1_num;
 output reg rf_r2_num;
+output reg rf_w_num;
 input [15:0] rf_r1;
+input [15:0] rf_r2;
+output reg [15:0] rf_w;
 
 parameter TRAP  = 5'b00000;
 parameter MOVI  = 5'b00001;
@@ -64,8 +71,6 @@ parameter [2:0] ALU_ROR = 3'd6;
 wire [4:0] op;
 assign op = inst[4:0];
 
-reg [2:0] rd;
-
 reg [15:0] imm;
 
 always @* begin
@@ -86,11 +91,11 @@ always @* begin
 
   case (op)
     BZ, BNZ, INT, SB, SW:
-      rd = 3'b0;
+      rf_w_num = 3'b0;
     JALR:
-      rd = 3'b1; // link register
+      rf_w_num = 3'b1; // link register
     default:
-      rd = rf_r1_num;
+      rf_w_num = inst[7:5];
   endcase
 
   case (op)
