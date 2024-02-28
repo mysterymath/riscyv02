@@ -658,3 +658,38 @@ of any pointer, which works for small structs. We can materialize larger
 offsets with adds, no problem.
 
 Okay, from now on, the normative reference for this is decode.v.
+
+
+OKAY.
+
+What would this look like if it had a two stage pipeline instead? That's the
+minimum needed to support two cycle execution. We trade latency and another
+register file read port for reduction in state passed between stages. Seems
+wroth(tm).
+
+The stages would be, of course, fetch and execute. Fetch would know the opcode
+at the start of its first cycle. We'd want to have a predicted branch target
+ready by the next cycle. However, we don't know the branch offset until the
+start of the second cycle. That means we need an 8-bit adder with 4-bit CLA
+(a real one) and a 8-bit incrementer.
+
+Okay, so if a branch is predicted, it's actually taken by the time the next
+fetch starts. We save the non-predicted branch pass and hand it to execute
+along with the instruction.
+
+Execute first decodes the instruciton, then sets up the ALU for the first byte.
+We store the 8-bit ALU output; we can't write it back, since the ALU may be set
+up in a loop with the register file.
+
+On the second cycle, the ALU operation is complete. If it indicates that the
+branch was mispredicted, then the concurrent fetch cycle is made to register a
+NOP and the PC is set to the non-predicted branch. If both fetch and execute
+try to branch, that means that there definitely was a mispredicted branch,
+which means the fetch is wrong. So branch PC wins over fetch.
+
+If the operation is a load or store, then execute passes control to the
+load/store unit. This keeps fetch and execute from processing their inputs
+until the load or store has finished.
+
+This gives a 1 or 2 cycle penalty for loads/stores, no (!!!) penalty for
+predicted branches, and a 2 cycle penalty for mis-predicted branches.
