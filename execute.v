@@ -35,7 +35,7 @@ input [15:0] rf_r1;
 input [15:0] rf_r2;
 output reg [15:0] rf_w;
 
-// TODO: INT, JALR, BNZ, LB, LBU, LW, SB, SW
+// TODO: INT, BZ, BNZ, LB, LBU, LW, SB, SW
 
 parameter INT    = 5'b00000;
 parameter LI     = 5'b00001;
@@ -182,7 +182,7 @@ always @* begin
       rf_w = {15'b0, alu_o[7] ^ alu_v};
     SLTIU, SLTU:
       rf_w = {15'b0, !alu_c_o[0]};
-    JAL:
+    JAL, JALR:
       rf_w = {pc_val, 1'b0};
     default:
       rf_w = {alu_o, alu_o_prev_cyc};
