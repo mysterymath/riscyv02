@@ -1,19 +1,20 @@
 module fetch(
   clk, cyc, data,
-  addr, inst, pc_val,
-  jalr_executing,
-  pc_r,
-  pc_r_next,
+  addr,
+  inst, pc_val,
+  jalr_executing, mispredict,
+  pc_r, pc_r_next,
   pc_w);
 
 input clk;
 input cyc;
 input [7:0] data;
-
 output [15:0] addr;
+
 output reg [15:0] inst;
 output reg [15:1] pc_val;
 input jalr_executing;
+input mispredict;
 
 input [15:1] pc_r;
 input [15:1] pc_r_next;
@@ -62,7 +63,7 @@ always @* begin
     pc_w = pc_r_next;
 
   // Feed a NOP (ADDI x0, 0) into decode.
-  if (jalr_executing)
+  if (jalr_executing || mispredict)
     inst = 16'b0000000000000010;
   else
     inst = {data, inst_lo};

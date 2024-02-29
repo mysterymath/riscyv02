@@ -1,7 +1,7 @@
 module execute(
   clk, cyc,
   fetch_inst, fetch_pc_val,
-  jalr_executing,
+  jalr_executing, mispredict, mispredict_pc,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
   rf_r1_num, rf_r2_num, rf_w_num,
@@ -16,6 +16,8 @@ input [15:0] fetch_inst;
 // already been incremented.
 input [15:1] fetch_pc_val;
 output jalr_executing;
+output reg mispredict;
+output [15:1] mispredict_pc;
 
 reg [15:0] inst;
 reg [15:1] pc_val;
@@ -35,7 +37,7 @@ input [15:0] rf_r1;
 input [15:0] rf_r2;
 output reg [15:0] rf_w;
 
-// TODO: INT, BZ, BNZ, LB, LBU, LW, SB, SW
+// TODO: INT, LB, LBU, LW, SB, SW
 
 parameter INT    = 5'b00000;
 parameter LI     = 5'b00001;
@@ -81,7 +83,6 @@ parameter [2:0] ALU_ROL = 3'd5;
 parameter [2:0] ALU_ROR = 3'd6;
 
 wire [4:0] op;
-assign op = inst[4:0];
 
 reg [15:0] imm;
 
@@ -89,10 +90,12 @@ reg [7:0] alu_o_prev_cyc;
 reg [6:0] alu_c_o_prev_cyc;
 
 reg sra;
-
-assign jalr_executing = op == JALR;
+reg branch_taken;
+reg branch_predicted;
 
 always @* begin
+  op = inst[4:0];
+
   case (op)
     LI, LUI: rf_r1_num = 3'b0;
     LB, LBU, LW, SB, SW: rf_r1_num = 3'b100;
@@ -162,7 +165,10 @@ always @* begin
   endcase
 
   case(op)
-    BZ, BNZ, ADD, SUB, AND, OR, XOR, SLT, SLTU:
+    // Condition computed as SLTIU 1
+    BZ, BNZ:
+      alu_r = !cyc ? 8'b1 : 8'b0;
+    ADD, SUB, AND, OR, XOR, SLT, SLTU:
       alu_r = !cyc ? rf_r2[7:0] : rf_r2[15:8];
     SLL, SRL, SRA:
       alu_r = rf_r2[7:0];
@@ -187,6 +193,21 @@ always @* begin
     default:
       rf_w = {alu_o, alu_o_prev_cyc};
   endcase
+
+  jalr_executing = op == JALR;
+  mispredict_pc = pc_val;
+
+  case (op)
+    // alu_c_o <=> rs1 >= 1u <=> rs1
+    BZ: branch_taken = alu_c_o[0];
+    BNZ: branch_taken = !alu_c_o[0];
+    default: branch_taken = 0;
+  endcase
+  case (op)
+    BZ, BNZ: branch_predicted = inst[15];
+    default: branch_predicted = 0;
+  endcase
+  mispredict = branch_predicted != branch_taken;
 end
 
 always @(posedge clk) begin
