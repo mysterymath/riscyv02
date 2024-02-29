@@ -16,9 +16,9 @@ input [15:1] pc_val;
 output reg [2:0] alu_op;
 output reg [7:0] alu_l;
 output reg [7:0] alu_r;
-output reg [6:0] alu_c_in;
+output reg [6:0] alu_c_i;
 input [7:0] alu_o;
-input [6:0] alu_c_out;
+input [6:0] alu_c_o;
 
 output reg rf_r1_num;
 output reg rf_r2_num;
@@ -124,8 +124,22 @@ always @* begin
   endcase
 
   case(op)
+    SRA: sra = 1;
+    SRI: sra = imm[7];
+    default: sra = 0;
+  endcase
+
+  case(op)
+    SLI, SLL:
+      if (imm[3])
+        alu_l = !cyc ? 8'b0 : rf_r1[7:0];
+      else
+        alu_l = !cyc ? rf_r1[7:0] : rf_r1[15:8];
     SRI, SRL, SRA:
-      alu_l = !cyc ? rf_r1[15:8] : rf_r1[7:0];
+      if (imm[3])
+        alu_l = !cyc ? (sra ? {8{rf_r1[15]}} : 8'b0) : rf_r1[15:8];
+      else
+        alu_l = !cyc ? rf_r1[15:8] : rf_r1[7:0];
     AUIPC:
       alu_l = !cyc ? {pc_val[7:1], 1'b0} : pc_val[15:8];
     default:
@@ -137,19 +151,16 @@ always @* begin
       alu_r = !cyc ? rf_r2[7:0] : rf_r2[15:8];
     SLL, SRL, SRA:
       alu_r = rf_r2[7:0];
+    SLI, SRI:
+      alu_r = imm[7:0];
     default:
       alu_r = !cyc ? imm[7:0] : imm[15:8];
   endcase
 
-  case(op)
-    SRA: sra = 1;
-    SRI: sra = inst[14];
-    default: sra = 0;
-
   if (!cyc)
-    alu_c_in = {6{sra ? alu_l[7] : 1'b0}};
+    alu_c_i = {6{sra ? alu_l[7] : 1'b0}};
   else
-    alu_c_in = alu_c_o_prev_cyc;
+    alu_c_i = alu_c_o_prev_cyc;
 
   rf_w = {alu_o, alu_o_prev_cyc};
 end
@@ -157,5 +168,6 @@ end
 always @(posedge clk) begin
   alu_o_prev_cyc <= alu_o;
   alu_c_o_prev_cyc <= alu_c_o;
+end
 
-endmodul
+endmodule
