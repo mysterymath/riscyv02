@@ -1,3 +1,5 @@
+`include "pc_inc.v"
+
 module execute(
   clk, cyc, inst, pc_val,
   alu_op, alu_l, alu_r, alu_c_i,
@@ -9,8 +11,8 @@ module execute(
 input clk;
 input cyc;
 input [15:0] inst;
-// The non-predicted PC value in case of a branch, and the PC value at the
-// start of the executing instruction otherwise.
+// The non-predicted PC value in case of a branch; otherwise, the PC value at
+// the start of the executing instruction.
 input [15:1] pc_val;
 
 output reg [2:0] alu_op;
@@ -28,7 +30,7 @@ input [15:0] rf_r1;
 input [15:0] rf_r2;
 output reg [15:0] rf_w;
 
-// TODO: INT, JALR, BNZ, JAL, LB, LBU, LW, SB, SW
+// TODO: INT, JALR, BNZ, LB, LBU, LW, SB, SW
 
 parameter INT    = 5'b00000;
 parameter LI     = 5'b00001;
@@ -82,6 +84,9 @@ reg [7:0] alu_o_prev_cyc;
 reg [6:0] alu_c_o_prev_cyc;
 
 reg sra;
+
+wire [15:1] pc_inc_o;
+pc_inc pc_inc(pc_val, pc_inc_o);
 
 always @* begin
   case (op)
@@ -171,6 +176,8 @@ always @* begin
       rf_w = {15'b0, alu_o[7] ^ alu_v};
     SLTIU, SLTU:
       rf_w = {15'b0, !alu_c_o[0]};
+    JAL:
+      rf_w = {pc_inc_o, 1'b0};
     default:
       rf_w = {alu_o, alu_o_prev_cyc};
   endcase
@@ -181,4 +188,12 @@ always @(posedge clk) begin
   alu_c_o_prev_cyc <= alu_c_o;
 end
 
+endmodule
+
+(* blackbox *)
+module HAX1(A, B, YC, YS);
+input A;
+input B;
+output YC;
+output YS;
 endmodule
