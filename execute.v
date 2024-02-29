@@ -27,7 +27,7 @@ input [15:0] rf_r1;
 input [15:0] rf_r2;
 output reg [15:0] rf_w;
 
-// TODO: INT, LI, JALR, SLTI, SLTIU, LUI, AUIPC, BN, BNZ, JAL, LB, LBU, LW, SB,
+// TODO: INT, JALR, SLTI, SLTIU, LUI, AUIPC, BN, BNZ, JAL, LB, LBU, LW, SB,
 // SW, SLT, SLTU
 
 parameter INT    = 5'b00000;
@@ -85,6 +85,7 @@ reg sra;
 
 always @* begin
   case (op)
+    LI: rf_r1_num = 3'b0;
     LB, LBU, LW, SB, SW: rf_r1_num = 3'b100;
     ADD, SUB, AND, OR, XOR, SLL, SRA, SLT, SLTU: rf_r1_num = inst[10:8];
     default: rf_r1_num = inst[7:5];
