@@ -1,7 +1,6 @@
-`include "pc_inc.v"
-
 module execute(
-  clk, cyc, inst, pc_val,
+  clk, cyc,
+  fetch_inst, fetch_pc_val,
   jalr_executing,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
@@ -11,12 +10,15 @@ module execute(
 
 input clk;
 input cyc;
-input [15:0] inst;
+input [15:0] fetch_inst;
 // The non-predicted PC value in case of a branch; otherwise, the PC value.
 // Both are taken at the time of the last fetch tick; that is, the PC has
 // already been incremented.
-input [15:1] pc_val;
+input [15:1] fetch_pc_val;
 output jalr_executing;
+
+reg [15:0] inst;
+reg [15:1] pc_val;
 
 output reg [2:0] alu_op;
 output reg [7:0] alu_l;
@@ -181,13 +183,17 @@ always @* begin
     SLTIU, SLTU:
       rf_w = {15'b0, !alu_c_o[0]};
     JAL:
-      rf_w = {pc_inc_o, 1'b0};
+      rf_w = {pc_val, 1'b0};
     default:
       rf_w = {alu_o, alu_o_prev_cyc};
   endcase
 end
 
 always @(posedge clk) begin
+  if (cyc) begin
+    inst <= fetch_inst;
+    pc_val <= fetch_pc_val;
+  end
   alu_o_prev_cyc <= alu_o;
   alu_c_o_prev_cyc <= alu_c_o;
 end
