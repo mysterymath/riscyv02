@@ -2,6 +2,7 @@
 
 module execute(
   clk, cyc, inst, pc_val,
+  jalr_executing,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
   rf_r1_num, rf_r2_num, rf_w_num,
@@ -11,9 +12,11 @@ module execute(
 input clk;
 input cyc;
 input [15:0] inst;
-// The non-predicted PC value in case of a branch; otherwise, the PC value at
-// the start of the executing instruction.
+// The non-predicted PC value in case of a branch; otherwise, the PC value.
+// Both are taken at the time of the last fetch tick; that is, the PC has
+// already been incremented.
 input [15:1] pc_val;
+output jalr_executing;
 
 output reg [2:0] alu_op;
 output reg [7:0] alu_l;
@@ -85,8 +88,7 @@ reg [6:0] alu_c_o_prev_cyc;
 
 reg sra;
 
-wire [15:1] pc_inc_o;
-pc_inc pc_inc(pc_val, pc_inc_o);
+assign jalr_executing = op == JALR;
 
 always @* begin
   case (op)
@@ -149,6 +151,8 @@ always @* begin
         alu_l = !cyc ? (sra ? {8{rf_r1[15]}} : 8'b0) : rf_r1[15:8];
       else
         alu_l = !cyc ? rf_r1[15:8] : rf_r1[7:0];
+    // Note that this makes AUIPC relative to the *next* instruction. Should
+    // be fine.
     AUIPC:
       alu_l = !cyc ? {pc_val[7:1], 1'b0} : pc_val[15:8];
     default:
