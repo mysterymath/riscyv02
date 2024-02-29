@@ -1,7 +1,7 @@
 module execute(
   clk, cyc, inst, pc_val,
   alu_op, alu_l, alu_r, alu_c_i,
-  alu_o, alu_c_o,
+  alu_o, alu_c_o, alu_v,
   rf_r1_num, rf_r2_num, rf_w_num,
   rf_r1, rf_r2,
   rf_w);
@@ -19,6 +19,7 @@ output reg [7:0] alu_r;
 output reg [6:0] alu_c_i;
 input [7:0] alu_o;
 input [6:0] alu_c_o;
+input alu_v;
 
 output reg rf_r1_num;
 output reg rf_r2_num;
@@ -27,8 +28,7 @@ input [15:0] rf_r1;
 input [15:0] rf_r2;
 output reg [15:0] rf_w;
 
-// TODO: INT, JALR, SLTI, BNZ, JAL, LB, LBU, LW, SB,
-// SW, SLT
+// TODO: INT, JALR, BNZ, JAL, LB, LBU, LW, SB, SW
 
 parameter INT    = 5'b00000;
 parameter LI     = 5'b00001;
@@ -167,6 +167,8 @@ always @* begin
     alu_c_i = alu_c_o_prev_cyc;
 
   case(op)
+    SLTI, SLT:
+      rf_w = {15'b0, alu_o[7] ^ alu_v};
     SLTIU, SLTU:
       rf_w = {15'b0, !alu_c_o[0]};
     default:
