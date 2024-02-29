@@ -27,6 +27,9 @@ input [15:0] rf_r1;
 input [15:0] rf_r2;
 output reg [15:0] rf_w;
 
+// TODO: INT, LI, JALR, SLTI, SLTIU, LUI, AUIPC, BN, BNZ, JAL, LB, LBU, LW, SB,
+// SW, SLT, SLTU
+
 parameter INT    = 5'b00000;
 parameter LI     = 5'b00001;
 parameter ADDI   = 5'b00010;
