@@ -1,0 +1,73 @@
+6502 memcpy:
+
+loop:
+  lda (rc2),y
+  sta (rc3),y
+  iny
+  cpy #imm
+  bne loop
+
+9 bytes, 18 cycles per byte
+
+Single byte rv16 memcpy:
+
+loop:
+ ldbu	r4, r2, 0
+ stb	r3, r4, 0
+ addi	r3, r3, 1
+ addi	r4, r4, 1
+ addi	r5, r5, -1
+ bnz	r5, loop
+
+12 bytes, 18 cycles per byte
+
+Two byte rv16 memcpy:
+
+loop:
+ ld	r4, r2, 0
+ st	r3, r4, 0
+ addi	r3, r3, 2
+ addi	r4, r4, 2
+ addi	r5, r5, -2
+ bnz	r5, loop
+12 bytes, 18 cycles per two bytes, 9 cycles per byte!!!
+
+6502 write to PPU: 
+lda #imm
+sta PPUDATA
+
+4 bytes, 5 cycles per byte
+
+rv16 write to PPU:
+earlier:
+lui r1, ppudata
+addi r1, ppudata
+main:
+movi r1, imm
+sw   r2, r1, 0
+
+8 bytes, 6 cycles per byte
+
+How do we say, branch if r2 == 129?
+
+6502:
+cmp #129
+beq foo
+
+4 bytes 4 cyles
+
+rv16:
+lui r3, hi(129)
+addi r3, lo(129)
+sub r3, r2, r3
+bz r3
+
+4 bytes 8 cycles., but eh, it's pathological. 127 is this:
+
+addi r2, -127
+bz r2
+
+4 bytes, 4 cycles. We take an extra 2 if we still need the value:
+add r3, x0, r2
+addi r2, -127
+bz r2
