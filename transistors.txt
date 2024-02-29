@@ -113,21 +113,7 @@ synchronous rf w/ 2 read ports:
      OR2X2                           2
 Transistors: 4778
 
-execute:
-     AND2X2                         20
-     AOI21X1                        27
-     AOI22X1                        11
-     BUFX2                          45
-     DFFPOSX1                       15
-     INVX1                          53
-     MUX2X1                          6
-     NAND2X1                        53
-     NAND3X1                        18
-     NOR2X1                         39
-     OAI21X1                        82
-     OAI22X1                        11
-     OR2X2                           7
-     XOR2X1                          1
+execute
 Transistors: 2682
 
 Estimates:

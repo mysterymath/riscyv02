@@ -737,3 +737,14 @@ but the economy is too juicy to ignore.
 
 That gives us another instruction; what might we use it for? Eh, save it for a
 rainy day. Eh, a dedicated LI seems nice enough. Let's take it back.
+
+TODO: We need to ensure that the address line holds its value until *after* the
+clock falls. This is needed to give us the 6502 property that the address, and
+r/w lines can be used to write to both synchronous and asynchronous peripherals
+(they could be thought to latch on posedge or negedge of w, respectively). It
+technically just needs to be after w falls, but we want to mirror the 6502's
+footprint, so we need to respect the ordering of its timing diagram.
+
+TODO: We want all the other doodads too. We should take "NMIs", but we should
+allow them to be masked. We should take on a design goal to make this
+electrically compatible with the 65c02.
