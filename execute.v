@@ -27,8 +27,8 @@ input [15:0] rf_r1;
 input [15:0] rf_r2;
 output reg [15:0] rf_w;
 
-// TODO: INT, JALR, SLTI, SLTIU, BNZ, JAL, LB, LBU, LW, SB,
-// SW, SLT, SLTU
+// TODO: INT, JALR, SLTI, BNZ, JAL, LB, LBU, LW, SB,
+// SW, SLT
 
 parameter INT    = 5'b00000;
 parameter LI     = 5'b00001;
@@ -166,7 +166,12 @@ always @* begin
   else
     alu_c_i = alu_c_o_prev_cyc;
 
-  rf_w = {alu_o, alu_o_prev_cyc};
+  case(op)
+    SLTIU, SLTU:
+      rf_w = {15'b0, !alu_c_o[0]};
+    default:
+      rf_w = {alu_o, alu_o_prev_cyc};
+  endcase
 end
 
 always @(posedge clk) begin
