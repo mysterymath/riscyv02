@@ -1,7 +1,7 @@
 module execute(
   clk, cyc, inst, pc_val,
-  alu_op, alu_l, alu_r,
-  alu_o,
+  alu_op, alu_l, alu_r, alu_c_i,
+  alu_o, alu_c_o,
   rf_r1_num, rf_r2_num, rf_w_num,
   rf_r1, rf_r2,
   rf_w);
@@ -16,7 +16,9 @@ input [15:1] pc_val;
 output reg [2:0] alu_op;
 output reg [7:0] alu_l;
 output reg [7:0] alu_r;
+output reg [6:0] alu_c_in;
 input [7:0] alu_o;
+input [6:0] alu_c_out;
 
 output reg rf_r1_num;
 output reg rf_r2_num;
@@ -74,6 +76,9 @@ assign op = inst[4:0];
 reg [15:0] imm;
 
 reg [7:0] alu_o_prev_cyc;
+reg [6:0] alu_c_o_prev_cyc;
+
+reg sra;
 
 always @* begin
   case (op)
@@ -136,10 +141,21 @@ always @* begin
       alu_r = !cyc ? imm[7:0] : imm[15:8];
   endcase
 
+  case(op)
+    SRA: sra = 1;
+    SRI: sra = inst[14];
+    default: sra = 0;
+
+  if (!cyc)
+    alu_c_in = {6{sra ? alu_l[7] : 1'b0}};
+  else
+    alu_c_in = alu_c_o_prev_cyc;
+
   rf_w = {alu_o, alu_o_prev_cyc};
 end
 
-always @(posedge clk)
+always @(posedge clk) begin
   alu_o_prev_cyc <= alu_o;
+  alu_c_o_prev_cyc <= alu_c_o;
 
-endmodule
+endmodul
