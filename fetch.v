@@ -18,7 +18,7 @@ input execute_mispredict;
 
 input [15:1] pc_r;
 input [15:1] pc_r_next;
-output [15:1] pc_w;
+output reg [15:1] pc_w;
 
 parameter JALR   = 5'b01001;
 parameter BZ     = 5'b01110;

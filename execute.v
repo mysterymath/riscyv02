@@ -1,7 +1,7 @@
 module execute(
   clk, cyc,
   fetch_inst, fetch_pc_val,
-  jalr_executing, mispredict, mispredict_pc,
+  jalr_executing, mispredict, pc_w,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
   rf_r1_num, rf_r2_num, rf_w_num,
@@ -15,9 +15,9 @@ input [15:0] fetch_inst;
 // Both are taken at the time of the last fetch tick; that is, the PC has
 // already been incremented.
 input [15:1] fetch_pc_val;
-output jalr_executing;
+output reg jalr_executing;
 output reg mispredict;
-output [15:1] mispredict_pc;
+output reg [15:1] pc_w;
 
 reg [15:0] inst;
 reg [15:1] pc_val;
@@ -82,7 +82,7 @@ parameter [2:0] ALU_XOR = 3'd4;
 parameter [2:0] ALU_ROL = 3'd5;
 parameter [2:0] ALU_ROR = 3'd6;
 
-wire [4:0] op;
+reg [4:0] op;
 
 reg [15:0] imm;
 
@@ -195,7 +195,7 @@ always @* begin
   endcase
 
   jalr_executing = op == JALR;
-  mispredict_pc = pc_val;
+  pc_w = pc_val;
 
   case (op)
     // alu_c_o <=> rs1 >= 1u <=> rs1

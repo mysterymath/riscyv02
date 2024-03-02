@@ -1,10 +1,11 @@
-module alu(op, l, r, o, c_i, c_o);
+module alu(op, l, r, o, c_i, c_o, v);
 input [2:0] op;
 input [7:0] l;
 input [7:0] r;
 output reg [7:0] o;
 input c_i;
 output reg c_o;
+output reg v;
 
 parameter [2:0] ADD = 3'd0;
 parameter [2:0] SUB = 3'd1;
@@ -55,6 +56,9 @@ always @* begin
     ROR: c_o <= {5'b0, l[0]};
     default: c_o <= 6'b0;
   endcase
+
+  // TODO
+  v = 0;
 end
 
 endmodule

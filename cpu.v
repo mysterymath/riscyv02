@@ -13,12 +13,11 @@ output [7:0] data_o;
 
 reg cyc;
 
-wire [15:1] pc_w;
+reg [15:1] pc_w;
 wire [15:1] pc_r;
 wire [15:1] pc_r_next;
 pc pc(clk, pc_w, pc_r, pc_r_next);
 
-wire [15:0] fetch_addr;
 wire [15:0] fetch_inst;
 wire [15:1] fetch_pc_val;
 wire [15:1] fetch_pc_w;
@@ -26,7 +25,7 @@ wire execute_jalr;
 wire execute_mispredict;
 fetch fetch(
   clk, cyc, data_i,
-  fetch_addr,
+  addr,
   fetch_inst, fetch_pc_val,
   execute_jalr, execute_mispredict,
   pc_r, pc_r_next,
@@ -54,20 +53,26 @@ wire [15:1] execute_mispredict_pc;
 execute execute(
   clk, cyc,
   fetch_inst, fetch_pc_val,
-  execute_jalr, execute_mispredict, execute_mispredict_pc,
+  execute_jalr, execute_mispredict, execute_pc_w,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
   rf_r1_num, rf_r2_num, rf_w_num,
   rf_r1, rf_r2,
   rf_w);
 
-always @(posedge clk)
-  if (n_reset) begin
-    cyc <= 0;
+always @* begin
+  if (!n_reset) begin
     // Room for a LUI, JALR.
-    pc_w <= 16'hfffc;
+    pc_w = 16'hfffc;
   end else begin
-    cyc <= !cyc;
+    pc_w = execute_mispredict ? execute_pc_w : fetch_pc_w;
   end
 
-endmodule;
+  // TODO
+  data_o = 8'b0;
+end
+
+always @(posedge clk)
+  cyc <= !n_reset ? 0 : cyc;
+
+endmodule
