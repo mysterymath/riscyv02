@@ -2,7 +2,7 @@ module fetch(
   clk, cyc, data,
   addr,
   inst, pc_val,
-  execute_jalr, execute_mispredict,
+  execute_jump,
   pc_r, pc_r_next,
   pc_w);
 
@@ -13,8 +13,7 @@ output [15:0] addr;
 
 output reg [15:0] inst;
 output reg [15:1] pc_val;
-input execute_jalr;
-input execute_mispredict;
+input execute_jump;
 
 input [15:1] pc_r;
 input [15:1] pc_r_next;
@@ -52,21 +51,16 @@ assign branch_target = pc_r + branch_offset;
 
 always @* begin
   // Keep the PC from incrementing into the invalid region past the JALR on
-  // the second cycle of its fetch and during its execution. On the first
-  // cycle of the next fetch, the condition below is false, so the new opcode
-  // is read, the PC is incremented, and the pipeline continues normally.
-  if ((cyc && op == JALR) || execute_jalr)
+  // the second cycle of its fetch and during its execution.
+  if (op == JALR)
     pc_w = pc_r;
   else if (cyc && branch_predicted)
     pc_w = branch_target;
   else
     pc_w = pc_r_next;
 
-  // Feed a NOP (ADDI x0, 0) into decode.
-  if (execute_jalr || execute_mispredict)
-    inst = 16'b0000000000000010;
-  else
-    inst = {data, inst_lo};
+  // Feed a NOP to decode on execute-stage jump; the fetch was invalid.
+  inst = execute_jump ? 16'b0000000000000010 : {data, inst_lo};
 
   if (op == BZ || op == BNZ && !branch_predicted)
     pc_val = branch_target;
@@ -75,7 +69,11 @@ always @* begin
 end
 
 always @(posedge clk)
-  if (!cyc)
+  if (!cyc) begin
     inst_lo <= data;
+  end else if (execute_jump) begin
+    // Simulate having fetched a NOP on the first cycle of an executed jump.
+    inst_lo <= 8'b00000010;
+  end
 
 endmodule

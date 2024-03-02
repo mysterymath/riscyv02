@@ -1,7 +1,7 @@
 module execute(
   clk, cyc,
   fetch_inst, fetch_pc_val,
-  jalr, jump, pc_w,
+  jump, pc_w,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
   rf_r1_num, rf_r2_num, rf_w_num,
@@ -15,7 +15,6 @@ input [15:0] fetch_inst;
 // Both are taken at the time of the last fetch tick; that is, the PC has
 // already been incremented.
 input [15:1] fetch_pc_val;
-output reg jalr;
 output reg jump;
 output reg [15:1] pc_w;
 
@@ -194,7 +193,6 @@ always @* begin
       rf_w = {alu_o, alu_o_prev_cyc};
   endcase
 
-  jalr = op == JALR;
   pc_w = pc_val;
 
   case (op)

@@ -21,13 +21,12 @@ pc pc(clk, pc_w, pc_r, pc_r_next);
 wire [15:0] fetch_inst;
 wire [15:1] fetch_pc_val;
 wire [15:1] fetch_pc_w;
-wire execute_jalr;
 wire execute_jump;
 fetch fetch(
   clk, cyc, data_i,
   addr,
   fetch_inst, fetch_pc_val,
-  execute_jalr, execute_jump,
+  execute_jump,
   pc_r, pc_r_next,
   fetch_pc_w);
 
@@ -53,7 +52,7 @@ wire [15:1] execute_pc_w;
 execute execute(
   clk, cyc,
   fetch_inst, fetch_pc_val,
-  execute_jalr, execute_jump, execute_pc_w,
+  execute_jump, execute_pc_w,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
   rf_r1_num, rf_r2_num, rf_w_num,
