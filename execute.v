@@ -29,9 +29,9 @@ input [7:0] alu_o;
 input [6:0] alu_c_o;
 input alu_v;
 
-output reg rf_r1_num;
-output reg rf_r2_num;
-output reg rf_w_num;
+output reg [2:0] rf_r1_num;
+output reg [2:0] rf_r2_num;
+output reg [2:0] rf_w_num;
 input [15:0] rf_r1;
 input [15:0] rf_r2;
 output reg [15:0] rf_w;

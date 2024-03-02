@@ -9,7 +9,7 @@ input clk;
 input n_reset;
 output [15:0] addr;
 input [7:0] data_i;
-output [7:0] data_o;
+output reg [7:0] data_o;
 
 reg cyc;
 

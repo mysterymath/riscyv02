@@ -40,6 +40,9 @@ wire [7:0] xor_o;
 assign xor_o = l ^ r;
 
 wire [21:0] rot_0;
+wire [21:0] rot_1;
+wire [21:0] rot_2;
+wire [21:0] rot_o;
 assign rot_0 = {c_i, l, c_i};
 assign rot_1 = op == ROL ? rot_0 << r[0] : rot_0 >> r[0];
 assign rot_2 = op == ROL ? rot_1 << (r[1]*2) : rot_1 >> (r[1]*2);
