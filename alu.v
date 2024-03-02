@@ -39,22 +39,27 @@ assign or_o = l | r;
 wire [7:0] xor_o;
 assign xor_o = l ^ r;
 
+wire [21:0] rot_0;
+assign rot_0 = {c_i, l, c_i};
+assign rot_1 = op == ROL ? rot_0 << r[0] : rot_0 >> r[0];
+assign rot_2 = op == ROL ? rot_1 << (r[1]*2) : rot_1 >> (r[1]*2);
+assign rot_o = op == ROL ? rot_2 << (r[2]*4) : rot_2 >> (r[2]*4);
+
 always @* begin
   case(op)
     ADD, SUB: o <= add_o;
     AND: o <= and_o;
     OR: o <= or_o;
     XOR: o <= xor_o;
-    ROL: o <= (l << 1) | {7'b0, c_i};
-    ROR: o <= (l >> 1) | {c_i, 7'b0};
+    ROL, ROR: o <= rot_o[14:7];
     default: o <= 8'bxxxxxxxx;
   endcase
 
   case(op)
-    ADD, SUB: c_o <= {5'b0, add_c_o[7]};
-    ROL: c_o <= {5'b0, l[7]};
-    ROR: c_o <= {5'b0, l[0]};
-    default: c_o <= 6'b0;
+    ADD, SUB: c_o <= {5'bxxxxx, add_c_o[7]};
+    ROL: c_o <= rot_o[21:15];
+    ROR: c_o <= rot_o[6:0];
+    default: c_o <= 6'bxxxxxx;
   endcase
 
   // TODO
