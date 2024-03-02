@@ -14,10 +14,17 @@ generate
     assign r_w_en[i] = w_num == i+1;
 endgenerate
 
+wire w_master_clk;
+wire [15:0] w_master_q;
+INVX2 inv_clk(clk, w_master_clk);
+LATCH w_master[15:0](w_master_clk, w, w_master_q);
+
+wire r_clk;
+INVX2 inv_master_clk(w_master_clk, r_clk);
 wire [15:0] r_r[6:0];
 generate
   for(i = 0; i < 7; i++)
-    register r_i(clk, r_w_en[i], r_r[i], w);
+    LATCH r_i[15:0](r_clk && r_w_en[i], w_master_q, r_r[i]);
 endgenerate
 
 assign r1 = r1_num == 3'b0 ? 16'b0 : r_r[r1_num-1];
@@ -25,14 +32,15 @@ assign r2 = r2_num == 3'b0 ? 16'b0 : r_r[r2_num-1];
 
 endmodule
 
-module register(clk, w_en, r, w);
-input clk;
-input w_en;
-input [15:0] w;
-output reg [15:0] r;
+(* blackbox *)
+module LATCH(CLK, D, Q);
+input CLK;
+input D;
+output Q;
+endmodule
 
-always @(posedge clk)
-  if (w_en)
-    r <= w;
-
+(* blackbox *)
+module INVX2(A, Y);
+input A;
+output Y;
 endmodule
