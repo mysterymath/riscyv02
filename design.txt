@@ -853,10 +853,14 @@ How much weight does x0 pull?
 - You can use it with loads and stores to access the zero/top of mem pages
 - It's not useful with the immediates at all
 - A SUB from zero negates.
-- A SLT x, x0 produces an is-negative result.
-- A SLT x0, x produces an is-positive result.
+- A SLT x, x0 produces an is-negative result... but so does SLTI x, 0
+- A SLT x0, x produces an is-positive result... but so does !SLTI x, 1
 - Storing 0 to memory; that's quite useful.
 
 The above is kind of middling; you can always just set a register to 0 with LI
 0. And we only have 8 of them; it really does seem like that doesn't pull
 enough weight to make it worthwhile.
+
+Of the above, it only maybe seems worth adding a NEG opcode, but it would be
+the only unary opcode present; so it would ignore lll. Seems like a wart, and
+LI x0, 0; SUB x0, 0, x0. You can LI x0,0 at the top of a function if you want.
