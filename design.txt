@@ -848,3 +848,15 @@ iiiiiiii1 1rrr1100 SLTIU
 10lllrrr0 1ddd1101 SLTU
 
 SO MUCH MORE ROOM FOR ACTIVITIES!
+
+How much weight does x0 pull?
+- You can use it with loads and stores to access the zero/top of mem pages
+- It's not useful with the immediates at all
+- A SUB from zero negates.
+- A SLT x, x0 produces an is-negative result.
+- A SLT x0, x produces an is-positive result.
+- Storing 0 to memory; that's quite useful.
+
+The above is kind of middling; you can always just set a register to 0 with LI
+0. And we only have 8 of them; it really does seem like that doesn't pull
+enough weight to make it worthwhile.
