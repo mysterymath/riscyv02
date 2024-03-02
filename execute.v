@@ -193,19 +193,20 @@ always @* begin
       rf_w = {alu_o, alu_o_prev_cyc};
   endcase
 
-  pc_w = pc_val;
+  pc_w = op == JALR ? {alu_o, alu_o_prev_cyc} : pc_val;
 
   case (op)
     // alu_c_o <=> rs1 >= 1u <=> rs1
     BZ: branch_taken = alu_c_o[0];
     BNZ: branch_taken = !alu_c_o[0];
+    JALR: branch_taken = 1;
     default: branch_taken = 0;
   endcase
   case (op)
     BZ, BNZ: branch_predicted = inst[15];
     default: branch_predicted = 0;
   endcase
-  jump = branch_predicted != branch_taken;
+  jump = cyc && branch_predicted != branch_taken;
 end
 
 always @(posedge clk) begin
