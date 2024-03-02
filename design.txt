@@ -748,3 +748,103 @@ footprint, so we need to respect the ordering of its timing diagram.
 TODO: We want all the other doodads too. We should take "NMIs", but we should
 allow them to be masked. We should take on a design goal to make this
 electrically compatible with the 65c02.
+
+Okay, let's steal one bit from LB and friends to indicate sp vs ptr. Ideally
+we'd take a bit from the immediate, but that would mean adding a bit to LUI
+and AUIPC somehow (not JAL).
+
+Without upsetting our current opcodes, that would reserve all opcodes ending in
+1100 and 1101. That kills AND and OR. But we have two bits free at the top of
+those opcodes; no worries.
+
+Let's start looking at our encoding from most fixed to least fixed.
+
+How much does a reg reg instruction cost? Well, each uses 9 bits out of 16 for
+register operands.  There are 10 of them, so they take 5120 instructions out of
+65536. That leaves 60416.
+
+Our loads and stores take up 2^11 instructions, and there are 5, for 10240 total.
+That leaves 50176.
+ 
+Our imm operations take 1024 or 2048 instructions each for 7 or 8 bit
+immediates, and there are 14. That totals to 14336 or 28672, leaving 35840 or
+21504.
+
+Our upper immediate operations take 4096 or 2048 instructions each, and there
+ar three. That leaves 23552 or 15360.
+
+Let's do this symbolically. The reg reg bits are fixed, so discount them. We
+have 60416 instructions.
+
+Loads and stores each take 2^(3 + ldrhs + immlo). Immediate operations each take 2^(3 + immlo).
+Upper immediate operations take 2^(3 + (16 - immlo)) = 2^(19 - immlo).
+So, we must have that: 14*2^(3+immlo) + 3*2^(19 - immlo) + 5*2^(3 + ldrhs + immlo) <= 60416.
+
+Now ideally, ldrhs = 3. Plugging that into wolfram alpha, it claim that immlo=6
+is a solution. That would be nice: we could access structs of up to 32 bytes in
+a single instruction. But branches would be rough.
+
+Let's break out branches. We then have:
+
+12*2^(3 + immlo) + 2*2^(3 + brimmlo) + ...
+
+Now ideally, we would have ldrhs = 3. What are the implcations of the other
+values? We could have a max immlo of 6, but a brimmlo of 9. That sets the stack
+and struct size to 32 bytes, and the branch range to +-256 instructions. Not bad.
+
+How about a ldrhs = 2? Then we could have brimmlo of 10, which is almost too
+much: 512 instructions. We can have an immlo of 7 at a brimmlo of 9. Both are quite execellent:
+struct range of 64 bytes, and a branch range of 256 instructions.
+
+A naive ldrhs of 2 would allow us to access x0 (zero), x1(link reg), x2(stack
+pointer), and x3. x1 is often free, so it and x3 are general pointers. x0 gives
+access to a zero page and high page, and x2 the stack. Seems like a good deal,
+honestly, and it should be loose enough for a register allocator to deal with.
+
+ldrhs = 1 buys a ldimm of up to 8; that's what we expected. But then we can
+only have sp and a pointer; we lose the sexy sexy zero and I/O pages.
+
+ldrhs = 0 doesn't expand brimm or immlo; no need to bother.
+
+Hmm, an immlo of 6 exactly matches the proportion of RISC-V's 12-bit immlo to
+32-bit addresses. That's appealing.
+
+So, let's queue it up for ldrhs=2, brimmlo=9, immlo=7. Our instruction widths become:
+imm: 10, br: 12, ui: 12, ldst: 12, reg reg: 9.
+
+iiiiiiiii iddd0001 LUI
+iiiiiiiii iddd0010 AUIPC
+iiiiiiiii iddd0011 JAL
+iiiiiiiii iddd0100 BZ
+iiiiiiiii iddd0101 BNZ
+
+iiiiiiiil lddd0110 LB
+iiiiiiiil lddd0111 LBU
+iiiiiiiil lddd1000 LW
+iiiiiiiil lrrr1001 SB
+iiiiiiiil lrrr1010 SW
+
+iiiiiiii0 0ddd0000 SYS
+iiiiiiii0 1ddd0000 LI
+iiiiiiii1 0ddd0000 ADDI
+iiiiiiii1 1ddd0000 ANDI
+iiiiiiii0 0ddd1011 ORI
+iiiiiiii0 1ddd1011 XORI
+iiiiiiii1 0rrr1011 XORIA
+iiiiiiii1 1ddd1011 SLI
+iiiiiiii0 0ddd1100 SRI
+iiiiiiii0 1ddd1100 JALR
+iiiiiiii1 0rrr1100 SLTI
+iiiiiiii1 1rrr1100 SLTIU
+00lllrrr0 0ddd1101 ADD
+00lllrrr0 1ddd1101 SUB
+00lllrrr1 0ddd1101 AND
+00lllrrr1 1ddd1101 OR
+01lllrrr0 0ddd1101 XOR
+01lllrrr0 1ddd1101 SLL
+01lllrrr1 0ddd1101 SRL
+01lllrrr1 1ddd1101 SRA
+10lllrrr0 0ddd1101 SLT
+10lllrrr0 1ddd1101 SLTU
+
+SO MUCH MORE ROOM FOR ACTIVITIES!

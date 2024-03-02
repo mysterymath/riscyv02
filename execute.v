@@ -37,9 +37,9 @@ input [15:0] rf_r1;
 input [15:0] rf_r2;
 output reg [15:0] rf_w;
 
-// TODO: INT, LB, LBU, LW, SB, SW
+// TODO: SYS, LB, LBU, LW, SB, SW
 
-parameter INT    = 5'b00000;
+parameter SYS    = 5'b00000;
 parameter LI     = 5'b00001;
 parameter ADDI   = 5'b00010;
 parameter ANDI   = 5'b00011;
@@ -112,7 +112,7 @@ always @* begin
     rf_w_num = 3'b0;
   else
     case (op)
-      INT, BZ, BNZ, SB, SW:
+      SYS, BZ, BNZ, SB, SW:
         rf_w_num = 3'b0;
       XORIA, SLTI, SLTIU:
         rf_w_num = 3'b011;
