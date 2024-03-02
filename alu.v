@@ -3,8 +3,8 @@ input [2:0] op;
 input [7:0] l;
 input [7:0] r;
 output reg [7:0] o;
-input c_i;
-output reg c_o;
+input [6:0] c_i;
+output reg [6:0] c_o;
 output reg v;
 
 parameter [2:0] ADD = 3'd0;
