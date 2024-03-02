@@ -220,11 +220,3 @@ always @(posedge clk) begin
 end
 
 endmodule
-
-(* blackbox *)
-module HAX1(A, B, YC, YS);
-input A;
-input B;
-output YC;
-output YS;
-endmodule

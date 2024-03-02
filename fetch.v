@@ -2,7 +2,7 @@ module fetch(
   clk, cyc, data,
   addr,
   inst, pc_val,
-  jalr_executing, mispredict,
+  execute_jalr, execute_mispredict,
   pc_r, pc_r_next,
   pc_w);
 
@@ -13,8 +13,8 @@ output [15:0] addr;
 
 output reg [15:0] inst;
 output reg [15:1] pc_val;
-input jalr_executing;
-input mispredict;
+input execute_jalr;
+input execute_mispredict;
 
 input [15:1] pc_r;
 input [15:1] pc_r_next;
@@ -55,7 +55,7 @@ always @* begin
   // the second cycle of its fetch and during its execution. On the first
   // cycle of the next fetch, the condition below is false, so the new opcode
   // is read, the PC is incremented, and the pipeline continues normally.
-  if ((cyc && op == JALR) || jalr_executing)
+  if ((cyc && op == JALR) || execute_jalr)
     pc_w = pc_r;
   else if (cyc && branch_predicted)
     pc_w = branch_target;
@@ -63,7 +63,7 @@ always @* begin
     pc_w = pc_r_next;
 
   // Feed a NOP (ADDI x0, 0) into decode.
-  if (jalr_executing || mispredict)
+  if (execute_jalr || execute_mispredict)
     inst = 16'b0000000000000010;
   else
     inst = {data, inst_lo};

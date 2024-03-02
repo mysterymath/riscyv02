@@ -1,6 +1,5 @@
-module pc(clk, n_reset, w, r, r_next);
+module pc(clk, w, r, r_next);
 input clk;
-input n_reset;
 input [15:1] w;
 output reg [15:1] r;
 output [15:1] r_next;
@@ -20,10 +19,7 @@ generate
 endgenerate
 
 always @(posedge clk)
-  if (!n_reset)
-    r <= 16'b0;
-  else
-    r <= w;
+  r <= w;
 
 endmodule
 

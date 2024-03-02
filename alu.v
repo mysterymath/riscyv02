@@ -1,9 +1,9 @@
-module alu(op, l, r, c_in, o, c_out);
+module alu(op, l, r, o, c_i, c_o);
 input [2:0] op;
 input [7:0] l;
 input [7:0] r;
-input c_in;
 output reg [7:0] o;
+input c_in;
 output reg c_out;
 
 parameter [2:0] ADD = 3'd0;
