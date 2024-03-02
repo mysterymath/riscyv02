@@ -22,12 +22,12 @@ wire [15:0] fetch_inst;
 wire [15:1] fetch_pc_val;
 wire [15:1] fetch_pc_w;
 wire execute_jalr;
-wire execute_mispredict;
+wire execute_jump;
 fetch fetch(
   clk, cyc, data_i,
   addr,
   fetch_inst, fetch_pc_val,
-  execute_jalr, execute_mispredict,
+  execute_jalr, execute_jump,
   pc_r, pc_r_next,
   fetch_pc_w);
 
@@ -49,11 +49,11 @@ wire [15:0] rf_r1;
 wire [15:0] rf_r2;
 rf rf(clk, rf_r1_num, rf_r2_num, rf_w_num, rf_w, rf_r1, rf_r2);
 
-wire [15:1] execute_mispredict_pc;
+wire [15:1] execute_pc_w;
 execute execute(
   clk, cyc,
   fetch_inst, fetch_pc_val,
-  execute_jalr, execute_mispredict, execute_pc_w,
+  execute_jalr, execute_jump, execute_pc_w,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
   rf_r1_num, rf_r2_num, rf_w_num,
@@ -65,7 +65,7 @@ always @* begin
     // Room for a LUI, JALR.
     pc_w = 16'hfffc;
   end else begin
-    pc_w = execute_mispredict ? execute_pc_w : fetch_pc_w;
+    pc_w = execute_jump ? execute_pc_w : fetch_pc_w;
   end
 
   // TODO
