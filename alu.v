@@ -3,8 +3,8 @@ input [2:0] op;
 input [7:0] l;
 input [7:0] r;
 output reg [7:0] o;
-input c_in;
-output reg c_out;
+input c_i;
+output reg c_o;
 
 parameter [2:0] ADD = 3'd0;
 parameter [2:0] SUB = 3'd1;
@@ -14,46 +14,46 @@ parameter [2:0] XOR = 3'd4;
 parameter [2:0] ROL = 3'd5;
 parameter [2:0] ROR = 3'd6;
 
-wire [7:0] add_c_out;
-wire [7:0] add_out;
+wire [7:0] add_c_o;
+wire [7:0] add_o;
 wire [7:0] add_r;
-wire add_c_in;
+wire add_c_i;
 
 assign add_r = op[0] ? ~r : r;
-assign add_c_in = op[0];
+assign add_c_i = op[0];
 
-FAX1 low(l[0], add_r[0], add_c_in, add_c_out[0], add_out[0]);
+FAX1 low(l[0], add_r[0], add_c_i, add_c_o[0], add_o[0]);
 genvar i;
 generate
   for (i = 1; i < 8; i = i + 1)
-    FAX1 add_i(l[i], add_r[i], add_c_out[i-1], add_c_out[i], add_out[i]);
+    FAX1 add_i(l[i], add_r[i], add_c_o[i-1], add_c_o[i], add_o[i]);
 endgenerate
 
-wire [7:0] and_out;
-assign and_out = l & r;
+wire [7:0] and_o;
+assign and_o = l & r;
 
-wire [7:0] or_out;
-assign or_out = l | r;
+wire [7:0] or_o;
+assign or_o = l | r;
 
-wire [7:0] xor_out;
-assign xor_out = l ^ r;
+wire [7:0] xor_o;
+assign xor_o = l ^ r;
 
 always @* begin
   case(op)
-    ADD, SUB: o <= add_out;
-    AND: o <= and_out;
-    OR: o <= or_out;
-    XOR: o <= xor_out;
-    ROL: o <= (l << 1) | {7'b0, c_in};
-    ROR: o <= (l >> 1) | {c_in, 7'b0};
+    ADD, SUB: o <= add_o;
+    AND: o <= and_o;
+    OR: o <= or_o;
+    XOR: o <= xor_o;
+    ROL: o <= (l << 1) | {7'b0, c_i};
+    ROR: o <= (l >> 1) | {c_i, 7'b0};
     default: o <= 8'bxxxxxxxx;
   endcase
 
   case(op)
-    ADD, SUB: c_out <= add_c_out[7];
-    ROL: c_out <= l[7];
-    ROR: c_out <= l[0];
-    default: c_out <= 0;
+    ADD, SUB: c_o <= {5'b0, add_c_o[7]};
+    ROL: c_o <= {5'b0, l[7]};
+    ROR: c_o <= {5'b0, l[0]};
+    default: c_o <= 6'b0;
   endcase
 end
 
