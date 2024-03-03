@@ -1,5 +1,5 @@
 module fetch(
-  clk, cyc, data,
+  clk, n_reset, cyc, data,
   addr,
   inst, pc_val,
   execute_jump,
@@ -7,6 +7,7 @@ module fetch(
   pc_w);
 
 input clk;
+input n_reset;
 input cyc;
 input [7:0] data;
 output [15:0] addr;
@@ -69,11 +70,17 @@ always @* begin
 end
 
 always @(posedge clk)
-  if (!cyc) begin
-    inst_lo <= data;
-  end else if (execute_jump) begin
-    // Simulate having fetched a NOP on the first cycle of an executed jump.
+  if (!n_reset) begin
+    // Simulate having fetched a NOP on the previous cycle. Otherwise, it
+    // might randomly initialize to JALR, which is treated specially.
     inst_lo <= 8'b0;
+  end else begin
+    if (!cyc) begin
+      inst_lo <= data;
+    end else if (execute_jump) begin
+      // Simulate having fetched a NOP on the first cycle of an executed jump.
+      inst_lo <= 8'b0;
+    end
   end
 
 endmodule

@@ -23,7 +23,7 @@ wire [15:1] fetch_pc_val;
 wire [15:1] fetch_pc_w;
 wire execute_jump;
 fetch fetch(
-  clk, cyc, data_i,
+  clk, n_reset, cyc, data_i,
   addr,
   fetch_inst, fetch_pc_val,
   execute_jump,
@@ -51,7 +51,7 @@ rf rf(clk, rf_r1_num, rf_r2_num, rf_w_num, rf_w_en, rf_w, rf_r1, rf_r2);
 
 wire [15:1] execute_pc_w;
 execute execute(
-  clk, cyc,
+  clk, n_reset, cyc,
   fetch_inst, fetch_pc_val,
   execute_jump, execute_pc_w,
   alu_op, alu_l, alu_r, alu_c_i,

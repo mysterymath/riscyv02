@@ -1,5 +1,5 @@
 module execute(
-  clk, cyc,
+  clk, n_reset, cyc,
   fetch_inst, fetch_pc_val,
   jump, pc_w,
   alu_op, alu_l, alu_r, alu_c_i,
@@ -9,6 +9,7 @@ module execute(
   rf_w);
 
 input clk;
+input n_reset;
 input cyc;
 input [15:0] fetch_inst;
 // The non-predicted PC value in case of a branch; otherwise, the PC value.
@@ -216,7 +217,10 @@ always @* begin
 end
 
 always @(posedge clk) begin
-  if (cyc) begin
+  if (!n_reset) begin
+    // First cycle executes a NOP. pc_val is irrelevant.
+    inst <= 16'b0000000100000000;
+  end else if (cyc) begin
     inst <= fetch_inst;
     pc_val <= fetch_pc_val;
   end
