@@ -7,7 +7,7 @@ module cpu(
 );
 input clk;
 input n_reset;
-output [15:0] addr;
+output reg [15:0] addr;
 input [7:0] data_i;
 output reg [7:0] data_o;
 
@@ -18,15 +18,17 @@ wire [15:1] pc_r;
 wire [15:1] pc_r_next;
 pc pc(clk, pc_w, pc_r, pc_r_next);
 
+wire [15:0] fetch_addr;
 wire [15:0] fetch_inst;
 wire [15:1] fetch_pc_val;
 wire [15:1] fetch_pc_w;
 wire execute_jump;
+wire execute_load_store;
 fetch fetch(
   clk, n_reset, cyc, data_i,
-  addr,
+  fetch_addr,
   fetch_inst, fetch_pc_val,
-  execute_jump,
+  execute_jump, execute_load_store,
   pc_r, pc_r_next,
   fetch_pc_w);
 
@@ -49,11 +51,12 @@ wire [15:0] rf_r1;
 wire [15:0] rf_r2;
 rf rf(clk, rf_r1_num, rf_r2_num, rf_w_num, rf_w_en, rf_w, rf_r1, rf_r2);
 
+wire [15:0] execute_addr;
 wire [15:1] execute_pc_w;
 execute execute(
-  clk, n_reset, cyc,
+  clk, n_reset, cyc, data_i,
   fetch_inst, fetch_pc_val,
-  execute_jump, execute_pc_w,
+  execute_jump, execute_load_store, execute_addr, data_o, execute_pc_w,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
   rf_r1_num, rf_r2_num, rf_w_num, rf_w_en,
@@ -67,9 +70,7 @@ always @* begin
   end else begin
     pc_w = execute_jump ? execute_pc_w : fetch_pc_w;
   end
-
-  // TODO
-  data_o = 8'b0;
+  addr = execute_load_store ? execute_addr : fetch_addr;
 end
 
 always @(posedge clk)

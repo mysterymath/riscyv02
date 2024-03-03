@@ -2,7 +2,7 @@ module fetch(
   clk, n_reset, cyc, data,
   addr,
   inst, pc_val,
-  execute_jump,
+  execute_jump, execute_load_store,
   pc_r, pc_r_next,
   pc_w);
 
@@ -15,6 +15,7 @@ output [15:0] addr;
 output reg [15:0] inst;
 output reg [15:1] pc_val;
 input execute_jump;
+input execute_load_store;
 
 input [15:1] pc_r;
 input [15:1] pc_r_next;
@@ -53,7 +54,9 @@ assign branch_target = pc_r + branch_offset;
 always @* begin
   // Keep the PC from incrementing into the invalid region past the JALR on
   // the second cycle of its fetch and during its execution.
-  if (op == JALR[3:0] && inst_lo[7] && !data[0])
+  // Similarly, if a load or store is exeucting, then the fetch of the next
+  // instruction is already complete, but the execute unit is still busy.
+  if ((op == JALR[3:0] && inst_lo[7] && !data[0]) || execute_load_store)
     pc_w = pc_r;
   else if (cyc && branch_predicted)
     pc_w = branch_target;
@@ -75,7 +78,7 @@ always @(posedge clk)
     // might randomly initialize to JALR, which is treated specially.
     inst_lo <= 8'b0;
   end else begin
-    if (!cyc) begin
+    if (!cyc && !execute_load_store) begin
       inst_lo <= data;
     end else if (execute_jump) begin
       // Simulate having fetched a NOP on the first cycle of an executed jump.

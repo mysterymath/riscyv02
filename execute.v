@@ -1,7 +1,7 @@
 module execute(
-  clk, n_reset, cyc,
+  clk, n_reset, cyc, data_i,
   fetch_inst, fetch_pc_val,
-  jump, pc_w,
+  jump, load_store, addr, data_o, pc_w,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
   rf_r1_num, rf_r2_num, rf_w_num, rf_w_en,
@@ -11,12 +11,16 @@ module execute(
 input clk;
 input n_reset;
 input cyc;
+input [7:0] data_i;
 input [15:0] fetch_inst;
 // The non-predicted PC value in case of a branch; otherwise, the PC value.
 // Both are taken at the time of the last fetch tick; that is, the PC has
 // already been incremented.
 input [15:1] fetch_pc_val;
 output reg jump;
+output reg load_store;
+output reg [15:0] addr;
+output reg [7:0] data_o;
 output reg [15:1] pc_w;
 
 reg [15:0] inst;
@@ -190,6 +194,12 @@ always @* begin
   endcase
 
   case(op)
+    LB:
+      rf_w = {{8{data_i[7]}}, data_i};
+    LBU:
+      rf_w = {8'b0, data_i};
+    LW:
+      rf_w = !cyc ? {8'bxxxxxxxx, data_i} : {rf_r1[15:8], data_i};
     SLTI, SLT:
       rf_w = {15'b0, alu_o[7] ^ alu_v};
     SLTIU, SLTU:
@@ -214,18 +224,32 @@ always @* begin
     default: branch_predicted = 0;
   endcase
   jump = cyc && branch_predicted != branch_taken;
+
+  data_o = !cyc ? rf_r2[7:0] : rf_r2[15:8];
 end
 
 always @(posedge clk) begin
   if (!n_reset) begin
     // First cycle executes a NOP. pc_val is irrelevant.
     inst <= 16'b0000000100000000;
+    load_store <= 0;
+  end else if (load_store) begin
+    case (op)
+      LB, SB: load_store <= 1'b0;
+      default: load_store <= !cyc;
+    endcase
+    addr <= addr+1;
   end else if (cyc) begin
     inst <= fetch_inst;
     pc_val <= fetch_pc_val;
+    case (op)
+      LB, LBU, LW, SB, SW: load_store <= 1'b1;
+      default: load_store <= 0;
+    endcase
   end
   alu_o_prev_cyc <= alu_o;
   alu_c_o_prev_cyc <= alu_c_o;
+  addr <= load_store ? addr + 1 : {alu_o, alu_o_prev_cyc};
 end
 
 endmodule

@@ -864,3 +864,10 @@ enough weight to make it worthwhile.
 Of the above, it only maybe seems worth adding a NEG opcode, but it would be
 the only unary opcode present; so it would ignore lll. Seems like a wart, and
 LI x0, 0; SUB x0, 0, x0. You can LI x0,0 at the top of a function if you want.
+
+# Optimization Ideas
+- Break out the PC incrementer, make it 16-bit, and use it for both PC
+  increments and load/store increments.
+- Reuse inst for the address in loads and stores and separate out a dedicated
+  3-bit load/store opcode field and 3-bit src/dst register field.
+- MUX all the things!
