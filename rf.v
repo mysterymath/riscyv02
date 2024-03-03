@@ -17,11 +17,11 @@ endgenerate
 
 wire w_master_clk;
 wire [15:0] w_master_q;
-INVX2 inv_clk(clk, w_master_clk);
+INVX1 inv_clk(clk, w_master_clk);
 LATCH w_master[15:0](w_master_clk, w, w_master_q);
 
 wire r_clk;
-INVX2 inv_master_clk(w_master_clk, r_clk);
+INVX1 inv_master_clk(w_master_clk, r_clk);
 wire [15:0] r_r[7:0];
 generate
   for(i = 0; i < 8; i++)
@@ -41,7 +41,7 @@ output Q;
 endmodule
 
 (* blackbox *)
-module INVX2(A, Y);
+module INVX1(A, Y);
 input A;
 output Y;
 endmodule
