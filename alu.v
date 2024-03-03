@@ -39,14 +39,52 @@ assign or_o = l | r;
 wire [7:0] xor_o;
 assign xor_o = l ^ r;
 
-wire [21:0] rot_0;
-wire [21:0] rot_1;
-wire [21:0] rot_2;
-wire [21:0] rot_o;
-assign rot_0 = {c_i, l, c_i};
-assign rot_1 = op == ROL ? rot_0 << r[0] : rot_0 >> r[0];
-assign rot_2 = op == ROL ? rot_1 << (r[1]*2) : rot_1 >> (r[1]*2);
-assign rot_o = op == ROL ? rot_2 << (r[2]*4) : rot_2 >> (r[2]*4);
+// The below is kind of circuitous, but it's the clearest way to produce
+// minimum-width mux trees.
+
+// Concatenate to produce the result rotated left by 7.
+wire [14:0] rotl_7;
+assign rotl_7 = {l, c_i};
+
+// The amt to rotate right is 7-x, but that just works out to ~x. Accordingly,
+// just swap the muxes direction.
+
+wire [14:0] rotlr_1;
+mux #(15) rotlr_1_mux(rotl_7, rotl_7 >> 1, r[0], rotlr_1);
+wire [14:0] rotlr_2;
+mux #(15) rotlr_2_mux(rotlr_1, rotlr_1 >> 2, r[1], rotlr_2);
+wire [14:0] rotlr_4;
+mux #(15) rotlr_4_mux(rotlr_2, rotlr_2 >> 4, r[2], rotlr_4);
+
+wire [7:0] rotl_o;
+assign rotl_o = rotlr_4[7:0];
+wire [6:0] rotl_c_o;
+assign rotl_c_o = rotlr_4[14:8];
+
+// Concatenate to produce the result rotated right by 7.
+wire [14:0] rotr_7;
+assign rotr_7 = {c_i, l};
+
+// The amt to rotate left is 7-x, but that just works out to ~x. Accordingly,
+// just swap the muxes direction.
+
+wire [14:0] rotrl_1;
+mux #(15) rotrl_1_mux(rotr_7, rotr_7 << 1, r[0], rotrl_1);
+wire [14:0] rotrl_2;
+mux #(15) rotrl_2_mux(rotrl_1, rotrl_1 << 2, r[1], rotrl_2);
+wire [14:0] rotrl_4;
+mux #(15) rotrl_4_mux(rotrl_2, rotrl_2 << 4, r[2], rotrl_4);
+
+wire [7:0] rotr_o;
+assign rotr_o = rotrl_4[7:0];
+wire [6:0] rotr_c_o;
+assign rotr_c_o = rotrl_4[14:8];
+
+wire [7:0] rot_o;
+wire [6:0] rot_c_o;
+
+mux #(8) rot_o_mux(rotl_o, rotr_o, op == ROL, rot_o);
+mux #(7) rot_c_o_mux(rotl_c_o, rotr_c_o, op == ROL, rot_c_o);
 
 always @* begin
   case(op)
@@ -54,14 +92,13 @@ always @* begin
     AND: o <= and_o;
     OR: o <= or_o;
     XOR: o <= xor_o;
-    ROL, ROR: o <= rot_o[14:7];
+    ROL, ROR: o <= rot_o;
     default: o <= 8'bxxxxxxxx;
   endcase
 
   case(op)
     ADD, SUB: c_o <= {5'bxxxxx, add_c_o[7]};
-    ROL: c_o <= rot_o[21:15];
-    ROR: c_o <= rot_o[6:0];
+    ROL, ROR: c_o <= rot_c_o;
     default: c_o <= 6'bxxxxxx;
   endcase
 
