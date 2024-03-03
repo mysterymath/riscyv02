@@ -4,7 +4,7 @@ module execute(
   jump, pc_w,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
-  rf_r1_num, rf_r2_num, rf_w_num,
+  rf_r1_num, rf_r2_num, rf_w_num, rf_w_en,
   rf_r1, rf_r2,
   rf_w);
 
@@ -32,6 +32,7 @@ input alu_v;
 output reg [2:0] rf_r1_num;
 output reg [2:0] rf_r2_num;
 output reg [2:0] rf_w_num;
+output reg rf_w_en;
 input [15:0] rf_r1;
 input [15:0] rf_r2;
 output reg [15:0] rf_w;
@@ -96,7 +97,6 @@ always @* begin
   op = inst[4:0];
 
   case (op)
-    LI, LUI: rf_r1_num = 3'b0;
     LB, LBU, LW, SB, SW: rf_r1_num = 3'b100;
     ADD, SUB, AND, OR, XOR, SLL, SRA, SLT, SLTU: rf_r1_num = inst[10:8];
     default: rf_r1_num = inst[7:5];
@@ -106,20 +106,6 @@ always @* begin
     SB, SW: rf_r2_num = inst[7:5];
     default: rf_r2_num = inst[13:11];
   endcase
-
-  if (!cyc)
-    rf_w_num = 3'b0;
-  else
-    case (op)
-      SYS, BZ, BNZ, SB, SW:
-        rf_w_num = 3'b0;
-      XORIA, SLTI, SLTIU:
-        rf_w_num = 3'b011;
-      JALR:
-        rf_w_num = 3'b1;
-      default:
-        rf_w_num = inst[7:5];
-    endcase
 
   case (op)
     LUI, AUIPC:
@@ -145,6 +131,8 @@ always @* begin
   endcase
 
   case(op)
+    LI, LUI:
+      alu_l = 8'b0;
     SLI, SLL:
       if (imm[3])
         alu_l = !cyc ? 8'b0 : rf_r1[7:0];
@@ -181,6 +169,20 @@ always @* begin
     alu_c_i = {6{sra ? alu_l[7] : 1'b0}};
   else
     alu_c_i = alu_c_o_prev_cyc;
+
+  case (op)
+    SYS, BZ, BNZ, SB, SW: rf_w_en = 1'b0;
+    default: rf_w_en = !cyc;
+  endcase
+
+  case (op)
+    XORIA, SLTI, SLTIU:
+      rf_w_num = 3'd2;
+    JALR:
+      rf_w_num = 3'd1;
+    default:
+      rf_w_num = inst[7:5];
+  endcase
 
   case(op)
     SLTI, SLT:

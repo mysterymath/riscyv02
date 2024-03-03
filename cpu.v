@@ -43,10 +43,11 @@ wire clk;
 wire [2:0] rf_r1_num;
 wire [2:0] rf_r2_num;
 wire [2:0] rf_w_num;
+wire rf_w_en;
 wire [15:0] rf_w;
 wire [15:0] rf_r1;
 wire [15:0] rf_r2;
-rf rf(clk, rf_r1_num, rf_r2_num, rf_w_num, rf_w, rf_r1, rf_r2);
+rf rf(clk, rf_r1_num, rf_r2_num, rf_w_num, rf_w_en, rf_w, rf_r1, rf_r2);
 
 wire [15:1] execute_pc_w;
 execute execute(
@@ -55,7 +56,7 @@ execute execute(
   execute_jump, execute_pc_w,
   alu_op, alu_l, alu_r, alu_c_i,
   alu_o, alu_c_o, alu_v,
-  rf_r1_num, rf_r2_num, rf_w_num,
+  rf_r1_num, rf_r2_num, rf_w_num, rf_w_en,
   rf_r1, rf_r2,
   rf_w);
 
