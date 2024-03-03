@@ -102,8 +102,7 @@ always @* begin
     default: c_o <= 6'bxxxxxx;
   endcase
 
-  // TODO
-  v = 0;
+  v = add_c_o[6] ^ add_c_o[7];
 end
 
 endmodule
