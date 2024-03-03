@@ -101,7 +101,7 @@ always @* begin
   endcase
 
   case (op)
-    LB, LBU, LW, SB, SW: rf_r1_num = 3'b100;
+    LB, LBU, LW, SB, SW: rf_r1_num = {1'b0, inst[8:7]};
     ADD, SUB, AND, OR, XOR, SLL, SRA, SLT, SLTU: rf_r1_num = inst[10:8];
     default: rf_r1_num = inst[7:5];
   endcase
