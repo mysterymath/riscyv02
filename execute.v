@@ -39,40 +39,40 @@ output reg [15:0] rf_w;
 
 // TODO: SYS, LB, LBU, LW, SB, SW
 
-parameter SYS    = 5'b00000;
-parameter LI     = 5'b00001;
-parameter ADDI   = 5'b00010;
-parameter ANDI   = 5'b00011;
-parameter ORI    = 5'b00100;
-parameter XORI   = 5'b00101;
-parameter XORIA  = 5'b00110;
-parameter SLI    = 5'b00111;
-parameter SRI    = 5'b01000;
-parameter JALR   = 5'b01001;
-parameter SLTI   = 5'b01010;
-parameter SLTIU  = 5'b01011;
-parameter LUI    = 5'b01100;
-parameter AUIPC  = 5'b01101;
-parameter BZ     = 5'b01110;
-parameter BNZ    = 5'b01111;
-parameter JAL    = 5'b10000;
+parameter LUI   = 8'b00000001;
+parameter AUIPC = 8'b00000010;
+parameter JAL   = 8'b00000011;
+parameter BZ    = 8'b00000000;
+parameter BNZ   = 8'b00000101;
+parameter LB    = 8'b00000110;
+parameter LBU   = 8'b00000111;
+parameter LW    = 8'b00000100;
+parameter SB    = 8'b00000001;
+parameter SW    = 8'b00001010;
 
-parameter LB    = 5'b10001;
-parameter LBU   = 5'b10010;
-parameter LW    = 5'b10011;
-parameter SB    = 5'b10100;
-parameter SW    = 5'b10101;
+parameter SYS   = 8'b00000000;
+parameter LI    = 8'b00010000;
+parameter ADDI  = 8'b00100000;
+parameter ANDI  = 8'b00110000;
+parameter ORI   = 8'b00001011;
+parameter XORI  = 8'b00011011;
+parameter XORIA = 8'b00101011;
+parameter SLI   = 8'b00111011;
+parameter SRI   = 8'b00001100;
+parameter JALR  = 8'b00011100;
+parameter SLTI  = 8'b00101100;
+parameter SLTIU = 8'b00111100;
 
-parameter ADD   = 5'b10110;
-parameter SUB   = 5'b10111;
-parameter AND   = 5'b11000;
-parameter OR    = 5'b11001;
-parameter XOR   = 5'b11010;
-parameter SLL   = 5'b11011;
-parameter SRL   = 5'b11100;
-parameter SRA   = 5'b11101;
-parameter SLT   = 5'b11110;
-parameter SLTU  = 5'b11111;
+parameter ADD   = 8'b00001101;
+parameter SUB   = 8'b00011101;
+parameter AND   = 8'b00101101;
+parameter OR    = 8'b00111101;
+parameter XOR   = 8'b01001101;
+parameter SLL   = 8'b01111101;
+parameter SRL   = 8'b01101101;
+parameter SRA   = 8'b01011101;
+parameter SLT   = 8'b10101101;
+parameter SLTU  = 8'b10111101;
 
 parameter [2:0] ALU_ADD = 3'd0;
 parameter [2:0] ALU_SUB = 3'd1;
@@ -82,7 +82,7 @@ parameter [2:0] ALU_XOR = 3'd4;
 parameter [2:0] ALU_ROL = 3'd5;
 parameter [2:0] ALU_ROR = 3'd6;
 
-reg [4:0] op;
+reg [8:0] op;
 
 reg [15:0] imm;
 
@@ -94,7 +94,11 @@ reg branch_taken;
 reg branch_predicted;
 
 always @* begin
-  op = inst[4:0];
+  case (inst[3:0])
+    4'b0000, 4'b1011, 4'b1100: op = {2'b0, inst[8:7], inst[3:0]};
+    4'b1101: op = {inst[15:14], inst[8:7], inst[3:0]};
+    default: op = {4'b0, inst[3:0]};
+  endcase
 
   case (op)
     LB, LBU, LW, SB, SW: rf_r1_num = 3'b100;
@@ -109,9 +113,9 @@ always @* begin
 
   case (op)
     LUI, AUIPC:
-      imm = {inst[15:8], 8'b0};
+      imm = {inst[15:7], 7'b0};
     default:
-      imm = {{8{inst[15]}}, inst[15:8]};
+      imm = {{7{inst[15]}}, inst[15:9]};
   endcase
 
   case (op)

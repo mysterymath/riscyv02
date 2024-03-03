@@ -19,10 +19,10 @@ input [15:1] pc_r;
 input [15:1] pc_r_next;
 output reg [15:1] pc_w;
 
-parameter JALR   = 5'b01001;
-parameter BZ     = 5'b01110;
-parameter BNZ    = 5'b01111;
-parameter JAL    = 5'b10000;
+parameter JAL    = 4'b0011;
+parameter BZ     = 4'b0100;
+parameter BNZ    = 4'b0101;
+parameter JALR   = 6'b011100;
 
 reg [7:0] inst_lo;
 
@@ -30,10 +30,10 @@ assign addr = {pc_r, 1'b0};
 
 // Only valid on second cycle.
 wire [15:1] branch_offset;
-assign branch_offset = {{8{data[7]}}, data[6:0]};
+assign branch_offset = {{6{data[7]}}, data, inst_lo[7]};
 
-wire [4:0] op;
-assign op = inst_lo[4:0];
+wire [3:0] op;
+assign op = inst_lo[3:0];
 
 // Only valid on second cycle.
 reg branch_predicted;
@@ -52,7 +52,7 @@ assign branch_target = pc_r + branch_offset;
 always @* begin
   // Keep the PC from incrementing into the invalid region past the JALR on
   // the second cycle of its fetch and during its execution.
-  if (op == JALR)
+  if (op == JALR[3:0] && inst_lo[7] && !data[0])
     pc_w = pc_r;
   else if (cyc && branch_predicted)
     pc_w = branch_target;
@@ -60,7 +60,7 @@ always @* begin
     pc_w = pc_r_next;
 
   // Feed a NOP to decode on execute-stage jump; the fetch was invalid.
-  inst = execute_jump ? 16'b0000000000000010 : {data, inst_lo};
+  inst = execute_jump ? 16'b0000000100000000 : {data, inst_lo};
 
   if (op == BZ || op == BNZ && !branch_predicted)
     pc_val = branch_target;
@@ -73,7 +73,7 @@ always @(posedge clk)
     inst_lo <= data;
   end else if (execute_jump) begin
     // Simulate having fetched a NOP on the first cycle of an executed jump.
-    inst_lo <= 8'b00000010;
+    inst_lo <= 8'b0;
   end
 
 endmodule
