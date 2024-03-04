@@ -865,6 +865,71 @@ Of the above, it only maybe seems worth adding a NEG opcode, but it would be
 the only unary opcode present; so it would ignore lll. Seems like a wart, and
 LI x0, 0; SUB x0, 0, x0. You can LI x0,0 at the top of a function if you want.
 
+Okay, let's collect a list of all of the things that have bearing on interrupts
+in RISC-V U and M specs.
+
+The CSRs seem important. The following operations are atomic
+
+- CSRRW: atomically swap rd (original has rs1; no need) with CSR
+- CSRRS: write current value to rd, OR rs1
+- CSRRC: write current value to rd, AND ~rs1
+- The immediate versions of the above, which zero extend rs1 and treat it as an immediate.
+
+What CSRs are relevant?
+
+- mstatus
+  - ie: Interrupt enable. Doesn't effect NMI. Set to 0 on trap.
+  - pie: Value of interrupt-enable before trap. We do actually need this, since
+    the trap could be a NMI, so this could be either 0 or 1.
+- ip
+  - One bit; NMIs are handled separately. We don't actually need this; the 6502 doesn't have it.
+- ie:
+  - One bit: NMIs are handled separately. Actually, we don't need this at all; it's completely redundant with ie.
+  - We could allow masking software interrupts, but if you can't do it on a
+    65c02, it's not in scope unless we want it to be.
+- epc:
+  - Program counter for interrupt return. We need this. Low bit is always zero,
+    but not shifted. Instructions should be atomic WRT interrupts; this should
+    always point the the instruction that hasn't yet been executed. This may
+    need tricky handling for side effects in the fetch stage and multi-cycle
+    execute stages.
+- mcause:
+  - Whether it's a software interrupt, IRQ, or NMI.
+
+- No way to indicate NMI on 6502, but separate trap vector. Let's just do that too. 
+
+- We can store ie, pie, and brk in one 3-bit register. We need a 15-bit
+  register for epc. Let's have a 1-bit CSR selector between the two. We don't need
+  to allow masking bits on epc, only atomic exchange.
+
+- We'll take a cue from RISC-V and state that NMI handlers are intended *only*
+  for system error conditions, e.g. warm restart. NOT for fast interrupts. Thus, they
+  set epc and cause, but they don't affect pie or ip. 
+
+- We can require that interrupt premption be done in software. Low priority
+  interrupts should clear their pending state and immediately reenable
+  interrupts. High priority interrupts should clear their pending state and
+  execute with interrupts disabled.
+
+- Let's consider the antic DLI. The 6502 takes 8 to 14 cycles to respond to the
+  interrupt. We would take 2 to 3 cycles. The handler routine takes 11 machine
+  cycles. We would need, at minimum, a load of the status, a branch on that
+  status, and an absolute call. Thats 9 cycles! We guuud.
+
+- But, saving/restoring 16-bit registers on interrupt could be a problem... it
+  slow.
+- But is it? PHA TXA PHA TYA PHA is 13 cycles. ADDI x1, -6, SW x1, x2, 0, SW
+  x1,x2,2, SW x1,x2,4 is... 14 cycles. Wow!
+
+Relevant instrucitons:
+
+- iret:
+  - Sets ie to pie. Sets pie to 1.
+- ebreak:
+  - Software interrupt.
+
+
+
 # Optimization Ideas
 - Break out the PC incrementer, make it 16-bit, and use it for both PC
   increments and load/store increments.
