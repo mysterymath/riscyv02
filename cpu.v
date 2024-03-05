@@ -2,6 +2,7 @@ module cpu(
   clk,
   n_reset,
   n_irq,
+  n_nmi,
   addr,
   data_i,
   data_o
@@ -9,11 +10,15 @@ module cpu(
 input clk;
 input n_reset;
 input n_irq;
+input n_nmi;
 output reg [15:0] addr;
 input [7:0] data_i;
 output reg [7:0] data_o;
 
 reg cyc;
+reg irq_p;
+reg nmi_p;
+reg n_nmi_prev;
 
 reg [15:1] pc_w;
 wire [15:1] pc_r;
@@ -69,7 +74,9 @@ execute execute(
 always @* begin
   if (!n_reset)
     pc_w = 16'hfffc;
-  else if (!n_irq && cyc)
+  else if (nmi_p && cyc)
+    pc_w = 16'hfffa;
+  else if (irq_p && cyc)
     pc_w = 16'hfffe;
   else
     pc_w = execute_jump ? execute_pc_w : fetch_pc_w;
@@ -83,7 +90,20 @@ always @(posedge clk) begin
   end else begin
     cyc <= !cyc;
     if (cyc)
-      vector <= !n_irq;
+      vector <= nmi_p || irq_p;
+  end
+end
+
+always @(negedge clk) begin
+  if (!n_reset) begin
+    n_nmi_prev <= 0;
+    nmi_p <= 0;
+    irq_p <= 0;
+  end else begin
+    irq_p <= !n_irq;
+    n_nmi_prev <= n_nmi;
+    if (!n_nmi && n_nmi_prev)
+      nmi_p <= 1;
   end
 end
 
