@@ -18,6 +18,7 @@ wire [15:1] pc_r;
 wire [15:1] pc_r_next;
 pc pc(clk, pc_w, pc_r, pc_r_next);
 
+reg vector;
 wire [15:0] fetch_addr;
 wire [15:0] fetch_inst;
 wire [15:1] fetch_pc_val;
@@ -25,10 +26,10 @@ wire [15:1] fetch_pc_w;
 wire execute_jump;
 wire execute_load_store;
 fetch fetch(
-  clk, n_reset, cyc, data_i,
+  clk, cyc, data_i, vector,
   fetch_addr,
   fetch_inst, fetch_pc_val,
-  execute_jump, execute_load_store,
+  /*invalid=*/execute_jump || vector, /*freeze=*/execute_load_store,
   pc_r, pc_r_next,
   fetch_pc_w);
 
@@ -64,16 +65,22 @@ execute execute(
   rf_w);
 
 always @* begin
-  if (!n_reset) begin
-    // Room for a LUI, JALR.
+  if (!n_reset)
     pc_w = 16'hfffc;
-  end else begin
+  else
     pc_w = execute_jump ? execute_pc_w : fetch_pc_w;
-  end
   addr = execute_load_store ? execute_addr : fetch_addr;
 end
 
-always @(posedge clk)
-  cyc <= !n_reset ? 0 : cyc;
+always @(posedge clk) begin
+  if (!n_reset) begin
+    cyc <= 0;
+    vector <= 1;
+  end else begin
+    cyc <= !cyc;
+    if (cyc)
+      vector <= 0;
+  end
+end
 
 endmodule
