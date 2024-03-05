@@ -929,7 +929,49 @@ Relevant instrucitons:
   - Software interrupt.
 
 
+We want our vectors to be fixed, and to contain an absolute jump. But we don't
+actually have a safe absolute jump! JALR writes the link register, but we
+should have a JAR too that doesn't. Similarly, we'd want a J instruction; it
+looks like x0 pulled more weight than I thought. It's okay though; we just
+*barely* have room.
 
+iiiiiiiii iddd0001 LUI
+iiiiiiiii iddd0010 AUIPC
+iiiiiiiii iddd0011 J
+iiiiiiiii iddd0100 JAL
+iiiiiiiii iddd0101 BZ
+iiiiiiiii iddd0110 BNZ
+
+iiiiiiiil lddd0111 LB
+iiiiiiiil lddd1000 LBU
+iiiiiiiil lddd1001 LW
+iiiiiiiil lrrr1010 SB
+iiiiiiiil lrrr1011 SW
+
+iiiiiiii0 0ddd0000 SYS
+iiiiiiii0 1ddd0000 LI
+iiiiiiii1 0ddd0000 ADDI
+iiiiiiii1 1ddd0000 ANDI
+iiiiiiii0 0ddd1100 ORI
+iiiiiiii0 1ddd1100 XORI
+iiiiiiii1 0rrr1100 XORIA
+iiiiiiii1 1ddd1100 SLI
+iiiiiiii0 0ddd1101 SRI
+iiiiiiii0 1ddd1101 JR
+iiiiiiii1 0ddd1101 JALR
+iiiiiiii1 1rrr1101 SLTI
+iiiiiiii0 0rrr1110 SLTIU
+00lllrrr0 0ddd1111 ADD
+00lllrrr0 1ddd1111 SUB
+00lllrrr1 0ddd1111 AND
+00lllrrr1 1ddd1111 OR
+01lllrrr0 0ddd1111 XOR
+01lllrrr0 1ddd1111 SLL
+01lllrrr1 0ddd1111 SRL
+01lllrrr1 1ddd1111 SRA
+10lllrrr0 0ddd1111 SLT
+10lllrrr0 1ddd1111 SLTU
+ 
 # Optimization Ideas
 - Break out the PC incrementer, make it 16-bit, and use it for both PC
   increments and load/store increments.
