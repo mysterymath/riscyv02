@@ -17,8 +17,10 @@ output reg [7:0] data_o;
 
 reg cyc;
 reg irq_p;
-reg nmi_p;
+
 reg n_nmi_prev;
+reg n_nmi_cur;
+wire nmi_p;
 
 reg [15:1] pc_w;
 wire [15:1] pc_r;
@@ -89,21 +91,24 @@ always @(posedge clk) begin
     vector <= 1;
   end else begin
     cyc <= !cyc;
-    if (cyc)
+    if (n_nmi_prev && !n_nmi_cur)
+      nmi_p <= 1;
+    if (cyc) begin
       vector <= nmi_p || irq_p;
+      nmi_p <= 0;
+    end
   end
 end
 
 always @(negedge clk) begin
   if (!n_reset) begin
-    n_nmi_prev <= 0;
-    nmi_p <= 0;
     irq_p <= 0;
+    // What happens before reset shouldn't affect what happens after, so disallo a NMI.
+    n_nmi_prev <= 0;
   end else begin
     irq_p <= !n_irq;
-    n_nmi_prev <= n_nmi;
-    if (!n_nmi && n_nmi_prev)
-      nmi_p <= 1;
+    n_nmi_prev <= n_nmi_cur;
+    n_nmi_cur <= n_nmi;
   end
 end
 
