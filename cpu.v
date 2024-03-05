@@ -20,7 +20,7 @@ reg irq_p;
 
 reg n_nmi_prev;
 reg n_nmi_cur;
-wire nmi_p;
+reg nmi_p;
 
 reg [15:1] pc_w;
 wire [15:1] pc_r;
