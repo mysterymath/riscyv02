@@ -1,12 +1,14 @@
 module cpu(
   clk,
   n_reset,
+  n_irq,
   addr,
   data_i,
   data_o
 );
 input clk;
 input n_reset;
+input n_irq;
 output reg [15:0] addr;
 input [7:0] data_i;
 output reg [7:0] data_o;
@@ -67,6 +69,8 @@ execute execute(
 always @* begin
   if (!n_reset)
     pc_w = 16'hfffc;
+  else if (!n_irq && cyc)
+    pc_w = 16'hfffe;
   else
     pc_w = execute_jump ? execute_pc_w : fetch_pc_w;
   addr = execute_load_store ? execute_addr : fetch_addr;
@@ -79,7 +83,7 @@ always @(posedge clk) begin
   end else begin
     cyc <= !cyc;
     if (cyc)
-      vector <= 0;
+      vector <= !n_irq;
   end
 end
 
