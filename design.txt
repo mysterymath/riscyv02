@@ -971,7 +971,12 @@ iiiiiiii0 0rrr1110 SLTIU
 01lllrrr1 1ddd1111 SRA
 10lllrrr0 0ddd1111 SLT
 10lllrrr0 1ddd1111 SLTU
- 
+
+TODO: Redo the instruction set thus.
+TODO: Move pc into fetch, rf and alu into execute.
+TODO: Break out load/store unit
+TODO: Break out trap unit
+
 # Optimization Ideas
 - Break out the PC incrementer, make it 16-bit, and use it for both PC
   increments and load/store increments.
