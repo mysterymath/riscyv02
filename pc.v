@@ -18,7 +18,7 @@ generate
     HAX1 inc_i(r[i], c_out[i-1], r_next[i], c_out[i]);
 endgenerate
 
-always @(posedge clk)
+always @(negedge clk)
   r <= w;
 
 endmodule

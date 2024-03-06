@@ -230,7 +230,7 @@ always @* begin
   data_o = !cyc ? rf_r2[7:0] : rf_r2[15:8];
 end
 
-always @(posedge clk) begin
+always @(negedge clk) begin
   if (!n_reset) begin
     // First cycle executes a NOP. pc_val is irrelevant.
     inst <= 16'b0000000100000000;

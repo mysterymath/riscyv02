@@ -85,30 +85,25 @@ always @* begin
   addr = execute_load_store ? execute_addr : fetch_addr;
 end
 
-always @(posedge clk) begin
+always @(negedge clk) begin
   if (!n_reset) begin
+    irq_p <= 0;
+    // What happens before reset shouldn't affect what happens after, so
+    // disallow a NMI.
+    n_nmi_prev <= 0;
     cyc <= 0;
     vector <= 1;
   end else begin
     cyc <= !cyc;
+    irq_p <= !n_irq;
+    n_nmi_prev <= n_nmi_cur;
+    n_nmi_cur <= n_nmi;
     if (n_nmi_prev && !n_nmi_cur)
       nmi_p <= 1;
     if (cyc) begin
       vector <= nmi_p || irq_p;
       nmi_p <= 0;
     end
-  end
-end
-
-always @(negedge clk) begin
-  if (!n_reset) begin
-    irq_p <= 0;
-    // What happens before reset shouldn't affect what happens after, so disallo a NMI.
-    n_nmi_prev <= 0;
-  end else begin
-    irq_p <= !n_irq;
-    n_nmi_prev <= n_nmi_cur;
-    n_nmi_cur <= n_nmi;
   end
 end
 

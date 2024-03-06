@@ -972,12 +972,6 @@ iiiiiiii0 0rrr1110 SLTIU
 10lllrrr0 0ddd1111 SLT
 10lllrrr0 1ddd1111 SLTU
 
-TODO: The 65c02 is a negedge machine! Redo what we have in terms of negedge;
-it's closer to the truth!
-TODO: Move pc into fetch, rf and alu into execute.
-TODO: Break out load/store unit
-TODO: Break out trap unit
-
 # Optimization Ideas
 - Break out the PC incrementer, make it 16-bit, and use it for both PC
   increments and load/store increments.

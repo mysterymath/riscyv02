@@ -82,7 +82,7 @@ always @* begin
     pc_val = pc_r_next;
 end
 
-always @(posedge clk)
+always @(negedge clk)
   if (!cyc && !freeze) begin
     inst_lo <= data;
   end else if (invalid) begin

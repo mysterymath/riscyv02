@@ -15,13 +15,11 @@ generate
     assign r_w_en[i] = w_en && w_num == i;
 endgenerate
 
-wire w_master_clk;
 wire [15:0] w_master_q;
-INVX1 inv_clk(clk, w_master_clk);
-LATCH w_master[15:0](w_master_clk, w, w_master_q);
+LATCH w_master[15:0](clk, w, w_master_q);
 
 wire r_clk;
-INVX1 inv_master_clk(w_master_clk, r_clk);
+INVX1 inv_clk(clk, r_clk);
 wire [15:0] r_r[7:0];
 generate
   for(i = 0; i < 8; i++)
