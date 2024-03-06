@@ -21,10 +21,12 @@ input [15:1] pc_r;
 input [15:1] pc_r_next;
 output reg [15:1] pc_w;
 
-parameter JAL    = 4'b0011;
-parameter BZ     = 4'b0100;
-parameter BNZ    = 4'b0101;
-parameter JALR   = 6'b011100;
+parameter J      = 4'b0011;
+parameter JAL    = 4'b0100;
+parameter BZ     = 4'b0101;
+parameter BNZ    = 4'b0110;
+parameter JR     = 6'b011101;
+parameter JALR   = 6'b101101;
 
 reg [7:0] inst_lo;
 
@@ -41,7 +43,7 @@ assign op = inst_lo[3:0];
 reg branch_predicted;
 always @*
   case (op)
-    JAL: branch_predicted = 1;
+    J, JAL: branch_predicted = 1;
     BZ, BNZ: branch_predicted = branch_offset[15];
     default: branch_predicted <= 0;
   endcase
@@ -51,15 +53,18 @@ wire [15:1] branch_target;
 // yosys should make a 4-bit carry lookahead adder for us.
 assign branch_target = pc_r + branch_offset;
 
+wire op6;
+assign op6 = {data[0], inst_lo[7], op};
+
 always @* begin
   if (vector)
     pc_w = !cyc ? pc_r_next : {data, inst_lo};
   else begin
-    // Keep the PC from incrementing into the invalid region past the JALR on
-    // the second cycle of its fetch and during its execution.
-    // Similarly, if the CPU requests that the fetch unit's state be frozen,
-    // don't advance PC.
-    if ((op == JALR[3:0] && inst_lo[7] && !data[0]) || freeze)
+    // Keep the PC from incrementing into the invalid region past a JR/JALR on
+    // the second cycle of its fetch and during its execution. Similarly,
+    // don't advance PC if the CPU requests that the fetch unit's state be
+    // frozen.
+    if (op6 == J || op6 == JR || freeze)
       pc_w = pc_r;
     else if (cyc && branch_predicted)
       pc_w = branch_target;
