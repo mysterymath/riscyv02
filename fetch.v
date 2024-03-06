@@ -45,7 +45,7 @@ always @*
   case (op)
     J, JAL: branch_predicted = 1;
     BZ, BNZ: branch_predicted = branch_offset[15];
-    default: branch_predicted <= 0;
+    default: branch_predicted = 0;
   endcase
 
 // Only valid on second cycle.
@@ -61,9 +61,10 @@ always @* begin
     pc_w = !cyc ? pc_r_next : {data, inst_lo};
   else begin
     // Keep the PC from incrementing into the invalid region past a JR/JALR on
-    // the second cycle of its fetch and during its execution. Similarly,
-    // don't advance PC if the CPU requests that the fetch unit's state be
-    // frozen.
+    // the second cycle of its fetch and during its execution. (This produces
+    // an invalid fetch, so the opcode is reset to NOP once it executes.)
+    // Similarly, don't advance PC if the CPU requests that the fetch unit's
+    // state be frozen.
     if (op6 == J || op6 == JR || freeze)
       pc_w = pc_r;
     else if (cyc && branch_predicted)

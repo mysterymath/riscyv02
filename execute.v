@@ -240,7 +240,6 @@ always @(posedge clk) begin
       LB, SB: load_store <= 1'b0;
       default: load_store <= !cyc;
     endcase
-    addr <= addr+1;
   end else if (cyc) begin
     inst <= fetch_inst;
     pc_val <= fetch_pc_val;
