@@ -73,6 +73,8 @@ execute execute(
   rf_r1, rf_r2,
   rf_w);
 
+reg [15:1] epc;
+
 always @* begin
   if (!n_reset)
     pc_w = 16'hfffc;
@@ -101,7 +103,11 @@ always @(negedge clk) begin
     if (n_nmi_prev && !n_nmi_cur)
       nmi_p <= 1;
     if (cyc) begin
-      vector <= nmi_p || irq_p;
+      if (nmi_p || irq_p) begin
+        vector <= 1;
+        epc <= pc_r;
+      end else
+        vector <= 0;
       nmi_p <= 0;
     end
   end

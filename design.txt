@@ -972,6 +972,14 @@ iiiiiiii0 0rrr1110 SLTIU
 10lllrrr0 0ddd1111 SLT
 10lllrrr0 1ddd1111 SLTU
 
+What could throw a wrench into interrupts? JAL and J instructions have their
+branch taken in fetch; so do predicted branches. Rolling back these instructions
+would be more difficult than allowing them to complete while fetching nops.
+
+Actually, we don't have to fetch NOPs; we can fetch the interrupt handler
+vector! We just need to make a note that if a branch is mispredicted, then its
+true destination is stored in the interrupt return, not the PC.
+
 # Optimization Ideas
 - Break out the PC incrementer, make it 16-bit, and use it for both PC
   increments and load/store increments.
