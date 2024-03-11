@@ -83,7 +83,7 @@ always @* begin
   else if (irq_p && cyc)
     pc_w = 16'hfffe;
   else
-    pc_w = execute_jump ? execute_pc_w : fetch_pc_w;
+    pc_w = (execute_jump && !vector) ? execute_pc_w : fetch_pc_w;
   addr = execute_load_store ? execute_addr : fetch_addr;
 end
 
@@ -106,8 +106,11 @@ always @(negedge clk) begin
       if (nmi_p || irq_p) begin
         vector <= 1;
         epc <= pc_r;
-      end else
+      end else if (vector) begin
+        if (execute_jump)
+          epc <= execute_pc_w;
         vector <= 0;
+      end
       nmi_p <= 0;
     end
   end
