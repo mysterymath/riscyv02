@@ -103,7 +103,7 @@ always @(negedge clk) begin
     if (n_nmi_prev && !n_nmi_cur)
       nmi_p <= 1;
     if (cyc) begin
-      if (nmi_p || irq_p) begin
+      if ((nmi_p || irq_p) && !execute_load_store) begin
         vector <= 1;
         epc <= pc_r;
       end else if (vector) begin
