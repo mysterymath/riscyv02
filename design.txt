@@ -980,6 +980,25 @@ Actually, we don't have to fetch NOPs; we can fetch the interrupt handler
 vector! We just need to make a note that if a branch is mispredicted, then its
 true destination is stored in the interrupt return, not the PC.
 
+Let's be more specific about the CSR situation. First, we'll talk about the
+logical CSRs, then we'll figure out how to group them.
+
+Logical CSRs:
+ - 1-bit ie
+ - 1-bit pie
+ - 15-bit epc
+ - 1-bit cause
+
+For NMIs, epc is advisory, but useful. Cause is redundant with requiring a different vector, so skip it.
+For IRQ, before re-enabling interrupts, we must stack ie, pie, epc, and cause if it's needed. This takes at least 3
+stores, so let's put IE, PIE, and cause in the low 3 bits of one register to make that as fast as possible.
+
+Stacking them requires reading the CSR to a register, and unstacking them the
+opposite. We also want to be able to quickly save and clear IE; the other bits
+are less important. So let's just provide a setie instruction that uses the low
+bit of the immediate; easy enough. That, with a read and write pair for each of
+interrupt status and epc, should suffice.
+
 # Optimization Ideas
 - Break out the PC incrementer, make it 16-bit, and use it for both PC
   increments and load/store increments.
