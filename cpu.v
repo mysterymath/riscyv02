@@ -105,6 +105,8 @@ always @(negedge clk) begin
     if (cyc) begin
       if ((nmi_p || irq_p) && !execute_load_store) begin
         vector <= 1;
+        // Following RISC-V, our NMIs aren't intended to be recoverable, so
+        // this epc is informational, and it may clobber an existing IRQ epc.
         epc <= pc_r;
       end else if (vector) begin
         if (execute_jump)
