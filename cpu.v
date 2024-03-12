@@ -16,11 +16,11 @@ input [7:0] data_i;
 output reg [7:0] data_o;
 
 reg cyc;
-reg irq_p;
 
 reg n_nmi_prev;
 reg n_nmi_cur;
 reg nmi_p;
+reg irq_p;
 reg pie;
 reg ie;
 
@@ -78,7 +78,7 @@ execute execute(
 reg [15:1] epc;
 
 always @* begin
-  irq_p = !n_reset ? 0 : !n_irq;
+  irq_p = !n_reset ? 0 : (!n_irq && ie);
   if (!n_reset)
     pc_w = 16'hfffc;
   else if (nmi_p && cyc)
@@ -105,7 +105,7 @@ always @(negedge clk) begin
     if (n_nmi_prev && !n_nmi_cur)
       nmi_p <= 1;
     if (cyc) begin
-      if ((nmi_p || (irq_p && ie)) && !execute_load_store) begin
+      if ((nmi_p || irq_p) && !execute_load_store) begin
         vector <= 1;
         // Following RISC-V, our NMIs aren't intended to be recoverable, so
         // this epc is informational, and it may clobber an existing IRQ epc.
