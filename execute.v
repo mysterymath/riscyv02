@@ -1,12 +1,7 @@
 module execute(
   clk, n_reset, cyc, data_i,
   fetch_inst, fetch_pc_val,
-  jump, load_store, addr, data_o, pc_w,
-  alu_op, alu_l, alu_r, alu_c_i,
-  alu_o, alu_c_o, alu_v,
-  rf_r1_num, rf_r2_num, rf_w_num, rf_w_en,
-  rf_r1, rf_r2,
-  rf_w);
+  jump, load_store, addr, data_o, pc_w);
 
 input clk;
 input n_reset;
@@ -26,21 +21,23 @@ output reg [15:1] pc_w;
 reg [15:0] inst;
 reg [15:1] pc_val;
 
-output reg [2:0] alu_op;
-output reg [7:0] alu_l;
-output reg [7:0] alu_r;
-output reg [6:0] alu_c_i;
-input [7:0] alu_o;
-input [6:0] alu_c_o;
-input alu_v;
+reg [2:0] alu_op;
+reg [7:0] alu_l;
+reg [7:0] alu_r;
+reg [6:0] alu_c_i;
+wire [7:0] alu_o;
+wire [6:0] alu_c_o;
+wire alu_v;
+alu alu(alu_op, alu_l, alu_r, alu_o, alu_c_i, alu_c_o, alu_v);
 
-output reg [2:0] rf_r1_num;
-output reg [2:0] rf_r2_num;
-output reg [2:0] rf_w_num;
-output reg rf_w_en;
-input [15:0] rf_r1;
-input [15:0] rf_r2;
-output reg [15:0] rf_w;
+reg [2:0] rf_r1_num;
+reg [2:0] rf_r2_num;
+reg [2:0] rf_w_num;
+reg rf_w_en;
+wire [15:0] rf_r1;
+wire [15:0] rf_r2;
+reg [15:0] rf_w;
+rf rf(clk, rf_r1_num, rf_r2_num, rf_w_num, rf_w_en, rf_w, rf_r1, rf_r2);
 
 // TODO: SYS
 
