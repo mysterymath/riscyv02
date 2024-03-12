@@ -21,6 +21,8 @@ reg irq_p;
 reg n_nmi_prev;
 reg n_nmi_cur;
 reg nmi_p;
+reg pie;
+reg ie;
 
 reg [15:1] pc_w;
 wire [15:1] pc_r;
@@ -76,6 +78,7 @@ execute execute(
 reg [15:1] epc;
 
 always @* begin
+  irq_p = !n_reset ? 0 : !n_irq;
   if (!n_reset)
     pc_w = 16'hfffc;
   else if (nmi_p && cyc)
@@ -89,25 +92,26 @@ end
 
 always @(negedge clk) begin
   if (!n_reset) begin
-    irq_p <= 0;
     // What happens before reset shouldn't affect what happens after, so
     // disallow a NMI.
     n_nmi_prev <= 0;
     cyc <= 0;
     vector <= 1;
+    ie <= 0;
   end else begin
     cyc <= !cyc;
-    irq_p <= !n_irq;
     n_nmi_prev <= n_nmi_cur;
     n_nmi_cur <= n_nmi;
     if (n_nmi_prev && !n_nmi_cur)
       nmi_p <= 1;
     if (cyc) begin
-      if ((nmi_p || irq_p) && !execute_load_store) begin
+      if ((nmi_p || (irq_p && ie)) && !execute_load_store) begin
         vector <= 1;
         // Following RISC-V, our NMIs aren't intended to be recoverable, so
         // this epc is informational, and it may clobber an existing IRQ epc.
         epc <= pc_r;
+        pie <= ie;
+        ie <= 0;
       end else if (vector) begin
         if (execute_jump)
           epc <= execute_pc_w;
