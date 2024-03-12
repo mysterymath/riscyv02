@@ -999,6 +999,45 @@ are less important. So let's just provide a setie instruction that uses the low
 bit of the immediate; easy enough. That, with a read and write pair for each of
 interrupt status and epc, should suffice.
 
+What do these stacking and unstacking sequences actually look like? Well, we
+need a register to store the CSR values. So we need to save that, plus the
+actual values. The prolog and epilog are mirrors, so let's just consider the prolog.
+
+addi sp, -5
+sw x2, sp, 3
+csrr x2, status
+sb x2, sp, 2
+csrr x2, epc
+sw s2, sp, 0
+
+Without needing to save this, an interrupt has a latency of between 0 and 3 cycles, average
+1/2 + 1/2*p_load_store. The 6502 takes 7 cycles, but it stacks the PC and status register.
+
+The save/restore sequence takes 17 cycles. That's quite a lot. But, it
+*doesn't* impact the interrupt handlers with the tightest latency requirements:
+these can simply operate with interrupts disabled! So, in classic RISC fashion,
+this penalizes less important cases to benefit more important ones.
+
+Another thing we may want to do is the equivalent of a PHP, SEI, ... PLP. This allows code 
+to operate as a critical section, even if it's already in a critical section. We can likely keep
+the status in a register, so this becomes:
+csrr  x2, status
+sei
+...
+csrw  x2, status
+6 cycles.
+
+If we need to stack it, assume addi already present:
+csrr x2, status
+sb x2, sp, xxx
+sei
+...
+lb x2, sp, xxx
+csrw x2, status
+12 cycles
+
+The 6502 uses 9 cycles... so not incomparable.
+
 # Optimization Ideas
 - Break out the PC incrementer, make it 16-bit, and use it for both PC
   increments and load/store increments.
