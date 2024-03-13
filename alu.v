@@ -108,14 +108,6 @@ end
 endmodule
 
 (* blackbox *)
-module HAX1(A, B, YC, YS);
-input A;
-input B;
-output YC;
-output YS;
-endmodule
-
-(* blackbox *)
 module FAX1(A, B, C, YC, YS);
 input A;
 input B;
