@@ -1051,6 +1051,13 @@ TODO: What happens if and IRQ is handled on the same negedge as a BRK completes?
   - The former requires a single bit of storage and associated control logic;
     the latter requires a 15-bit addder or a 14-bit decrement. Probably the former.
 
+NOTE: We logically need a FENCE.I instruction that ensures that memory writes
+occur before branches into the written memory. However, for our implementation,
+all that needs to happen to ensure this is a NOP: after executing *any*
+non-memory instruction, all previous memory instructions have completed. So we
+can just advertise our actual NOP as FENCE.I and call it a day. Alternatively,
+we can just advertise the above criteria.
+
 # Optimization Ideas
 - Break out the PC incrementer, make it 16-bit, and use it for both PC
   increments and load/store increments.
