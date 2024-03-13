@@ -23,6 +23,7 @@ reg nmi_p;
 reg irq_p;
 reg pie;
 reg ie;
+reg brk;
 reg [15:1] epc;
 
 reg [15:1] pc_w;
@@ -35,6 +36,7 @@ wire [15:0] fetch_addr;
 wire [15:0] fetch_inst;
 wire [15:1] fetch_pc_val;
 wire [15:1] fetch_pc_w;
+wire fetch_brk;
 wire execute_jump;
 wire execute_load_store;
 fetch fetch(
@@ -43,7 +45,7 @@ fetch fetch(
   fetch_inst, fetch_pc_val,
   /*invalid=*/execute_jump || vector, /*freeze=*/execute_load_store,
   pc_r, pc_r_next,
-  fetch_pc_w);
+  fetch_pc_w, fetch_brk);
 
 wire [15:0] execute_addr;
 wire [15:1] execute_pc_w;
@@ -61,9 +63,9 @@ always @* begin
   irq_p = !n_reset ? 0 : (!n_irq && ie);
   if (!n_reset)
     pc_w = 16'hfffc;
-  else if (nmi_p && cyc)
+  else if (cyc && nmi_p)
     pc_w = 16'hfffa;
-  else if (irq_p && cyc)
+  else if (cyc && (irq_p || fetch_brk))
     pc_w = 16'hfffe;
   else
     pc_w = (execute_jump && !vector) ? execute_pc_w : fetch_pc_w;
@@ -85,13 +87,14 @@ always @(negedge clk) begin
     if (n_nmi_prev && !n_nmi_cur)
       nmi_p <= 1;
     if (cyc) begin
-      if ((nmi_p || irq_p) && !execute_load_store) begin
+      if ((nmi_p || irq_p || fetch_brk) && !execute_load_store) begin
         vector <= 1;
         // Following RISC-V, our NMIs aren't intended to be recoverable, so
         // this epc is informational, and it may clobber an existing IRQ epc.
         epc <= pc_r;
         pie <= ie;
         ie <= 0;
+        brk <= fetch_brk && !irq_p;
       end else begin
         epc <= execute_epc_w;
         pie <= execute_pie_w;

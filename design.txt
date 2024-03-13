@@ -1038,6 +1038,9 @@ csrw x2, status
 
 The 6502 uses 9 cycles... so not incomparable.
 
+TODO: For single-cycle byte loads and stores, we need to manipulate cyc
+somehow. We aren't! (Does manipulating cyc buy us anything else?)
+
 # Optimization Ideas
 - Break out the PC incrementer, make it 16-bit, and use it for both PC
   increments and load/store increments.

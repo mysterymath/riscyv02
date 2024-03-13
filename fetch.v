@@ -4,7 +4,7 @@ module fetch(
   inst, pc_val,
   invalid, freeze,
   pc_r, pc_r_next,
-  pc_w);
+  pc_w, brk);
 
 input clk;
 input cyc;
@@ -20,13 +20,17 @@ input freeze;
 input [15:1] pc_r;
 input [15:1] pc_r_next;
 output reg [15:1] pc_w;
+output reg brk;
 
 parameter J      = 4'b0011;
 parameter JAL    = 4'b0100;
 parameter BZ     = 4'b0101;
 parameter BNZ    = 4'b0110;
+parameter SYS    = 6'b000000;
 parameter JR     = 6'b011101;
 parameter JALR   = 6'b101101;
+
+parameter SYS_BRK  = 3'b000;
 
 reg [7:0] inst_lo;
 
@@ -56,6 +60,9 @@ assign branch_target = pc_r + branch_offset;
 wire op6;
 assign op6 = {data[0], inst_lo[7], op};
 
+wire op_sys;
+assign op_sys = data[3:1];
+
 always @* begin
   if (vector)
     pc_w = !cyc ? pc_r_next : {data, inst_lo};
@@ -80,6 +87,8 @@ always @* begin
     pc_val = branch_target;
   else
     pc_val = pc_r_next;
+
+  brk = !vector && op6 == SYS && op_sys == SYS_BRK;
 end
 
 always @(negedge clk)
