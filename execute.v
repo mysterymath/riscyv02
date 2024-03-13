@@ -1,7 +1,9 @@
 module execute(
   clk, n_reset, cyc, data_i,
   fetch_inst, fetch_pc_val,
-  jump, load_store, addr, data_o, pc_w);
+  jump, load_store, addr, data_o,
+  pie, ie, epc,
+  pc_w, pie_w, ie_w, epc_w);
 
 input clk;
 input n_reset;
@@ -16,7 +18,14 @@ output reg jump;
 output reg load_store;
 output reg [15:0] addr;
 output reg [7:0] data_o;
+
+input pie;
+input ie;
+input [15:1] epc;
 output reg [15:1] pc_w;
+output reg pie_w;
+output reg ie_w;
+output reg [15:1] epc_w;
 
 reg [15:0] inst;
 reg [15:1] pc_val;
@@ -231,6 +240,10 @@ always @* begin
   jump = cyc && branch_predicted != branch_taken;
 
   data_o = !cyc ? rf_r2[7:0] : rf_r2[15:8];
+
+  ie_w = ie;
+  pie_w = pie;
+  epc_w = epc;
 end
 
 always @(negedge clk) begin

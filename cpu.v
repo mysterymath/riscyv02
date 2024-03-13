@@ -23,6 +23,7 @@ reg nmi_p;
 reg irq_p;
 reg pie;
 reg ie;
+reg [15:1] epc;
 
 reg [15:1] pc_w;
 wire [15:1] pc_r;
@@ -46,12 +47,15 @@ fetch fetch(
 
 wire [15:0] execute_addr;
 wire [15:1] execute_pc_w;
+wire execute_pie_w;
+wire execute_ie_w;
+wire [15:1] execute_epc_w;
 execute execute(
   clk, n_reset, cyc, data_i,
   fetch_inst, fetch_pc_val,
-  execute_jump, execute_load_store, execute_addr, data_o, execute_pc_w);
-
-reg [15:1] epc;
+  execute_jump, execute_load_store, execute_addr, data_o,
+  pie, ie, epc,
+  execute_pc_w, execute_pie_w, execute_ie_w, execute_epc_w);
 
 always @* begin
   irq_p = !n_reset ? 0 : (!n_irq && ie);
@@ -88,10 +92,15 @@ always @(negedge clk) begin
         epc <= pc_r;
         pie <= ie;
         ie <= 0;
-      end else if (vector) begin
-        if (execute_jump)
-          epc <= execute_pc_w;
-        vector <= 0;
+      end else begin
+        epc <= execute_epc_w;
+        pie <= execute_pie_w;
+        ie <= execute_ie_w;
+        if (vector) begin
+          if (execute_jump)
+            epc <= execute_pc_w;
+          vector <= 0;
+        end
       end
       nmi_p <= 0;
     end
