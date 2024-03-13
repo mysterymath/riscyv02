@@ -78,13 +78,19 @@ parameter SRA   = 8'b01011111;
 parameter SLT   = 8'b10101111;
 parameter SLTU  = 8'b10111111;
 
-parameter [2:0] ALU_ADD = 3'd0;
-parameter [2:0] ALU_SUB = 3'd1;
-parameter [2:0] ALU_AND = 3'd2;
-parameter [2:0] ALU_OR = 3'd3;
-parameter [2:0] ALU_XOR = 3'd4;
-parameter [2:0] ALU_ROL = 3'd5;
-parameter [2:0] ALU_ROR = 3'd6;
+parameter ALU_ADD = 3'd0;
+parameter ALU_SUB = 3'd1;
+parameter ALU_AND = 3'd2;
+parameter ALU_OR = 3'd3;
+parameter ALU_XOR = 3'd4;
+parameter ALU_ROL = 3'd5;
+parameter ALU_ROR = 3'd6;
+
+parameter SYS_BRK  = 3'b000;
+parameter SYS_RETI = 3'b001;
+parameter SYS_CSRR = 3'b010;
+parameter SYS_CSRW = 3'b011;
+parameter SYS_SIE  = 3'b100;
 
 reg [8:0] op;
 
