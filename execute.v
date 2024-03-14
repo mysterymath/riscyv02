@@ -1,5 +1,5 @@
 module execute(
-  clk, n_reset, cyc, data_i,
+  clk, cyc, stall, data_i,
   fetch_inst, fetch_pc_val,
   jump, load_store, addr, data_o, cyc_reset,
   pie, ie, epc,
@@ -8,6 +8,7 @@ module execute(
 input clk;
 input n_reset;
 input cyc;
+input stall;
 input [7:0] data_i;
 input [15:0] fetch_inst;
 // The non-predicted PC value in case of a branch; otherwise, the PC value.
@@ -253,8 +254,8 @@ always @* begin
 end
 
 always @(negedge clk) begin
-  if (!n_reset) begin
-    // First cycle executes a NOP. pc_val is irrelevant.
+  if (stall) begin
+    // NOP.
     inst <= 16'b0000000100000000;
     load_store <= 0;
   end else if (load_store) begin
