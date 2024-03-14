@@ -52,7 +52,7 @@ assign op = inst_lo[3:0];
 reg branch_predicted;
 always @*
   case (op)
-    J, JAL: branch_predicted = 1;
+    J, JAL, JR, JALR: branch_predicted = 1;
     BZ, BNZ: branch_predicted = branch_offset[15];
     default: branch_predicted = 0;
   endcase
