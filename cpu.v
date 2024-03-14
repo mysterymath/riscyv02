@@ -48,6 +48,7 @@ fetch fetch(
   fetch_pc_w, fetch_brk);
 
 wire [15:0] execute_addr;
+wire cyc_reset;
 wire [15:1] execute_pc_w;
 wire execute_pie_w;
 wire execute_ie_w;
@@ -55,7 +56,7 @@ wire [15:1] execute_epc_w;
 execute execute(
   clk, n_reset, cyc, data_i,
   fetch_inst, fetch_pc_val,
-  execute_jump, execute_load_store, execute_addr, data_o,
+  execute_jump, execute_load_store, execute_addr, data_o, cyc_reset,
   pie, ie, epc,
   execute_pc_w, execute_pie_w, execute_ie_w, execute_epc_w);
 
@@ -81,7 +82,7 @@ always @(negedge clk) begin
     vector <= 1;
     ie <= 0;
   end else begin
-    cyc <= !cyc;
+    cyc <= cyc_reset ? 0 : !cyc;
     n_nmi_prev <= n_nmi_cur;
     n_nmi_cur <= n_nmi;
     if (n_nmi_prev && !n_nmi_cur)

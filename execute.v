@@ -1,7 +1,7 @@
 module execute(
   clk, n_reset, cyc, data_i,
   fetch_inst, fetch_pc_val,
-  jump, load_store, addr, data_o,
+  jump, load_store, addr, data_o, cyc_reset,
   pie, ie, epc,
   pc_w, pie_w, ie_w, epc_w);
 
@@ -18,6 +18,7 @@ output reg jump;
 output reg load_store;
 output reg [15:0] addr;
 output reg [7:0] data_o;
+output reg cyc_reset;
 
 input pie;
 input ie;
@@ -244,6 +245,11 @@ always @* begin
   ie_w = ie;
   pie_w = pie;
   epc_w = epc;
+
+  case (op)
+    LB, SB: cyc_reset = load_store;
+    default: cyc_reset = 0;
+  endcase
 end
 
 always @(negedge clk) begin
