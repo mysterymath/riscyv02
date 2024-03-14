@@ -1038,16 +1038,16 @@ csrw x2, status
 
 The 6502 uses 9 cycles... so not incomparable.
 
-TODO: What happens if and IRQ is handled on the same negedge as a BRK completes?
-  - The interrupt should take priority, so brk should be false.
-  - We consider the BRK to have "completed"... but what does that mean here?
-  - The behavior needs to be that the BRK happens immediately after IRQ return
-  - That means we either need to remember the break status and initiate it on IRQ return,
-    or we need to reset the PC to the beginning of the BRK when this scenario is encountered.
-  - The former requires a single bit of storage and associated control logic;
-    the latter requires a 15-bit addder or a 14-bit decrement. Probably the former.
+TODO: Break out an optional mem pipeline phase.
 
-TODO: Break out an optional mem phase and have it stall fetch and execute.
+TODO: What happens if an IRQ or NMI is handled on the same negedge as a BRK completes?
+ - From our semantics, the BRK should be seen to complete before the interrupt is handled.
+ - That means that the PC has been vectored to IRQ, and the CSRs have been set by the break.
+ - In particular, that means that a concurrent BRK suppresses an IRQ, but it
+   does *not* suppress a NMI.
+ - A NMI should be handled immediately afterwards, vectoring from the first
+   location in the IRQ handler to the NMI handler.
+ - All of the above can be accomplished by suppressing IRQ and NMI until BRK finishes vectoring.
 
 TODO: CSR assignment instructions may execute concurrently with traps. We need
 to have the values set be those of the trap, with those from the currently
