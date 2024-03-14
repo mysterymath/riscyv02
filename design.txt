@@ -1047,6 +1047,8 @@ TODO: What happens if and IRQ is handled on the same negedge as a BRK completes?
   - The former requires a single bit of storage and associated control logic;
     the latter requires a 15-bit addder or a 14-bit decrement. Probably the former.
 
+TODO: Break out an optional mem phase and have it stall fetch and execute.
+
 TODO: CSR assignment instructions may execute concurrently with traps. We need
 to have the values set be those of the trap, with those from the currently
 executing instruction bleeding through. This establishes the correct
