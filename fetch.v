@@ -2,7 +2,7 @@ module fetch(
   clk, cyc, data, vector,
   addr,
   inst, pc_val,
-  invalid, freeze,
+  stall,
   pc_r, pc_r_next,
   pc_w, brk);
 
@@ -14,8 +14,7 @@ output [15:0] addr;
 
 output reg [15:0] inst;
 output reg [15:1] pc_val;
-input invalid;
-input freeze;
+input stall;
 
 input [15:1] pc_r;
 input [15:1] pc_r_next;
@@ -66,22 +65,19 @@ assign op_sys = data[3:1];
 always @* begin
   if (vector)
     pc_w = !cyc ? pc_r_next : {data, inst_lo};
-  else begin
-    // Keep the PC from incrementing into the invalid region past a JR/JALR on
-    // the second cycle of its fetch and during its execution. (This produces
-    // an invalid fetch, so the opcode is reset to NOP once it executes.)
-    // Similarly, don't advance PC if the CPU requests that the fetch unit's
-    // state be frozen.
-    if (op6 == J || op6 == JR || freeze)
-      pc_w = pc_r;
-    else if (cyc && branch_predicted)
-      pc_w = branch_target;
-    else
-      pc_w = pc_r_next;
-  end
+  else if (!cyc)
+    pc_w = pc_r_next;
+  else if (op6 == JR || op6 == JALR) begin
+    // We can't know the actual target until after execute, but fetching reset
+    // is always safe.
+    pc_w = 16'hfffc;
+  end else if (branch_predicted)
+    pc_w = branch_target;
+  else
+    pc_w = pc_r_next;
 
-  // Feed a NOP to decode on an invalid fetch.
-  inst = invalid ? 16'b0000000100000000 : {data, inst_lo};
+  // Feed a NOP to decode on a stall.
+  inst = stall ? 16'b0000000100000000 : {data, inst_lo};
 
   if (op == BZ || op == BNZ && !branch_predicted)
     pc_val = branch_target;
@@ -92,11 +88,7 @@ always @* begin
 end
 
 always @(negedge clk)
-  if (!cyc && !freeze) begin
+  if (!cyc)
     inst_lo <= data;
-  end else if (invalid) begin
-    // Simulate having fetched a NOP on the first cycle of an executed jump.
-    inst_lo <= 8'b0;
-  end
 
 endmodule

@@ -43,7 +43,7 @@ fetch fetch(
   clk, cyc, data_i, vector,
   fetch_addr,
   fetch_inst, fetch_pc_val,
-  /*invalid=*/execute_jump || vector, /*freeze=*/execute_load_store,
+  /*stall=*/execute_jump || vector,
   pc_r, pc_r_next,
   fetch_pc_w, fetch_brk);
 
