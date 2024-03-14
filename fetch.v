@@ -2,7 +2,7 @@ module fetch(
   clk, cyc, data, vector,
   addr,
   inst, pc_val,
-  stall,
+  stall, epc,
   pc_r, pc_r_next,
   pc_w, brk);
 
@@ -15,6 +15,7 @@ output [15:0] addr;
 output wire [15:0] inst;
 output reg [15:1] pc_val;
 input stall;
+input [15:1] epc;
 
 wire stall;
 
@@ -32,6 +33,7 @@ parameter JR     = 6'b011101;
 parameter JALR   = 6'b101101;
 
 parameter SYS_BRK  = 3'b000;
+parameter SYS_RETI = 3'b001;
 
 reg [7:0] inst_lo;
 
@@ -76,6 +78,8 @@ always @* begin
       pc_w = {data, inst_lo};
     else if (branch_predicted)
       pc_w = branch_target;
+    else if (op6 == SYS && op_sys == SYS_RETI)
+      pc_w = epc;
     else
       pc_w = pc_r_next;
   end

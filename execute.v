@@ -103,6 +103,8 @@ parameter SYS_CSRW = 3'b011;
 parameter SYS_SIE  = 3'b100;
 
 reg [8:0] op;
+wire op_sys;
+assign op_sys = inst[11:9];
 
 reg [15:0] imm;
 
@@ -242,8 +244,13 @@ always @* begin
 
   data_o = !cyc ? rf_r2[7:0] : rf_r2[15:8];
 
-  ie_w = ie;
-  pie_w = pie;
+  if (op == SYS && op_sys == SYS_RETI) begin
+    ie_w = pie_w;
+    pie_w = 1;
+  end else begin
+    ie_w = ie;
+    pie_w = pie;
+  end
   epc_w = epc;
 
   case (op)
