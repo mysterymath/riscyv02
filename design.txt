@@ -1038,6 +1038,33 @@ csrw x2, status
 
 The 6502 uses 9 cycles... so not incomparable.
 
+On stalls and bubbles:
+
+- If the execute phase doesn't have anything meaningful to do, then it should
+  do nothing. This is how the phase experiences stalls: as a bubble. The phase
+  should behave as if it had received a NOP. However, we don't actually need to
+  feed it a nop; we just need to make sure that it doesn't trigger a load or
+  store, and that it doesn't write to a register. We could actually feed it a NOP to
+  ensure this, but that requires a 16-bit MUX, and a smaller one likely suffices. For now,
+  let's just feed it a NOP.
+
+- If the fetch unit fetched something that wasn't the next instruction to
+  execute, regardless of cause, then there's no valid insturction to hand to
+  the execute phase. In that case, execute stalls, but there's nothing extra to
+  do on the fetch unit.
+
+- If the fetch unit fetched the next instruction to execute, but the execute
+  unit is stalled, then the fetch unit also must stall. It cannot safely fetch
+  a new instruction until the instruction it holds has been delivered to
+  execute.
+
+- If the incremented PC would be an instruction that cannot possibly be the
+  next instruction to execute, then PC must be stopped from incrementing until
+  the next instruction to execute is known.
+
+- In both of the prior cases, the PC does not increment, and the instruction is
+  preserved. This is a fetch stall.
+
 TODO: Break out an optional mem pipeline phase.
 
 TODO: What happens if an IRQ or NMI is handled on the same negedge as a BRK completes?
