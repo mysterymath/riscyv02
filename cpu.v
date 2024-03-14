@@ -26,6 +26,8 @@ reg ie;
 reg brk;
 reg [15:1] epc;
 
+reg brk_in_progress;
+
 reg [15:1] pc_w;
 wire [15:1] pc_r;
 wire [15:1] pc_r_next;
@@ -81,6 +83,7 @@ always @(negedge clk) begin
     cyc <= 0;
     vector <= 1;
     ie <= 0;
+    brk_in_progress <= 0;
   end else begin
     cyc <= cyc_reset ? 0 : !cyc;
     n_nmi_prev <= n_nmi_cur;
@@ -88,18 +91,22 @@ always @(negedge clk) begin
     if (n_nmi_prev && !n_nmi_cur)
       nmi_p <= 1;
     if (cyc) begin
-      if ((nmi_p || irq_p || fetch_brk) && !execute_load_store) begin
+      // BRKs are instructions, so they must finish completely before an
+      // interrupt occurs.
+      if ((nmi_p || irq_p || fetch_brk) && !execute_load_store && !brk_in_progress) begin
         vector <= 1;
         // Following RISC-V, our NMIs aren't intended to be recoverable, so
         // this epc is informational, and it may clobber an existing IRQ epc.
         epc <= pc_r;
         pie <= ie;
         ie <= 0;
-        brk <= fetch_brk && !irq_p;
+        brk <= fetch_brk;
+        brk_in_progress <= fetch_brk;
       end else begin
         epc <= execute_epc_w;
         pie <= execute_pie_w;
         ie <= execute_ie_w;
+        brk_in_progress <= 0;
         if (vector) begin
           if (execute_jump)
             epc <= execute_pc_w;

@@ -6,7 +6,6 @@ module execute(
   pc_w, pie_w, ie_w, epc_w);
 
 input clk;
-input n_reset;
 input cyc;
 input stall;
 input [7:0] data_i;

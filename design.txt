@@ -1068,15 +1068,6 @@ On stalls and bubbles:
 TODO: Reset all registers. It's not that we care about their values, it's that
 they may be metastable at power-on.
 
-TODO: What happens if an IRQ or NMI is handled on the same negedge as a BRK completes?
- - From our semantics, the BRK should be seen to complete before the interrupt is handled.
- - That means that the PC has been vectored to IRQ, and the CSRs have been set by the break.
- - In particular, that means that a concurrent BRK suppresses an IRQ, but it
-   does *not* suppress a NMI.
- - A NMI should be handled immediately afterwards, vectoring from the first
-   location in the IRQ handler to the NMI handler.
- - All of the above can be accomplished by suppressing IRQ and NMI until BRK finishes vectoring.
-
 TODO: CSR assignment instructions may execute concurrently with traps. We need
 to have the values set be those of the trap, with those from the currently
 executing instruction bleeding through. This establishes the correct
