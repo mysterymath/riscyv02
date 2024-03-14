@@ -1065,6 +1065,9 @@ On stalls and bubbles:
 - In both of the prior cases, the PC does not increment, and the instruction is
   preserved. This is a fetch stall.
 
+TODO: Reset all registers. It's not that we care about their values, it's that
+they may be metastable at power-on.
+
 TODO: Break out an optional mem pipeline phase.
 
 TODO: What happens if an IRQ or NMI is handled on the same negedge as a BRK completes?

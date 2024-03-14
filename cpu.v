@@ -54,7 +54,7 @@ wire execute_pie_w;
 wire execute_ie_w;
 wire [15:1] execute_epc_w;
 execute execute(
-  clk, n_reset, cyc, data_i,
+  clk, cyc, /*stall=*/!n_reset || execute_jump || vector, data_i,
   fetch_inst, fetch_pc_val,
   execute_jump, execute_load_store, execute_addr, data_o, cyc_reset,
   pie, ie, epc,
