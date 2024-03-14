@@ -1068,11 +1068,6 @@ On stalls and bubbles:
 TODO: Reset all registers. It's not that we care about their values, it's that
 they may be metastable at power-on.
 
-TODO: CSR assignment instructions may execute concurrently with traps. We need
-to have the values set be those of the trap, with those from the currently
-executing instruction bleeding through. This establishes the correct
-execute-before-trap semantics.
-
 NOTE: We logically need a FENCE.I instruction that ensures that memory writes
 occur before branches into the written memory. However, for our implementation,
 all that needs to happen to ensure this is a NOP: after executing *any*

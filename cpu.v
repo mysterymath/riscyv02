@@ -98,7 +98,7 @@ always @(negedge clk) begin
         // Following RISC-V, our NMIs aren't intended to be recoverable, so
         // this epc is informational, and it may clobber an existing IRQ epc.
         epc <= pc_r;
-        pie <= ie;
+        pie <= execute_ie_w;
         ie <= 0;
         brk <= fetch_brk;
         brk_in_progress <= fetch_brk;
