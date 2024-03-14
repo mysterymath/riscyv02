@@ -1065,6 +1065,15 @@ On stalls and bubbles:
 - In both of the prior cases, the PC does not increment, and the instruction is
   preserved. This is a fetch stall.
 
+TODO: There are three instructions that could cause IE to be disabled: BRK,
+SEI, and RETI. If we take the model as we have that fetched instructions must
+run to completion before an interrupt occurs, then if we start fetching the
+vector for an IRQ immediately, we may have to abort if we discover that the
+instruction disabled interrupts. Instead, we should throw away the fetched
+instruction. The only state that changes during a fetch is the PC, so instead
+of adjusting it for the instruction, use the branch adder with an offset of -1
+and put the resulting value in epc instead of pc.
+
 TODO: Reset all registers. It's not that we care about their values, it's that
 they may be metastable at power-on.
 
