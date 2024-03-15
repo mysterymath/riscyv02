@@ -37,7 +37,7 @@ parameter SYS_RETI = 3'b001;
 
 reg [7:0] inst_lo;
 
-assign addr = {pc_r, 1'b0};
+assign addr = {pc_r, cyc};
 
 wire op6;
 assign op6 = {data[0], inst_lo[7], op};
