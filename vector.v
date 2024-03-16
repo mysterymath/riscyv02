@@ -1,6 +1,6 @@
 module vector(
-  cyc,
-  valid,
+  trigger,
+  busy,
   data,
   addr,
   pc,
@@ -8,10 +8,10 @@ module vector(
 );
 
 // Control input
-input cyc;
+input trigger;
 
 // Control output
-output valid;
+output reg busy;
 
 // Data input
 input [7:0] data;
@@ -23,13 +23,20 @@ output [15:0] addr;
 input [15:1] pc;
 output [15:1] pc_w;
 
+reg cyc;
 reg [7:1] vec_lo;
 
 assign addr = {pc, cyc};
 assign pc_w = {data, vec_lo};
-assign valid = cyc;
 
 always @(negedge clk) begin
-  vec_lo <= data[7:1];
-
+  if (!busy && trigger) begin
+    cyc <= 0;
+    busy <= 1;
+  else if (busy) begin
+    vec_lo <= data[7:1];
+    cyc <= !cyc;
+    if (cyc)
+      busy <= 0;
+  end
 endmodule
