@@ -1,18 +1,22 @@
 module mem(
   clk,
+  busy,
   addr,
-  valid, i_op, i_r_num, i_addr,
+  i_valid, i_op, i_r_num, i_addr,
   rf_r1_num, rf_w_num, rf_w_en, rf_w,
 );
 
 // Control input
 input clk;
 
+// Control output
+output reg busy;
+
 // Data output
 output reg [15:0] addr;
 
 // Pipeline input
-input valid;
+input i_valid;
 input [2:0] i_op;
 input [2:0] i_r_num;
 input [15:0] i_addr;
@@ -54,15 +58,18 @@ always @* begin
 end
 
 always @(negedge clk) begin
-  if (valid) begin
+  if (!busy && i_valid) begin
     op <= i_op;
     r_num <= i_r_num;
     addr <= i_addr;
     cyc <= 0;
-  else
+    busy <= 1;
+  end else if (busy) begin
     cyc <= !cyc;
     addr <= addr + 1;
     prev_data <= data;
+    if (cyc || op == LB || op == LBU || op == SB)
+      busy <= 0;
   end
 end
 
