@@ -1,28 +1,45 @@
 module fetch(
-  clk, cyc, data, vector,
+  clk, trigger, flush,
+  busy,
+  data,
   addr,
-  inst, pc_val,
-  stall, epc,
+  valid, inst, pc_val,
+  next_busy,
+  epc,
   pc_r, pc_r_next,
-  pc_w, brk);
+  pc_w);
 
+// Control input
 input clk;
-input cyc;
+input trigger;
+input flush;
+
+// Control output
+output busy;
+
+// Data input
 input [7:0] data;
-input vector;
+
+// Data output
 output [15:0] addr;
 
-output wire [15:0] inst;
+// Pipeline outputs
+output valid;
+output [15:0] inst;
 output reg [15:1] pc_val;
-input stall;
+
+// Pipeline feedback
+input next_busy;
+
+// CSR interface
 input [15:1] epc;
 
-wire stall;
-
+// PC Interface
 input [15:1] pc_r;
 input [15:1] pc_r_next;
 output reg [15:1] pc_w;
-output reg brk;
+
+reg cyc;
 
 parameter J      = 4'b0011;
 parameter JAL    = 4'b0100;
@@ -42,10 +59,8 @@ assign addr = {pc_r, cyc};
 wire op6;
 assign op6 = {data[0], inst_lo[7], op};
 
-// In case of a JR or JALR, perform a jump back to the beginning of the
-// instruction to avoid reading invalid memory.
 wire [15:1] branch_offset;
-assign branch_offset = (op6 == JR || op6 == JALR) ? -16'd1 : {{6{data[7]}}, data, inst_lo[7]};
+assign branch_offset = {{6{data[7]}}, data, inst_lo[7]};
 
 wire [3:0] op;
 assign op = inst_lo[3:0];
@@ -69,31 +84,31 @@ assign op_sys = data[3:1];
 assign inst = {data, inst_lo};
 
 always @* begin
-  if (stall)
+  if (!busy || !cyc || flush || op6 == JR || op6 == JALR)
     pc_w = pc_r;
-  else begin
-    if (!cyc)
-      pc_w = pc_r_next;
-    else if (vector)
-      pc_w = {data, inst_lo};
-    else if (branch_predicted)
-      pc_w = branch_target;
-    else if (op6 == SYS && op_sys == SYS_RETI)
-      pc_w = epc;
-    else
-      pc_w = pc_r_next;
-  end
+  else if (branch_predicted)
+    pc_w = branch_target;
+  else if (op6 == SYS && op_sys == SYS_RETI)
+    pc_w = epc;
+  else
+    pc_w = pc_r_next;
 
   if (op == BZ || op == BNZ && !branch_predicted)
     pc_val = branch_target;
   else
     pc_val = pc_r_next;
-
-  brk = !vector && op6 == SYS && op_sys == SYS_BRK;
 end
 
 always @(negedge clk)
-  if (!cyc && !stall)
-    inst_lo <= data;
+  if (!busy && !next_busy && trigger) begin
+    cyc <= 0;
+    busy <= 1;
+  end else if (busy) begin
+    if (cyc || flush)
+      busy <= 0;
+    else
+      inst_lo <= data;
+  end
+end
 
 endmodule
