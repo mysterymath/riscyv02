@@ -1,35 +1,61 @@
 module execute(
-  clk, cyc, stall, data_i,
-  fetch_inst, fetch_pc_val,
-  jump, load_store, addr, data_o, cyc_reset,
-  pie, ie, epc,
-  pc_w, pie_w, ie_w, epc_w);
+  clk, n_reset, nmi, irq,
+  busy,
+  i_valid, i_inst, i_pc, i_pc_branch,
+  o_valid, o_op, o_r_num, o_addr,
+  pc_w_en, pc_w,
+  rf_r1_num, rf_r2_num, rf_w_num, rf_w_en, rf_w,
+  rf_r1, rf_r2,
+  pie, ie, brk, epc,
+  pie_w, ie_w, brk_w, epc_w);
 
+// Control input
 input clk;
-input cyc;
-input stall;
-input [7:0] data_i;
-input [15:0] fetch_inst;
-// The non-predicted PC value in case of a branch; otherwise, the PC value.
-// Both are taken at the time of the last fetch tick; that is, the PC has
-// already been incremented.
-input [15:1] fetch_pc_val;
-output reg jump;
-output reg load_store;
-output reg [15:0] addr;
-output reg [7:0] data_o;
-output reg cyc_reset;
+input n_reset;
+input nmi;
+input irq;
 
-input pie;
-input ie;
-input [15:1] epc;
-output reg [15:1] pc_w;
-output reg pie_w;
-output reg ie_w;
-output reg [15:1] epc_w;
+// Control output
+output busy;
+
+// Pipeline input
+input i_valid;
+input [15:0] i_inst;
+input [15:1] i_pc;
+input [15:1] i_pc_branch;  // The branch not taken
 
 reg [15:0] inst;
-reg [15:1] pc_val;
+reg [15:1] pc;
+reg [15:1] pc_branch;
+
+// Pipeline output
+output o_valid;
+output [2:0] o_op;
+output [2:0] o_r_num;
+output [15:0] o_addr;
+
+// PC interface
+output pc_w_en;
+output [15:1] pc_w;
+
+// RF interface
+reg [2:0] rf_r1_num;
+reg [2:0] rf_r2_num;
+reg [2:0] rf_w_num;
+reg rf_w_en;
+reg [15:0] rf_w;
+wire [15:0] rf_r1;
+wire [15:0] rf_r2;
+
+// CSR interface
+input pie;
+input ie;
+input brk;
+input [15:1] epc;
+output pie_w;
+output ie_w;
+output brk_w;
+output [15:1] epc_w;
 
 reg [2:0] alu_op;
 reg [7:0] alu_l;
@@ -39,15 +65,6 @@ wire [7:0] alu_o;
 wire [6:0] alu_c_o;
 wire alu_v;
 alu alu(alu_op, alu_l, alu_r, alu_o, alu_c_i, alu_c_o, alu_v);
-
-reg [2:0] rf_r1_num;
-reg [2:0] rf_r2_num;
-reg [2:0] rf_w_num;
-reg rf_w_en;
-wire [15:0] rf_r1;
-wire [15:0] rf_r2;
-reg [15:0] rf_w;
-rf rf(clk, rf_r1_num, rf_r2_num, rf_w_num, rf_w_en, rf_w, rf_r1, rf_r2);
 
 // TODO: SYS
 
@@ -102,7 +119,18 @@ parameter SYS_CSRR = 3'b010;
 parameter SYS_CSRW = 3'b011;
 parameter SYS_SIE  = 3'b100;
 
+reg cyc;
+reg [15:1] pc_in_flight;
+
 reg [8:0] op;
+always @* begin
+  case (inst[3:0])
+    4'b0000, 4'b1100, 4'b1101, 4'b1110: op = {2'b0, inst[8:7], inst[3:0]};
+    4'b1101: op = {inst[15:14], inst[8:7], inst[3:0]};
+    default: op = {4'b0, inst[3:0]};
+  endcase
+end
+
 wire op_sys;
 assign op_sys = inst[11:9];
 
@@ -115,13 +143,10 @@ reg sra;
 reg branch_taken;
 reg branch_predicted;
 
-always @* begin
-  case (inst[3:0])
-    4'b0000, 4'b1100, 4'b1101, 4'b1110: op = {2'b0, inst[8:7], inst[3:0]};
-    4'b1101: op = {inst[15:14], inst[8:7], inst[3:0]};
-    default: op = {4'b0, inst[3:0]};
-  endcase
+assign pc_w_en = !n_reset || nmi || irq ||
+  (cyc && branch_predicted != branch_taken);
 
+always @* begin
   case (op)
     LB, LBU, LW, SB, SW: rf_r1_num = {1'b0, inst[8:7]};
     ADD, SUB, AND, OR, XOR, SLL, SRA, SLT, SLTU: rf_r1_num = inst[10:8];
@@ -169,10 +194,8 @@ always @* begin
         alu_l = !cyc ? (sra ? {8{rf_r1[15]}} : 8'b0) : rf_r1[15:8];
       else
         alu_l = !cyc ? rf_r1[15:8] : rf_r1[7:0];
-    // Note that this makes AUIPC relative to the *next* instruction. Should
-    // be fine.
     AUIPC:
-      alu_l = !cyc ? {pc_val[7:1], 1'b0} : pc_val[15:8];
+      alu_l = !cyc ? {pc[7:1], 1'b0} : pc[15:8];
     default:
       alu_l = !cyc ? rf_r1[7:0] : rf_r1[15:8];
   endcase
@@ -227,7 +250,16 @@ always @* begin
       rf_w = {alu_o, alu_o_prev_cyc};
   endcase
 
-  pc_w = op == JALR ? {alu_o, alu_o_prev_cyc} : pc_val;
+  if (!n_reset)
+    pc_w = 16'hfffc >> 1;
+  else if (nmi)
+    pc_w = 16'hfffa >> 1;
+  else if (irq)
+    pc_w = 16'hfffe >> 1;
+  else case(op)
+    JR, JALR: pc_w = {alu_o, alu_o_prev_cyc};
+    default: pc_w = pc_branch;
+  endcase
 
   case (op)
     // alu_c_o <=> rs1 >= 1u <=> rs1
@@ -240,36 +272,39 @@ always @* begin
     BZ, BNZ: branch_predicted = inst[15];
     default: branch_predicted = 0;
   endcase
-  jump = cyc && branch_predicted != branch_taken;
 
-  data_o = !cyc ? rf_r2[7:0] : rf_r2[15:8];
-
-  if (op == SYS && op_sys == SYS_RETI) begin
+  if (!n_reset) begin
+    ie_w = 0;
+    pie_w = 0;
+    epc_w = 0;
+  end else if (irq || nmi || (cyc && op == SYS && op_sys == BRK)) begin
+    ie_w = 0;
+    pie_w = ie;
+    epc_w = pc;
+  end else if (cyc && op == SYS && op_sys == SYS_RETI) begin
     ie_w = pie_w;
     pie_w = 1;
+    epc_w = epc;
   end else begin
     ie_w = ie;
     pie_w = pie;
+    epc_w = epc;
   end
-  epc_w = epc;
-
-  case (op)
-    LB, SB: cyc_reset = load_store;
-    default: cyc_reset = 0;
-  endcase
 end
 
 always @(negedge clk) begin
-  if (stall) begin
-    // NOP.
-    inst <= 16'b0000000100000000;
-    load_store <= 0;
-  end else if (load_store) begin
-    case (op)
-      LB, SB: load_store <= 1'b0;
-      default: load_store <= !cyc;
-    endcase
-  end else if (cyc) begin
+  if (!busy && i_valid) begin
+    inst <= i_inst;
+    pc <= i_pc;
+    pc_branch <= i_pc_branch;
+    busy <= 1;
+    cyc <= 0;
+    alu_o_prev_cyc <= 0;
+    alu_c_o_prev_cyc <= 0;
+  end else if (busy) begin
+  end
+
+  if (cyc) begin
     inst <= fetch_inst;
     pc_val <= fetch_pc_val;
     case (op)
@@ -279,7 +314,6 @@ always @(negedge clk) begin
   end
   alu_o_prev_cyc <= alu_o;
   alu_c_o_prev_cyc <= alu_c_o;
-  addr <= load_store ? addr + 1 : {alu_o, alu_o_prev_cyc};
 end
 
 endmodule

@@ -1,21 +1,17 @@
 module fetch(
-  clk, trigger, flush,
-  busy,
+  n_reset, clk, trigger,
   data,
   addr,
-  valid, inst, pc_val,
-  next_busy,
+  produce, inst, pc_val,
+  next_accept,
   epc,
   pc_r, pc_r_next,
   pc_w);
 
 // Control input
+input n_reset;
 input clk;
-input trigger;
-input flush;
-
-// Control output
-output busy;
+input inhibit;
 
 // Data input
 input [7:0] data;
@@ -24,12 +20,12 @@ input [7:0] data;
 output [15:0] addr;
 
 // Pipeline outputs
-output valid;
+output produce;
 output [15:0] inst;
 output reg [15:1] pc_val;
 
 // Pipeline feedback
-input next_busy;
+input next_accept;
 
 // CSR interface
 input [15:1] epc;
@@ -38,8 +34,6 @@ input [15:1] epc;
 input [15:1] pc_r;
 input [15:1] pc_r_next;
 output reg [15:1] pc_w;
-
-reg cyc;
 
 parameter J      = 4'b0011;
 parameter JAL    = 4'b0100;
@@ -53,8 +47,12 @@ parameter SYS_BRK  = 3'b000;
 parameter SYS_RETI = 3'b001;
 
 reg [7:0] inst_lo;
+reg cyc;
+reg active;
 
 assign addr = {pc_r, cyc};
+
+assign produce = cyc;
 
 wire op6;
 assign op6 = {data[0], inst_lo[7], op};
@@ -65,7 +63,6 @@ assign branch_offset = {{6{data[7]}}, data, inst_lo[7]};
 wire [3:0] op;
 assign op = inst_lo[3:0];
 
-// Only valid on second cycle.
 reg branch_predicted;
 always @*
   case (op)
@@ -84,14 +81,18 @@ assign op_sys = data[3:1];
 assign inst = {data, inst_lo};
 
 always @* begin
-  if (!busy || !cyc || flush || op6 == JR || op6 == JALR)
-    pc_w = pc_r;
-  else if (branch_predicted)
+  if (branch_predicted)
     pc_w = branch_target;
+  else if (op6 == JR || op6 == JALR)
+    pc_w = pc_r;
+  else if (op6 == SYS && op_sys == SYS_BRK)
+    pc_w = 16'hfffe >> 1;
   else if (op6 == SYS && op_sys == SYS_RETI)
     pc_w = epc;
-  else
+  else if (produce && next_accept)
     pc_w = pc_r_next;
+  else
+    pc_w = pc_r;
 
   if (op == BZ || op == BNZ && !branch_predicted)
     pc_val = branch_target;
@@ -100,14 +101,19 @@ always @* begin
 end
 
 always @(negedge clk)
-  if (!busy && !next_busy && trigger) begin
+  if (trigger || (!active && next_accept)) begin
+    inst_lo <= 0;
+    active <= 1;
     cyc <= 0;
-    busy <= 1;
-  end else if (busy) begin
-    if (cyc || flush)
-      busy <= 0;
-    else
+  end else if (active) begin
+    if (cyc && next_accept)
+      cyc <= 0;
+    else if (!cyc) begin
       inst_lo <= data;
+      cyc <= 1;
+    else
+      active <= 0;
+    end
   end
 end
 

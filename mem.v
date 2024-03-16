@@ -1,8 +1,9 @@
 module mem(
   clk,
-  busy,
+  active,
   addr,
-  i_valid, i_op, i_r_num, i_addr,
+  i_produce, i_op, i_r_num, i_addr,
+  accept,
   rf_r1_num, rf_w_num, rf_w_en, rf_w,
 );
 
@@ -10,16 +11,19 @@ module mem(
 input clk;
 
 // Control output
-output reg busy;
+output reg active;
 
 // Data output
 output reg [15:0] addr;
 
 // Pipeline input
-input i_valid;
+input i_produce;
 input [2:0] i_op;
 input [2:0] i_r_num;
 input [15:0] i_addr;
+
+// Pipeline feedback
+output accept;
 
 // Register file interface
 output [2:0] rf_r1_num;
@@ -58,18 +62,18 @@ always @* begin
 end
 
 always @(negedge clk) begin
-  if (!busy && i_valid) begin
+  if (!active && i_produce) begin
     op <= i_op;
     r_num <= i_r_num;
     addr <= i_addr;
     cyc <= 0;
-    busy <= 1;
-  end else if (busy) begin
+    active <= 1;
+  end else if (active) begin
     cyc <= !cyc;
     addr <= addr + 1;
     prev_data <= data;
     if (cyc || op == LB || op == LBU || op == SB)
-      busy <= 0;
+      active <= 0;
   end
 end
 
