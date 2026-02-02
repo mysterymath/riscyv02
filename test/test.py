@@ -184,3 +184,58 @@ async def test_negative_offsets(dut):
     dut._log.info(f"ram[0x52:0x53] = {val:#06x}")
     assert val == 0xCAFE, f"Expected 0xCAFE, got {val:#06x}"
     dut._log.info("PASS [negative_offsets]")
+
+
+# ---------------------------------------------------------------------------
+# Test 4: JR zero-stall timing
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_jr_zero_stall(dut):
+    """Verify JR does not introduce stall cycles."""
+    dut._log.info("Test 4: JR zero-stall timing")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Data at 0x0008: LE word 0x0020 (JR target address)
+    prog[0x0008] = 0x20
+    prog[0x0009] = 0x00
+
+    # 0x0000: LW R1, 4(R0)   ; R1 = MEM[0x08] = 0x0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=4))
+    # 0x0002: JR R1, 0        ; jump to 0x0020 (zero-stall)
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
+    # 0x0020: SW R0, 10(R0)   ; MEM[0x14] = 0 (marker write)
+    _place(prog, 0x0020, _encode_sw(rs2=0, rs1=0, off6=10))
+    # 0x0022: JR R0, 17       ; spin at 0x0022
+    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))
+
+    # Pre-fill marker location with non-zero so we can detect the write
+    prog[0x0014] = 0xFF
+    prog[0x0015] = 0xFF
+
+    _load_program(dut, prog)
+    await _reset(dut)
+
+    # Monitor negedges to find when the SW write lands.
+    # Expected timeline (negedge-relative, cycle 0 = first negedge after reset):
+    #   0-1: fetch LW
+    #   2-3: exec LW (E_LOAD_LO, E_LOAD_HI), fetch stalled
+    #   4-5: fetch JR (F_LO, F_HI; redirects fetch_addr to 0x0020)
+    #   6-7: fetch SW at 0x0020 (F_LO, F_HI)
+    #   8-9: exec SW (E_STORE_LO, E_STORE_HI — write visible at negedge 9)
+    write_cycle = None
+    for cycle in range(30):
+        await FallingEdge(dut.clk)
+        lo = _read_ram(dut, 0x0014)
+        hi = _read_ram(dut, 0x0015)
+        if lo != 0xFF or hi != 0xFF:
+            write_cycle = cycle
+            break
+
+    dut._log.info(f"SW write detected at negedge cycle {write_cycle}")
+    assert write_cycle == 10, \
+        f"Expected SW write at cycle 10 (zero-stall JR), got cycle {write_cycle}"
+    dut._log.info("PASS [jr_zero_stall]")

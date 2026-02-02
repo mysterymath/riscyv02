@@ -6,7 +6,7 @@ SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = project.v
+PROJECT_SOURCES = project.v riscyv02_fetch.v riscyv02_execute.v
 
 ifneq ($(GATES),yes)
 
@@ -41,6 +41,24 @@ COCOTB_TEST_MODULES = test
 
 # include cocotb's make rules to take care of the simulator setup
 include $(shell cocotb-config --makefiles)/Makefile.sim
+
+PROJECT_DIR = $(CURDIR)/..
+CLOCK_PERIOD ?= 20
+TT_VENV ?= $(HOME)/ttsetup/venv
+
+.PHONY: harden metrics
+
+harden:
+	cd $(PROJECT_DIR) && \
+	  python3 -c "import json; c=json.load(open('src/config.json')); c['CLOCK_PERIOD']=$(CLOCK_PERIOD); json.dump(c,open('src/config.json','w'),indent=2)" && \
+	  . $(TT_VENV)/bin/activate && \
+	  python ./tt/tt_tool.py --ihp --create-user-config && \
+	  python ./tt/tt_tool.py --ihp --harden ; \
+	  git checkout src/config.json
+
+metrics:
+	@python3 metrics.py
+	@python3 transistor_count.py
 
 clean::
 	rm -rf sim_build results.xml
