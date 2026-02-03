@@ -15,7 +15,7 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile.
 | Best clock period | 17 ns | 16 ns |
 | fMax (all corners) | 58.8 MHz | 62.5 MHz |
 | Utilization | 44.2% (at 20 ns) | 48.4% |
-| Transistor count (synth) | 11,742 | 13,082 |
+| Transistor count (synth) | 11,740 | 13,082 |
 
 RISCY-V02 uses ~10.2% fewer transistors with room to grow.
 
@@ -122,7 +122,7 @@ All other    NOP           (ignored)
 
 ## Pipeline and Timing
 
-The processor uses a 2-stage pipeline (Fetch and Execute) that overlap where possible. Most instructions take **2 cycles**. Loads and stores add **1 extra cycle per byte** transferred.
+The processor uses a 2-stage pipeline (Fetch and Execute) that overlap where possible. Most instructions take **2 cycles**. Loads and stores add **1 cycle for address computation** plus **1 cycle per byte** transferred.
 
 ### Cycle Counts
 

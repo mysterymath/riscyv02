@@ -180,13 +180,9 @@ module tt_um_riscyv02 (
   // SYNC: instruction boundary indicator.
   //
   // Registered ir_accept: SYNC goes high one cycle after execute accepts
-  // a new instruction. At the acceptance negedge, execute computes the
-  // low byte of the address (for LW/SW) while simultaneously finishing
-  // the previous instruction. SYNC=1 on the following negedge indicates
-  // "the previous instruction has retired and a new one has started."
-  //
-  // This matches 6502 semantics where SYNC is high during opcode fetch,
-  // marking the boundary between instructions.
+  // a new instruction.  SYNC=1 indicates "a new instruction has been
+  // dispatched to execute."  This matches 6502 semantics where SYNC is
+  // high during opcode fetch, marking the boundary between instructions.
   // -----------------------------------------------------------------------
   reg sync_r;
   always @(negedge cpu_clk or negedge rst_n)
