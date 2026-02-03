@@ -10,6 +10,9 @@
  * to the selected register during clk=0.  The opposite polarities
  * guarantee by construction that leaders and followers are never
  * simultaneously transparent.
+ *
+ * Single read port: execute only.  Fetch no longer needs register
+ * access since JR is handled by execute.
  */
 
 `default_nettype none
@@ -23,13 +26,9 @@ module riscyv02_regfile (
     input  wire [15:0] w_data,
     input  wire        w_we,
 
-    // Read port (execute)
-    input  wire [2:0]  exec_r_sel,
-    output wire [15:0] exec_r,
-
-    // Read port (fetch)
-    input  wire [2:0]  fetch_r_sel,
-    output wire [15:0] fetch_r
+    // Read port
+    input  wire [2:0]  r_sel,
+    output wire [15:0] r
 );
 
   // Phase 1 — Leader latches (sg13g2_dlhrq_1): transparent when GATE=clk=1,
@@ -87,8 +86,7 @@ module riscyv02_regfile (
     end
   endgenerate
 
-  // Read ports
-  assign exec_r  = regs[exec_r_sel];
-  assign fetch_r = regs[fetch_r_sel];
+  // Read port
+  assign r = regs[r_sel];
 
 endmodule

@@ -187,12 +187,12 @@ async def test_negative_offsets(dut):
 
 
 # ---------------------------------------------------------------------------
-# Test 4: JR zero-stall timing
+# Test 4: JR immediately after LW to same register
 # ---------------------------------------------------------------------------
 @cocotb.test()
-async def test_jr_zero_stall(dut):
-    """Verify JR does not introduce stall cycles."""
-    dut._log.info("Test 4: JR zero-stall timing")
+async def test_jr_after_lw(dut):
+    """JR using a register value loaded by the immediately preceding LW."""
+    dut._log.info("Test 4: JR immediately after LW (same register)")
 
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
@@ -205,7 +205,7 @@ async def test_jr_zero_stall(dut):
 
     # 0x0000: LW R1, 4(R0)   ; R1 = MEM[0x08] = 0x0020
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=4))
-    # 0x0002: JR R1, 0        ; jump to 0x0020 (zero-stall)
+    # 0x0002: JR R1, 0        ; jump to 0x0020 (uses just-loaded R1)
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
     # 0x0020: SW R0, 10(R0)   ; MEM[0x14] = 0 (marker write)
     _place(prog, 0x0020, _encode_sw(rs2=0, rs1=0, off6=10))
@@ -219,35 +219,16 @@ async def test_jr_zero_stall(dut):
     _load_program(dut, prog)
     await _reset(dut)
 
-    # Monitor negedges to find when the SW write lands.
-    # Expected timeline (negedge cycle numbers from debug trace):
-    #    0: F_LO(LW)
-    #    1: F_HI(LW)
-    #    2: dispatch LW → E_ADDR_LO
-    #    3: E_ADDR_LO (!bus_active); F_HI(JR) completes
-    #    4: E_ADDR_HI (!bus_active); ir_valid held (JR)
-    #    5: E_LOAD_LO (bus_active); ir_valid held
-    #    6: E_LOAD_HI (ready); ir_accept consumes JR; w_we writes R1
-    #    7: E_IDLE; deferred JR resolves from forwarded R1; F_LO proceeds
-    #    8: F_HI(SW@0x0020)
-    #    9: dispatch SW → E_ADDR_LO
-    #   10: E_ADDR_LO; F_HI(spin JR) completes
-    #   11: E_ADDR_HI
-    #   12: E_STORE_LO (bus_active — low byte write)
-    #   13: E_STORE_HI (bus_active — high byte write; detected here)
-    write_cycle = None
-    for cycle in range(30):
-        await FallingEdge(dut.clk)
-        lo = _read_ram(dut, 0x0014)
-        hi = _read_ram(dut, 0x0015)
-        if lo != 0xFF or hi != 0xFF:
-            write_cycle = cycle
-            break
+    # Wait enough cycles for the program to execute
+    await ClockCycles(dut.clk, 100)
 
-    dut._log.info(f"SW write detected at negedge cycle {write_cycle}")
-    assert write_cycle == 13, \
-        f"Expected SW write at cycle 13, got cycle {write_cycle}"
-    dut._log.info("PASS [jr_zero_stall]")
+    # Verify the SW at the JR target executed
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    dut._log.info(f"ram[0x14]={lo:#04x}, ram[0x15]={hi:#04x}")
+    assert lo == 0x00 and hi == 0x00, \
+        f"SW at JR target did not execute (expected 0x0000, got {lo:#04x}{hi:#04x})"
+    dut._log.info("PASS [jr_after_lw]")
 
 
 # ---------------------------------------------------------------------------

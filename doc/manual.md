@@ -14,10 +14,10 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile.
 |---|---|---|
 | Best clock period | 12 ns | 16 ns |
 | fMax (all corners) | 83.3 MHz | 62.5 MHz |
-| Utilization | 45.6% | 48.4% |
-| Transistor count (synth) | 12,066 | 13,082 |
+| Utilization | 37.9% | 48.4% |
+| Transistor count (synth) | 10,038 | 13,082 |
 
-RISCY-V02 is 33% faster and uses ~7.8% fewer transistors with room to grow.
+RISCY-V02 is 33% faster and uses ~23% fewer transistors with room to grow.
 
 ## Bus Protocol
 
@@ -42,7 +42,7 @@ RISCY-V02 uses the same TT mux/demux bus protocol as the Arlet 6502 wrapper. The
 - **16-bit program counter** (not directly accessible)
 - **16-bit address space**, byte-addressable, little-endian
 - **Fixed 16-bit instructions**, fetched low byte first
-- **2-stage pipeline**: Fetch and Execute, with register forwarding and hazard interlocking
+- **2-stage pipeline**: Fetch and Execute with speculative fetch and redirect
 
 ### Reset
 
@@ -99,7 +99,7 @@ Stores a 16-bit word to memory. The offset encoding is identical to LW. The low 
 
 Unconditional jump to the address computed from a register plus a scaled signed offset. The 6-bit offset is scaled by 2, giving a range of ±64 bytes from the register value.
 
-**Cycle count:** 2 (resolved during fetch; 3 if stalled by a load-use hazard)
+**Cycle count:** 4 (2 fetch + 2 address computation in execute)
 
 ### All Other Opcodes
 
@@ -129,16 +129,15 @@ The processor uses a 2-stage pipeline (Fetch and Execute) that overlap where pos
 | Instruction | Cycles | Notes |
 |---|---|---|
 | Most instructions | 2 | Base cost (fetch only) |
-| LW | 5 | 2 fetch + 1 address + 2 bytes read |
-| SW | 5 | 2 fetch + 1 address + 2 bytes written |
-| JR | 2 | Resolved during fetch |
-| JR (hazarded) | 3 | +1 if source register is being loaded |
+| LW | 5 | 2 fetch + 2 address + 1 byte read |
+| SW | 5 | 2 fetch + 2 address + 1 byte written |
+| JR | 4 | 2 fetch + 2 address computation |
 
-**Throughput note:** In pipelined execution, LW/SW achieve 4-cycle throughput because address computation overlaps with the next instruction's fetch. The 5-cycle latency only affects the first instruction after reset or a pipeline stall.
+**Throughput note:** In pipelined execution, LW/SW achieve 4-cycle throughput because address computation overlaps with the next instruction's fetch. JR flushes the speculative fetch and redirects to the computed target.
 
-### Pipeline Interlocks
+### Control Flow Handling
 
-A **load-use hazard** occurs when a JR reads a register that a preceding LW has not yet written. The pipeline detects this and stalls JR resolution by one cycle until the load completes and the value is forwarded. No software intervention is needed.
+JR is processed by the execute stage, which computes the target address using the ALU. While execute computes the target, fetch speculatively continues from the sequential PC. When execute completes the JR, it redirects fetch to the correct address, discarding the speculative fetch. This simplifies the architecture by keeping all register access in execute.
 
 ## RDY and SYNC Signals
 

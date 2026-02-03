@@ -32,7 +32,7 @@
 `default_nettype none
 
 // =========================================================================
-// Top module: register file, mux_sel, bus arbitration, output muxes
+// Top module: mux_sel, bus arbitration, output muxes
 // =========================================================================
 module tt_um_riscyv02 (
     input  wire [7:0] ui_in,
@@ -83,29 +83,6 @@ module tt_um_riscyv02 (
     else if (mux_sel) q_d <= ~q_d;
 
   // -----------------------------------------------------------------------
-  // Register file: 8 x 16-bit GP registers (two-phase latch design)
-  // -----------------------------------------------------------------------
-  wire [2:0]  w_sel;
-  wire [15:0] w_data;
-  wire        w_we;
-  wire [2:0]  exec_r_sel;
-  wire [15:0] exec_r;
-  wire [2:0]  fetch_r_sel;
-  wire [15:0] fetch_r;
-
-  riscyv02_regfile u_regfile (
-    .clk           (cpu_clk),
-    .rst_n         (rst_n),
-    .w_sel         (w_sel),
-    .w_data        (w_data),
-    .w_we          (w_we),
-    .exec_r_sel    (exec_r_sel),
-    .exec_r        (exec_r),
-    .fetch_r_sel   (fetch_r_sel),
-    .fetch_r       (fetch_r)
-  );
-
-  // -----------------------------------------------------------------------
   // Inter-module wires
   // -----------------------------------------------------------------------
   wire        ir_valid;
@@ -116,57 +93,42 @@ module tt_um_riscyv02 (
   wire        exec_bus_active;
   wire        exec_ir_accept;
   wire [15:0] exec_ab;
-  wire [7:0]  exec_do;
+  wire [7:0]  exec_dout;
   wire        exec_rwb;
-  wire        exec_w_pending;
-  wire [2:0]  exec_w_pending_sel;
+  wire        redirect;
+  wire [15:0] redirect_pc;
 
   // -----------------------------------------------------------------------
   // Submodule instances
   // -----------------------------------------------------------------------
-  // Register forwarding: if execute is writing the same register fetch is
-  // reading, bypass the regfile and give fetch the write data directly.
-  wire fetch_fwd = w_we && (w_sel == fetch_r_sel);
-  wire [15:0] fetch_r_fwd = fetch_fwd ? w_data : fetch_r;
-
-  // Pipeline interlock: RAW hazard when fetch's JR source register matches
-  // execute's pending load destination.
-  wire jr_hazard = exec_w_pending && (exec_w_pending_sel == fetch_r_sel);
-
   riscyv02_fetch u_fetch (
-    .clk           (cpu_clk),
-    .rst_n         (rst_n),
-    .uio_in        (uio_in),
-    .fetch_r       (fetch_r_fwd),
-    .bus_free      (!exec_bus_active),
-    .exec_busy     (exec_busy),
-    .ir_accept     (exec_ir_accept),
-    .jr_hazard     (jr_hazard),
-    .ir_valid      (ir_valid),
-    .new_ir        (new_ir),
-    .ab            (fetch_ab),
-    .fetch_r_sel   (fetch_r_sel)
+    .clk        (cpu_clk),
+    .rst_n      (rst_n),
+    .uio_in     (uio_in),
+    .bus_free   (!exec_bus_active),
+    .exec_busy  (exec_busy),
+    .ir_accept  (exec_ir_accept),
+    .redirect   (redirect),
+    .redirect_pc(redirect_pc),
+    .ir_valid   (ir_valid),
+    .new_ir     (new_ir),
+    .ab         (fetch_ab)
   );
 
   riscyv02_execute u_execute (
-    .clk          (cpu_clk),
-    .rst_n        (rst_n),
-    .uio_in       (uio_in),
-    .ir_valid     (ir_valid),
-    .new_ir       (new_ir),
-    .exec_r       (exec_r),
-    .busy         (exec_busy),
-    .bus_active   (exec_bus_active),
-    .ab           (exec_ab),
-    .dout         (exec_do),
-    .rwb          (exec_rwb),
-    .exec_r_sel   (exec_r_sel),
-    .w_sel        (w_sel),
-    .w_data       (w_data),
-    .w_we         (w_we),
-    .ir_accept    (exec_ir_accept),
-    .w_pending    (exec_w_pending),
-    .w_pending_sel(exec_w_pending_sel)
+    .clk        (cpu_clk),
+    .rst_n      (rst_n),
+    .uio_in     (uio_in),
+    .ir_valid   (ir_valid),
+    .new_ir     (new_ir),
+    .busy       (exec_busy),
+    .bus_active (exec_bus_active),
+    .ab         (exec_ab),
+    .dout       (exec_dout),
+    .rwb        (exec_rwb),
+    .ir_accept  (exec_ir_accept),
+    .redirect   (redirect),
+    .redirect_pc(redirect_pc)
   );
 
   // -----------------------------------------------------------------------
@@ -174,7 +136,7 @@ module tt_um_riscyv02 (
   // -----------------------------------------------------------------------
   wire [15:0] AB  = exec_bus_active ? exec_ab  : fetch_ab;
   wire        RWB = exec_bus_active ? exec_rwb : 1'b1;
-  wire [7:0]  DO  = exec_do;
+  wire [7:0]  DO  = exec_dout;
 
   // -----------------------------------------------------------------------
   // SYNC: instruction boundary indicator.
