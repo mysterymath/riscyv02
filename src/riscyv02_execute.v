@@ -42,7 +42,7 @@ module riscyv02_execute (
   reg [15:0] IR;
   reg [15:0] MAR;
   reg [7:0]  mem_lo;
-  reg [7:0]  store_hi;    // high byte of store data, latched in E_STORE_LO
+  reg [15:0] store_data;  // Holds rs1 in E_ADDR_LO (for ALU), then rs2 in E_ADDR_HI (for store)
 
   // Ready states can accept a new dispatch.  ADDR states don't block fetch
   // (they don't use the bus), so ir_valid can arrive in time for the next
@@ -70,8 +70,9 @@ module riscyv02_execute (
 
   // ALU input mux: ALU always operates on IR (the latched instruction).
   // Start ALU on E_ADDR_LO; carry propagates to E_ADDR_HI.
+  // In E_ADDR_HI, use store_data[15:8] which holds rs1[15:8] from E_ADDR_LO.
   assign alu_start = (state == E_ADDR_LO);
-  assign alu_a = (state == E_ADDR_LO) ? exec_r[7:0] : exec_r[15:8];
+  assign alu_a = (state == E_ADDR_LO) ? exec_r[7:0] : store_data[15:8];
   assign alu_b = (state == E_ADDR_LO) ? {IR[8], IR[8:3], 1'b0} : {8{IR[8]}};
 
   // Instruction decode
@@ -93,10 +94,11 @@ module riscyv02_execute (
   wire dispatch_valid = ir_valid && (is_lw || is_sw);
 
   // Register read port mux:
-  //   E_STORE_LO:        rs2 from IR (store data)
-  //   E_ADDR_LO/HI:      rs1 from IR (base register for ALU)
-  //   Ready / other:     don't care (not used during dispatch anymore)
-  assign exec_r_sel = (state == E_STORE_LO)
+  //   E_ADDR_HI (store): rs2 from IR (store data, latched into store_data)
+  //   E_ADDR_LO:         rs1 from IR (base register for ALU, also latched for ALU high byte)
+  //   Other:             rs1 (don't care, but rs1 is safe default)
+  wire is_sw_ir = (IR[15:12] == 4'b1010);
+  assign exec_r_sel = (state == E_ADDR_HI && is_sw_ir)
                       ? IR[2:0]
                       : IR[11:9];
 
@@ -121,12 +123,12 @@ module riscyv02_execute (
       end
       E_STORE_LO: begin
         ab   = MAR;
-        dout = exec_r[7:0];
+        dout = store_data[7:0];
         rwb  = 1'b0;
       end
       E_STORE_HI: begin
         ab   = {MAR[15:1], 1'b1};
-        dout = store_hi;
+        dout = store_data[15:8];
         rwb  = 1'b0;
       end
       default: begin
@@ -143,7 +145,7 @@ module riscyv02_execute (
       IR           <= 16'h0000;
       MAR          <= 16'h0000;
       mem_lo       <= 8'h00;
-      store_hi     <= 8'h00;
+      store_data   <= 16'h0000;
     end else begin
       case (state)
         E_IDLE: begin
@@ -155,14 +157,19 @@ module riscyv02_execute (
         end
 
         E_ADDR_LO: begin
-          // Compute and latch low byte of address
-          MAR[7:0] <= alu_result;
-          state    <= E_ADDR_HI;
+          // Compute and latch low byte of address.
+          // Also latch rs1 into store_data for ALU high byte next cycle.
+          MAR[7:0]   <= alu_result;
+          store_data <= exec_r;
+          state      <= E_ADDR_HI;
         end
 
         E_ADDR_HI: begin
-          // Compute and latch high byte of address, then go to memory access
+          // Compute and latch high byte of address, then go to memory access.
+          // For stores, exec_r now holds rs2; latch it for store data.
           MAR[15:8] <= alu_result;
+          if (is_sw_ir)
+            store_data <= exec_r;
           state     <= is_lw_ir ? E_LOAD_LO : E_STORE_LO;
         end
 
@@ -182,8 +189,7 @@ module riscyv02_execute (
         end
 
         E_STORE_LO: begin
-          store_hi <= exec_r[15:8];
-          state    <= E_STORE_HI;
+          state <= E_STORE_HI;
         end
 
         E_STORE_HI: begin
