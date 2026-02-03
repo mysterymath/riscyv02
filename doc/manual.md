@@ -12,12 +12,12 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile.
 
 | Metric | RISCY-V02 | Arlet 6502 |
 |---|---|---|
-| Best clock period | 12 ns | 16 ns |
-| fMax (all corners) | 83.3 MHz | 62.5 MHz |
-| Utilization | 37.9% | 48.4% |
+| Best clock period | 11 ns | 16 ns |
+| fMax (all corners) | 90.9 MHz | 62.5 MHz |
+| Utilization | 38.2% | 48.4% |
 | Transistor count (synth) | 10,038 | 13,082 |
 
-RISCY-V02 is 33% faster and uses ~23% fewer transistors with room to grow.
+RISCY-V02 is 45% faster and uses ~23% fewer transistors with room to grow.
 
 ## Bus Protocol
 
