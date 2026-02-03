@@ -58,27 +58,19 @@ module tt_um_riscyv02 (
     .GCLK (cpu_clk)
   );
 
-  // Matched clock gate for bus timing — always enabled
-  wire bus_clk;
-  sg13g2_lgcp_1 u_bus_icg (
-    .CLK  (clk),
-    .GATE (1'b1),
-    .GCLK (bus_clk)
-  );
-
   // -----------------------------------------------------------------------
   // Mux select: dual-edge register (identical to 6502 wrapper).
-  // Runs on bus_clk so protocol timing continues even when CPU is halted.
+  // Runs on clk so protocol timing continues even when CPU is halted.
   // -----------------------------------------------------------------------
   wire mux_sel = q ^ q_d;
 
   reg q;
-  always @(posedge bus_clk or negedge rst_n)
+  always @(posedge clk or negedge rst_n)
     if (!rst_n)        q <= 1'b0;
     else if (!mux_sel) q <= ~q;
 
   reg q_d;
-  always @(negedge bus_clk or negedge rst_n)
+  always @(negedge clk or negedge rst_n)
     if (!rst_n)       q_d <= 1'b0;
     else if (mux_sel) q_d <= ~q_d;
 
