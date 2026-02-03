@@ -15,10 +15,13 @@
  *
  *   mux_sel=1 (data + status):
  *     uo_out[0]    = RWB
- *     uo_out[1]    = SYNC (always 0 for this core)
+ *     uo_out[1]    = SYNC (instruction boundary indicator)
  *     uo_out[7:2]  = 0
  *     uio[7:0]     = D[7:0] bidirectional data bus
  *     uio_oe       = RWB ? 8'h00 : 8'hFF
+ *
+ * Control signals:
+ *   ui_in[2]     = RDY (active-high ready input for wait states / single-step)
  *
  * Instruction encoding (16-bit):
  *   LW  rd, off(rs1):  [1000][rs1:3][off6:6][rd:3]
@@ -43,17 +46,39 @@ module tt_um_riscyv02 (
 );
 
   // -----------------------------------------------------------------------
+  // RDY input and clock gating
+  // -----------------------------------------------------------------------
+  wire rdy = ui_in[2];
+
+  // Gated clock for CPU logic — freezes when RDY=0
+  wire cpu_clk;
+  sg13g2_lgcp_1 u_cpu_icg (
+    .CLK  (clk),
+    .GATE (rdy),
+    .GCLK (cpu_clk)
+  );
+
+  // Matched clock gate for bus timing — always enabled
+  wire bus_clk;
+  sg13g2_lgcp_1 u_bus_icg (
+    .CLK  (clk),
+    .GATE (1'b1),
+    .GCLK (bus_clk)
+  );
+
+  // -----------------------------------------------------------------------
   // Mux select: dual-edge register (identical to 6502 wrapper).
+  // Runs on bus_clk so protocol timing continues even when CPU is halted.
   // -----------------------------------------------------------------------
   wire mux_sel = q ^ q_d;
 
   reg q;
-  always @(posedge clk or negedge rst_n)
+  always @(posedge bus_clk or negedge rst_n)
     if (!rst_n)        q <= 1'b0;
     else if (!mux_sel) q <= ~q;
 
   reg q_d;
-  always @(negedge clk or negedge rst_n)
+  always @(negedge bus_clk or negedge rst_n)
     if (!rst_n)       q_d <= 1'b0;
     else if (mux_sel) q_d <= ~q_d;
 
@@ -69,7 +94,7 @@ module tt_um_riscyv02 (
   wire [15:0] fetch_r;
 
   riscyv02_regfile u_regfile (
-    .clk           (clk),
+    .clk           (cpu_clk),
     .rst_n         (rst_n),
     .w_sel         (w_sel),
     .w_data        (w_data),
@@ -109,7 +134,7 @@ module tt_um_riscyv02 (
   wire jr_hazard = exec_w_pending && (exec_w_pending_sel == fetch_r_sel);
 
   riscyv02_fetch u_fetch (
-    .clk           (clk),
+    .clk           (cpu_clk),
     .rst_n         (rst_n),
     .uio_in        (uio_in),
     .fetch_r       (fetch_r_fwd),
@@ -124,7 +149,7 @@ module tt_um_riscyv02 (
   );
 
   riscyv02_execute u_execute (
-    .clk          (clk),
+    .clk          (cpu_clk),
     .rst_n        (rst_n),
     .uio_in       (uio_in),
     .ir_valid     (ir_valid),
@@ -152,13 +177,32 @@ module tt_um_riscyv02 (
   wire [7:0]  DO  = exec_do;
 
   // -----------------------------------------------------------------------
+  // SYNC: instruction boundary indicator.
+  //
+  // Registered ir_accept: SYNC goes high one cycle after execute accepts
+  // a new instruction. At the acceptance negedge, execute computes the
+  // low byte of the address (for LW/SW) while simultaneously finishing
+  // the previous instruction. SYNC=1 on the following negedge indicates
+  // "the previous instruction has retired and a new one has started."
+  //
+  // This matches 6502 semantics where SYNC is high during opcode fetch,
+  // marking the boundary between instructions.
+  // -----------------------------------------------------------------------
+  reg sync_r;
+  always @(negedge cpu_clk or negedge rst_n)
+    if (!rst_n) sync_r <= 1'b0;
+    else        sync_r <= exec_ir_accept;
+
+  wire SYNC = sync_r;
+
+  // -----------------------------------------------------------------------
   // Output muxes (identical protocol to 6502 wrapper)
   // -----------------------------------------------------------------------
-  assign uo_out  = mux_sel ? {6'b0, 1'b0, RWB} : AB[7:0];
+  assign uo_out  = mux_sel ? {6'b0, SYNC, RWB} : AB[7:0];
   assign uio_out = mux_sel ? DO : AB[15:8];
   assign uio_oe  = mux_sel ? (RWB ? 8'h00 : 8'hFF) : 8'hFF;
 
   // Unused
-  wire _unused = &{ena, ui_in, 1'b0};
+  wire _unused = &{ena, ui_in[7:3], ui_in[1:0], 1'b0};
 
 endmodule

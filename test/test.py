@@ -11,7 +11,7 @@ from cocotb.triggers import ClockCycles, FallingEdge
 async def _reset(dut):
     """Apply reset sequence."""
     dut.ena.value = 1
-    dut.ui_in.value = 0
+    dut.ui_in.value = 0x04  # RDY = 1 (ui_in[2])
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -246,3 +246,132 @@ async def test_jr_zero_stall(dut):
     assert write_cycle == 11, \
         f"Expected SW write at cycle 11, got cycle {write_cycle}"
     dut._log.info("PASS [jr_zero_stall]")
+
+
+# ---------------------------------------------------------------------------
+# Test 5: Single-step debugging via RDY/SYNC
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_single_step(dut):
+    """Test single-step debugging using RDY/SYNC protocol."""
+    dut._log.info("Test 5: Single-step debugging")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Data: three distinct marker values
+    prog[0x0020] = 0x11
+    prog[0x0021] = 0x11
+    prog[0x0022] = 0x22
+    prog[0x0023] = 0x22
+    prog[0x0024] = 0x33
+    prog[0x0025] = 0x33
+
+    # Program: load three values, store them as markers, spin
+    # Marker addresses: 0x38, 0x3A, 0x3C (offsets 28, 29, 30 from R0)
+    # 0x0000: LW R1, 16(R0)  ; R1 = MEM[0x20] = 0x1111
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    # 0x0002: LW R2, 17(R0)  ; R2 = MEM[0x22] = 0x2222
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    # 0x0004: LW R3, 18(R0)  ; R3 = MEM[0x24] = 0x3333
+    _place(prog, 0x0004, _encode_lw(rd=3, rs1=0, off6=18))
+    # 0x0006: SW R1, 28(R0)  ; MEM[0x38] = 0x1111
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=28))
+    # 0x0008: SW R2, 29(R0)  ; MEM[0x3A] = 0x2222
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=29))
+    # 0x000A: SW R3, 30(R0)  ; MEM[0x3C] = 0x3333
+    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=30))
+    # 0x000C: JR R0, 6       ; spin at 0x000C
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
+
+    def get_sync():
+        return (int(dut.uo_out.value) >> 1) & 1
+
+    # Marker addresses: 28*2=0x38, 29*2=0x3A, 30*2=0x3C
+    def read_markers():
+        m1 = _read_ram(dut, 0x38) | (_read_ram(dut, 0x39) << 8)
+        m2 = _read_ram(dut, 0x3A) | (_read_ram(dut, 0x3B) << 8)
+        m3 = _read_ram(dut, 0x3C) | (_read_ram(dut, 0x3D) << 8)
+        return (m1, m2, m3)
+
+    async def run_to_sync():
+        """Run until SYNC=1 (instruction boundary), then halt."""
+        dut.ui_in.value = 0x04  # RDY=1
+        for _ in range(200):
+            await FallingEdge(dut.clk)
+            if get_sync():
+                dut.ui_in.value = 0x00  # RDY=0, halt
+                return True
+        return False
+
+    async def single_step():
+        """Execute one instruction: wait for SYNC 1→0→1 transition."""
+        dut.ui_in.value = 0x04  # RDY=1, run
+
+        # Wait for SYNC to go low (instruction starts executing)
+        for _ in range(200):
+            await FallingEdge(dut.clk)
+            if not get_sync():
+                break
+
+        # Wait for SYNC to go high (next boundary reached)
+        for _ in range(200):
+            await FallingEdge(dut.clk)
+            if get_sync():
+                dut.ui_in.value = 0x00  # RDY=0, halt
+                return True
+
+        return False
+
+    # Reset with RDY=0 so CPU doesn't run until we're ready
+    dut.ena.value = 1
+    dut.ui_in.value = 0x00  # RDY=0, halted
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 5)  # Let reset settle
+
+    # Load program AFTER reset (to avoid corruption from previous test's bus activity)
+    _load_program(dut, prog)
+
+    # Clear marker addresses (may have garbage from previous tests)
+    for addr in [0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D]:
+        dut.ram[addr].value = 0x00
+
+    # Now run to first instruction boundary
+    assert await run_to_sync(), "Failed to reach first instruction boundary"
+    dut._log.info(f"At first boundary, SYNC={get_sync()}, markers={read_markers()}")
+
+    # Verify halted: wait and check no changes
+    m_before = read_markers()
+    await ClockCycles(dut.clk, 20)
+    m_after = read_markers()
+    assert m_before == m_after, f"CPU modified state while halted: {m_before} → {m_after}"
+    dut._log.info("Verified: CPU halted, no state changes")
+
+    # Single-step through LW instructions (no visible memory changes)
+    for i in range(3):
+        assert await single_step(), f"single_step failed on LW {i+1}"
+        m = read_markers()
+        assert m == (0, 0, 0), f"Unexpected markers after LW {i+1}: {m}"
+        dut._log.info(f"Step {i+1} (LW): markers unchanged")
+
+    # Single-step through SW instructions (markers appear one by one)
+    assert await single_step(), "single_step failed on SW R1"
+    m = read_markers()
+    assert m == (0x1111, 0, 0), f"After SW R1: expected (0x1111, 0, 0), got {[hex(x) for x in m]}"
+    dut._log.info(f"Step 4 (SW R1): markers = {[hex(x) for x in m]}")
+
+    assert await single_step(), "single_step failed on SW R2"
+    m = read_markers()
+    assert m == (0x1111, 0x2222, 0), f"After SW R2: expected (0x1111, 0x2222, 0), got {[hex(x) for x in m]}"
+    dut._log.info(f"Step 5 (SW R2): markers = {[hex(x) for x in m]}")
+
+    assert await single_step(), "single_step failed on SW R3"
+    m = read_markers()
+    assert m == (0x1111, 0x2222, 0x3333), f"After SW R3: expected all markers, got {[hex(x) for x in m]}"
+    dut._log.info(f"Step 6 (SW R3): markers = {[hex(x) for x in m]}")
+
+    dut._log.info("PASS [single_step]")

@@ -16,3 +16,13 @@ module sg13g2_dllrq_1 (Q, D, RESET_B, GATE_N);
     if (!RESET_B) Q = 1'b0;
     else if (!GATE_N) Q = D;
 endmodule
+
+// Latch-based clock gating cell (behavioral model for simulation)
+module sg13g2_lgcp_1 (GCLK, GATE, CLK);
+  output GCLK;
+  input GATE, CLK;
+  reg gate_latched;
+  always @(CLK or GATE)
+    if (!CLK) gate_latched <= GATE;  // Latch on low phase (transparent-low)
+  assign GCLK = CLK & gate_latched;
+endmodule
