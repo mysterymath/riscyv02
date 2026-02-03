@@ -220,12 +220,19 @@ async def test_jr_zero_stall(dut):
     await _reset(dut)
 
     # Monitor negedges to find when the SW write lands.
-    # Expected timeline (negedge-relative, cycle 0 = first negedge after reset):
-    #   0-1: fetch LW
-    #   2-3: exec LW (E_LOAD_LO, E_LOAD_HI), fetch stalled
-    #   4-5: fetch JR (F_LO, F_HI; redirects fetch_addr to 0x0020)
-    #   6-7: fetch SW at 0x0020 (F_LO, F_HI)
-    #   8-9: exec SW (E_STORE_LO, E_STORE_HI — write visible at negedge 9)
+    # Expected timeline (negedge cycle numbers from debug trace):
+    #    0: F_LO(LW)
+    #    1: F_HI(LW)
+    #    2: dispatch LW → E_LOAD_ADDR
+    #    3: E_LOAD_ADDR (!bus_active, !busy); F_HI(JR) completes
+    #    4: E_LOAD_LO (bus_active); ir_valid held (JR)
+    #    5: E_LOAD_HI (ready); ir_accept consumes JR; w_we writes R1
+    #    6: E_IDLE; deferred JR resolves from forwarded R1; F_LO proceeds
+    #    7: F_HI(SW@0x0020)
+    #    8: dispatch SW → E_STORE_ADDR
+    #    9: E_STORE_ADDR; F_HI(spin JR) completes
+    #   10: E_STORE_LO (bus_active — low byte write)
+    #   11: E_STORE_HI (bus_active — high byte write; detected here)
     write_cycle = None
     for cycle in range(30):
         await FallingEdge(dut.clk)
@@ -236,6 +243,6 @@ async def test_jr_zero_stall(dut):
             break
 
     dut._log.info(f"SW write detected at negedge cycle {write_cycle}")
-    assert write_cycle == 10, \
-        f"Expected SW write at cycle 10 (zero-stall JR), got cycle {write_cycle}"
+    assert write_cycle == 11, \
+        f"Expected SW write at cycle 11, got cycle {write_cycle}"
     dut._log.info("PASS [jr_zero_stall]")

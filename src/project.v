@@ -29,7 +29,7 @@
 `default_nettype none
 
 // =========================================================================
-// Top module: PC, register file, mux_sel, bus arbitration, output muxes
+// Top module: register file, mux_sel, bus arbitration, output muxes
 // =========================================================================
 module tt_um_riscyv02 (
     input  wire [7:0] ui_in,
@@ -58,45 +58,27 @@ module tt_um_riscyv02 (
     else if (mux_sel) q_d <= ~q_d;
 
   // -----------------------------------------------------------------------
-  // PC register — only execute updates it (architectural confirmed PC).
+  // Register file: 8 x 16-bit GP registers (two-phase latch design)
   // -----------------------------------------------------------------------
-  reg [15:0] PC;
-  wire        exec_pc_we;
-  wire [15:0] exec_pc_next;
+  wire [2:0]  w_sel;
+  wire [15:0] w_data;
+  wire        w_we;
+  wire [2:0]  exec_r_sel;
+  wire [15:0] exec_r;
+  wire [2:0]  fetch_r_sel;
+  wire [15:0] fetch_r;
 
-  always @(negedge clk or negedge rst_n) begin
-    if (!rst_n)
-      PC <= 16'h0000;
-    else if (exec_pc_we)
-      PC <= exec_pc_next;
-  end
-
-  // -----------------------------------------------------------------------
-  // Register file: 8 x 16-bit GP registers
-  // -----------------------------------------------------------------------
-  reg [15:0] regs [0:7];
-
-  // Execute read port
-  wire [2:0]  reg_a_sel;
-  wire [15:0] reg_a = regs[reg_a_sel];
-
-  // Fetch read port (for speculative JR resolution)
-  wire [2:0]  fetch_reg_sel;
-  wire [15:0] fetch_reg = regs[fetch_reg_sel];
-
-  wire [2:0]  rd_sel;
-  wire [15:0] rd_data;
-  wire        rd_we;
-
-  integer k;
-  always @(negedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      for (k = 0; k < 8; k = k + 1)
-        regs[k] <= 16'h0000;
-    end else if (rd_we) begin
-      regs[rd_sel] <= rd_data;
-    end
-  end
+  riscyv02_regfile u_regfile (
+    .clk           (clk),
+    .rst_n         (rst_n),
+    .w_sel         (w_sel),
+    .w_data        (w_data),
+    .w_we          (w_we),
+    .exec_r_sel    (exec_r_sel),
+    .exec_r        (exec_r),
+    .fetch_r_sel   (fetch_r_sel),
+    .fetch_r       (fetch_r)
+  );
 
   // -----------------------------------------------------------------------
   // Inter-module wires
@@ -104,27 +86,41 @@ module tt_um_riscyv02 (
   wire        ir_valid;
   wire [15:0] new_ir;
   wire [15:0] fetch_ab;
-  wire [15:0] ir_addr;
 
   wire        exec_busy;
+  wire        exec_bus_active;
+  wire        exec_ir_accept;
   wire [15:0] exec_ab;
   wire [7:0]  exec_do;
   wire        exec_rwb;
+  wire        exec_w_pending;
+  wire [2:0]  exec_w_pending_sel;
 
   // -----------------------------------------------------------------------
   // Submodule instances
   // -----------------------------------------------------------------------
+  // Register forwarding: if execute is writing the same register fetch is
+  // reading, bypass the regfile and give fetch the write data directly.
+  wire fetch_fwd = w_we && (w_sel == fetch_r_sel);
+  wire [15:0] fetch_r_fwd = fetch_fwd ? w_data : fetch_r;
+
+  // Pipeline interlock: RAW hazard when fetch's JR source register matches
+  // execute's pending load destination.
+  wire jr_hazard = exec_w_pending && (exec_w_pending_sel == fetch_r_sel);
+
   riscyv02_fetch u_fetch (
     .clk           (clk),
     .rst_n         (rst_n),
     .uio_in        (uio_in),
-    .fetch_reg     (fetch_reg),
+    .fetch_r       (fetch_r_fwd),
+    .bus_free      (!exec_bus_active),
     .exec_busy     (exec_busy),
+    .ir_accept     (exec_ir_accept),
+    .jr_hazard     (jr_hazard),
     .ir_valid      (ir_valid),
     .new_ir        (new_ir),
-    .fetch_ab      (fetch_ab),
-    .fetch_reg_sel (fetch_reg_sel),
-    .ir_addr       (ir_addr)
+    .ab            (fetch_ab),
+    .fetch_r_sel   (fetch_r_sel)
   );
 
   riscyv02_execute u_execute (
@@ -133,25 +129,26 @@ module tt_um_riscyv02 (
     .uio_in       (uio_in),
     .ir_valid     (ir_valid),
     .new_ir       (new_ir),
-    .ir_addr      (ir_addr),
-    .reg_a        (reg_a),
-    .exec_pc_we   (exec_pc_we),
-    .exec_pc_next (exec_pc_next),
-    .exec_busy    (exec_busy),
-    .exec_ab      (exec_ab),
-    .exec_do      (exec_do),
-    .exec_rwb     (exec_rwb),
-    .reg_a_sel    (reg_a_sel),
-    .rd_sel       (rd_sel),
-    .rd_data      (rd_data),
-    .rd_we        (rd_we)
+    .exec_r       (exec_r),
+    .busy         (exec_busy),
+    .bus_active   (exec_bus_active),
+    .ab           (exec_ab),
+    .dout         (exec_do),
+    .rwb          (exec_rwb),
+    .exec_r_sel   (exec_r_sel),
+    .w_sel        (w_sel),
+    .w_data       (w_data),
+    .w_we         (w_we),
+    .ir_accept    (exec_ir_accept),
+    .w_pending    (exec_w_pending),
+    .w_pending_sel(exec_w_pending_sel)
   );
 
   // -----------------------------------------------------------------------
   // Bus arbitration
   // -----------------------------------------------------------------------
-  wire [15:0] AB  = exec_busy ? exec_ab  : fetch_ab;
-  wire        RWB = exec_busy ? exec_rwb : 1'b1;
+  wire [15:0] AB  = exec_bus_active ? exec_ab  : fetch_ab;
+  wire        RWB = exec_bus_active ? exec_rwb : 1'b1;
   wire [7:0]  DO  = exec_do;
 
   // -----------------------------------------------------------------------

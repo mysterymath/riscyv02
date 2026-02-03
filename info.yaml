@@ -13,6 +13,7 @@ project:
 
   source_files:
     - "project.v"
+    - "riscyv02_regfile.v"
     - "riscyv02_fetch.v"
     - "riscyv02_execute.v"
 
