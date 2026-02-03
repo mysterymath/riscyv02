@@ -223,16 +223,18 @@ async def test_jr_zero_stall(dut):
     # Expected timeline (negedge cycle numbers from debug trace):
     #    0: F_LO(LW)
     #    1: F_HI(LW)
-    #    2: dispatch LW → E_LOAD_ADDR
-    #    3: E_LOAD_ADDR (!bus_active, !busy); F_HI(JR) completes
-    #    4: E_LOAD_LO (bus_active); ir_valid held (JR)
-    #    5: E_LOAD_HI (ready); ir_accept consumes JR; w_we writes R1
-    #    6: E_IDLE; deferred JR resolves from forwarded R1; F_LO proceeds
-    #    7: F_HI(SW@0x0020)
-    #    8: dispatch SW → E_STORE_ADDR
-    #    9: E_STORE_ADDR; F_HI(spin JR) completes
-    #   10: E_STORE_LO (bus_active — low byte write)
-    #   11: E_STORE_HI (bus_active — high byte write; detected here)
+    #    2: dispatch LW → E_ADDR_LO
+    #    3: E_ADDR_LO (!bus_active); F_HI(JR) completes
+    #    4: E_ADDR_HI (!bus_active); ir_valid held (JR)
+    #    5: E_LOAD_LO (bus_active); ir_valid held
+    #    6: E_LOAD_HI (ready); ir_accept consumes JR; w_we writes R1
+    #    7: E_IDLE; deferred JR resolves from forwarded R1; F_LO proceeds
+    #    8: F_HI(SW@0x0020)
+    #    9: dispatch SW → E_ADDR_LO
+    #   10: E_ADDR_LO; F_HI(spin JR) completes
+    #   11: E_ADDR_HI
+    #   12: E_STORE_LO (bus_active — low byte write)
+    #   13: E_STORE_HI (bus_active — high byte write; detected here)
     write_cycle = None
     for cycle in range(30):
         await FallingEdge(dut.clk)
@@ -243,8 +245,8 @@ async def test_jr_zero_stall(dut):
             break
 
     dut._log.info(f"SW write detected at negedge cycle {write_cycle}")
-    assert write_cycle == 11, \
-        f"Expected SW write at cycle 11, got cycle {write_cycle}"
+    assert write_cycle == 13, \
+        f"Expected SW write at cycle 13, got cycle {write_cycle}"
     dut._log.info("PASS [jr_zero_stall]")
 
 

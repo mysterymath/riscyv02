@@ -75,7 +75,7 @@ All instructions are 16 bits. Opcodes occupy the upper bits and determine the in
 
 Loads a 16-bit word from memory. The 6-bit signed offset is scaled by 2, giving a range of ±64 bytes from the base register. The memory address must be word-aligned (bit 0 = 0). The low byte is read first, then the high byte.
 
-**Cycle count:** 4 (2 base + 2 bytes read)
+**Cycle count:** 5 (2 base + 1 address + 2 bytes read)
 
 ### SW — Store Word
 
@@ -87,7 +87,7 @@ Loads a 16-bit word from memory. The 6-bit signed offset is scaled by 2, giving 
 
 Stores a 16-bit word to memory. The offset encoding is identical to LW. The low byte is written first, then the high byte.
 
-**Cycle count:** 4 (2 base + 2 bytes written)
+**Cycle count:** 5 (2 base + 1 address + 2 bytes written)
 
 ### JR — Jump Register
 
@@ -128,11 +128,13 @@ The processor uses a 2-stage pipeline (Fetch and Execute) that overlap where pos
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| Most instructions | 2 | Base cost |
-| LW | 4 | 2 base + 2 bytes read |
-| SW | 4 | 2 base + 2 bytes written |
+| Most instructions | 2 | Base cost (fetch only) |
+| LW | 5 | 2 fetch + 1 address + 2 bytes read |
+| SW | 5 | 2 fetch + 1 address + 2 bytes written |
 | JR | 2 | Resolved during fetch |
 | JR (hazarded) | 3 | +1 if source register is being loaded |
+
+**Throughput note:** In pipelined execution, LW/SW achieve 4-cycle throughput because address computation overlaps with the next instruction's fetch. The 5-cycle latency only affects the first instruction after reset or a pipeline stall.
 
 ### Pipeline Interlocks
 
