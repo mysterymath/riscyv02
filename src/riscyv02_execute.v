@@ -12,10 +12,16 @@
 // ALU and signals a redirect to fetch.  The register file lives here since
 // only execute needs register access.
 //
+// Active instruction state is stored in decoded form: control signals
+// (is_store, is_jr) plus extracted fields (base register, offset, dest/src).
+// This makes behavioral sharing explicit — LW and SW share E_MEM_LO/HI
+// states, differing only in the is_store_r control signal.
+//
 // Pending instruction buffer: when fetch presents an instruction (ir_valid)
-// and execute is not ready, the instruction is captured into pending_ir.
-// When execute becomes ready, it dispatches from pending_ir.  If execute
-// is already ready when fetch presents, it dispatches directly (bypass).
+// and execute is not ready, raw instruction bits are captured into pending_ir.
+// When execute becomes ready, it dispatches from pending.  If execute is
+// already ready when fetch presents, it dispatches directly (bypass).
+// Decode happens once at dispatch time from either source.
 // =========================================================================
 module riscyv02_execute (
     input  wire        clk,
@@ -33,25 +39,31 @@ module riscyv02_execute (
     output wire [15:0] redirect_pc
 );
 
-  localparam E_IDLE       = 3'd0;
-  localparam E_ADDR_LO    = 3'd1;  // Computing address low byte
-  localparam E_ADDR_HI    = 3'd2;  // Computing address high byte
-  localparam E_LOAD_LO    = 3'd3;  // Reading memory low byte
-  localparam E_LOAD_HI    = 3'd4;  // Reading memory high byte (can dispatch)
-  localparam E_STORE_LO   = 3'd5;  // Writing memory low byte
-  localparam E_STORE_HI   = 3'd6;  // Writing memory high byte (can dispatch)
+  localparam E_IDLE    = 3'd0;
+  localparam E_ADDR_LO = 3'd1;  // Computing address low byte
+  localparam E_ADDR_HI = 3'd2;  // Computing address high byte
+  localparam E_MEM_LO  = 3'd3;  // Memory access low byte
+  localparam E_MEM_HI  = 3'd4;  // Memory access high byte (can dispatch)
 
   reg [2:0]  state;
-  reg [15:0] IR;
   reg [15:0] MAR;
   reg [7:0]  mem_lo;
-  reg [15:0] store_data;  // Holds rs/rs1 in E_ADDR_LO, then rs2 in E_ADDR_HI (for store)
+  reg [15:0] store_data;  // Holds base reg in E_ADDR_LO, then rs2 in E_ADDR_HI (for store)
 
   // -------------------------------------------------------------------------
-  // Pending instruction buffer
+  // Decoded instruction state (active)
   // -------------------------------------------------------------------------
-  reg [15:0] pending_ir;
+  reg        is_store_r;      // 1 = SW, 0 = LW or JR
+  reg        is_jr_r;         // 1 = JR
+  reg [2:0]  base_sel_r;      // Base register selector
+  reg [5:0]  off6_r;          // 6-bit offset
+  reg [2:0]  rd_rs2_sel_r;    // Destination (LW) or source (SW)
+
+  // -------------------------------------------------------------------------
+  // Pending instruction buffer (raw bits)
+  // -------------------------------------------------------------------------
   reg        pending_valid;
+  reg [15:0] pending_ir;
 
   // -------------------------------------------------------------------------
   // Register file (internal to execute)
@@ -76,27 +88,33 @@ module riscyv02_execute (
   // Control signals
   // -------------------------------------------------------------------------
   // Ready states can accept a new dispatch.
-  wire ready = (state == E_IDLE) || (state == E_LOAD_HI) || (state == E_STORE_HI);
-  assign bus_active = (state == E_LOAD_LO  || state == E_LOAD_HI ||
-                       state == E_STORE_LO || state == E_STORE_HI);
+  wire ready = (state == E_IDLE) || (state == E_MEM_HI);
+  assign bus_active = (state == E_MEM_LO) || (state == E_MEM_HI);
 
   // -------------------------------------------------------------------------
   // Dispatch logic with pending buffer bypass
   // -------------------------------------------------------------------------
+  wire dispatch_available = pending_valid || ir_valid;
+
   // Dispatch source: pending buffer if valid, else direct from fetch
   wire [15:0] dispatch_ir = pending_valid ? pending_ir : fetch_ir;
-  wire        dispatch_available = pending_valid || ir_valid;
 
-  // Decode on dispatch_ir (for dispatch decision)
+  // Decode from dispatch_ir
   wire is_lw_disp = (dispatch_ir[15:12] == 4'b1000);
   wire is_sw_disp = (dispatch_ir[15:12] == 4'b1010);
   wire is_jr_disp = (dispatch_ir[15:9] == 7'b1011100);
+  wire dispatch_is_valid = is_lw_disp || is_sw_disp || is_jr_disp;
+  wire dispatch_is_store = is_sw_disp;
+  wire dispatch_is_jr = is_jr_disp;
+  wire [2:0] dispatch_base_sel = is_jr_disp ? dispatch_ir[2:0] : dispatch_ir[11:9];
+  wire [5:0] dispatch_off6 = dispatch_ir[8:3];
+  wire [2:0] dispatch_rd_rs2_sel = dispatch_ir[2:0];
 
   // Dispatch: recognised instruction that execute will act on
-  wire dispatch_valid = ready && dispatch_available && (is_lw_disp || is_sw_disp || is_jr_disp);
+  wire dispatch_valid = ready && dispatch_available && dispatch_is_valid;
 
   // NOP: instruction available but not recognized
-  wire dispatch_nop = ready && dispatch_available && !(is_lw_disp || is_sw_disp || is_jr_disp);
+  wire dispatch_nop = ready && dispatch_available && !dispatch_is_valid;
 
   // Capture: fetch has instruction, buffer empty, not ready (can't dispatch now)
   wire capture = ir_valid && !pending_valid && !ready;
@@ -126,68 +144,47 @@ module riscyv02_execute (
   // Start ALU on E_ADDR_LO; carry propagates to E_ADDR_HI.
   assign alu_start = (state == E_ADDR_LO);
   assign alu_a = (state == E_ADDR_LO) ? r[7:0] : store_data[15:8];
-  assign alu_b = (state == E_ADDR_LO) ? {IR[8], IR[8:3], 1'b0} : {8{IR[8]}};
-
-  // -------------------------------------------------------------------------
-  // Instruction decode on latched IR (for execution)
-  // -------------------------------------------------------------------------
-  wire is_lw_ir = (IR[15:12] == 4'b1000);
-  wire is_sw_ir = (IR[15:12] == 4'b1010);
-  wire is_jr_ir = (IR[15:9] == 7'b1011100);
+  assign alu_b = (state == E_ADDR_LO) ? {off6_r[5], off6_r, 1'b0} : {8{off6_r[5]}};
 
   // -------------------------------------------------------------------------
   // Register file interface
   // -------------------------------------------------------------------------
   // Read port mux:
-  //   E_ADDR_LO (JR):    rs from IR[2:0]
-  //   E_ADDR_LO (LW/SW): rs1 from IR[11:9]
-  //   E_ADDR_HI (SW):    rs2 from IR[2:0]
-  //   Other:             don't care
-  assign r_sel = (state == E_ADDR_LO && is_jr_ir) ? IR[2:0] :
-                 (state == E_ADDR_HI && is_sw_ir) ? IR[2:0] :
-                 IR[11:9];
+  //   E_ADDR_LO: base_sel_r (rs for JR, rs1 for LW/SW - already decoded)
+  //   E_ADDR_HI (SW): rd_rs2_sel_r (rs2 for store data)
+  //   Other: don't care
+  assign r_sel = (state == E_ADDR_HI && is_store_r) ? rd_rs2_sel_r : base_sel_r;
 
-  // Write port: fires in E_LOAD_HI
-  assign w_we   = (state == E_LOAD_HI);
-  assign w_sel  = IR[2:0];
+  // Write port: fires in E_MEM_HI for loads only
+  assign w_we   = (state == E_MEM_HI) && !is_store_r;
+  assign w_sel  = rd_rs2_sel_r;
   assign w_data = {uio_in, mem_lo};
 
   // -------------------------------------------------------------------------
   // Redirect interface (for JR)
   // -------------------------------------------------------------------------
-  assign redirect    = (state == E_ADDR_HI) && is_jr_ir;
+  assign redirect    = (state == E_ADDR_HI) && is_jr_r;
   assign redirect_pc = {alu_result, MAR[7:0]};
 
   // -------------------------------------------------------------------------
   // Bus outputs (combinational)
   // -------------------------------------------------------------------------
   always @(*) begin
-    ab   = MAR;
+    ab   = 16'h0000;
     dout = 8'h00;
     rwb  = 1'b1;
     case (state)
-      E_LOAD_LO: begin
-        ab  = MAR;
-        rwb = 1'b1;
-      end
-      E_LOAD_HI: begin
-        ab  = {MAR[15:1], 1'b1};
-        rwb = 1'b1;
-      end
-      E_STORE_LO: begin
+      E_MEM_LO: begin
         ab   = MAR;
         dout = store_data[7:0];
-        rwb  = 1'b0;
+        rwb  = !is_store_r;
       end
-      E_STORE_HI: begin
+      E_MEM_HI: begin
         ab   = {MAR[15:1], 1'b1};
         dout = store_data[15:8];
-        rwb  = 1'b0;
+        rwb  = !is_store_r;
       end
-      default: begin
-        ab  = 16'h0000;
-        rwb = 1'b1;
-      end
+      default: ;
     endcase
   end
 
@@ -196,26 +193,37 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   always @(negedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state        <= E_IDLE;
-      IR           <= 16'h0000;
-      MAR          <= 16'h0000;
-      mem_lo       <= 8'h00;
-      store_data   <= 16'h0000;
-      pending_ir   <= 16'h0000;
-      pending_valid <= 1'b0;
+      state            <= E_IDLE;
+      MAR              <= 16'h0000;
+      mem_lo           <= 8'h00;
+      store_data       <= 16'h0000;
+      // Decoded instruction state
+      is_store_r       <= 1'b0;
+      is_jr_r          <= 1'b0;
+      base_sel_r       <= 3'b000;
+      off6_r           <= 6'b000000;
+      rd_rs2_sel_r     <= 3'b000;
+      // Pending buffer
+      pending_valid    <= 1'b0;
+      pending_ir       <= 16'h0000;
     end else begin
       // Capture instruction into pending buffer when not ready
       if (capture) begin
-        pending_ir    <= fetch_ir;
         pending_valid <= 1'b1;
+        pending_ir    <= fetch_ir;
       end
 
       case (state)
         E_IDLE: begin
           if (dispatch_valid) begin
-            IR            <= dispatch_ir;
-            pending_valid <= 1'b0;
-            state         <= E_ADDR_LO;
+            // Latch decoded instruction fields
+            is_store_r     <= dispatch_is_store;
+            is_jr_r        <= dispatch_is_jr;
+            base_sel_r     <= dispatch_base_sel;
+            off6_r         <= dispatch_off6;
+            rd_rs2_sel_r   <= dispatch_rd_rs2_sel;
+            pending_valid  <= 1'b0;
+            state          <= E_ADDR_LO;
           end else if (dispatch_nop) begin
             pending_valid <= 1'b0;
           end
@@ -232,51 +240,41 @@ module riscyv02_execute (
         E_ADDR_HI: begin
           // Compute high byte.  Next state depends on instruction type.
           MAR[15:8] <= alu_result;
-          if (is_jr_ir) begin
+          if (is_jr_r) begin
             // JR: done, redirect fires this cycle. Can dispatch next.
             if (dispatch_valid) begin
-              IR            <= dispatch_ir;
-              pending_valid <= 1'b0;
-              state         <= E_ADDR_LO;
+              is_store_r     <= dispatch_is_store;
+              is_jr_r        <= dispatch_is_jr;
+              base_sel_r     <= dispatch_base_sel;
+              off6_r         <= dispatch_off6;
+              rd_rs2_sel_r   <= dispatch_rd_rs2_sel;
+              pending_valid  <= 1'b0;
+              state          <= E_ADDR_LO;
             end else begin
               if (dispatch_nop) pending_valid <= 1'b0;
               state <= E_IDLE;
             end
-          end else if (is_sw_ir) begin
-            // SW: latch rs2 for store data, proceed to memory write
-            store_data <= r;
-            state      <= E_STORE_LO;
           end else begin
-            // LW: proceed to memory read
-            state <= E_LOAD_LO;
+            // LW or SW: proceed to memory access
+            if (is_store_r) store_data <= r;  // Latch rs2 for store
+            state <= E_MEM_LO;
           end
         end
 
-        E_LOAD_LO: begin
-          mem_lo <= uio_in;
-          state  <= E_LOAD_HI;
+        E_MEM_LO: begin
+          if (!is_store_r) mem_lo <= uio_in;  // Capture low byte for load
+          state <= E_MEM_HI;
         end
 
-        E_LOAD_HI: begin
+        E_MEM_HI: begin
           if (dispatch_valid) begin
-            IR            <= dispatch_ir;
-            pending_valid <= 1'b0;
-            state         <= E_ADDR_LO;
-          end else begin
-            if (dispatch_nop) pending_valid <= 1'b0;
-            state <= E_IDLE;
-          end
-        end
-
-        E_STORE_LO: begin
-          state <= E_STORE_HI;
-        end
-
-        E_STORE_HI: begin
-          if (dispatch_valid) begin
-            IR            <= dispatch_ir;
-            pending_valid <= 1'b0;
-            state         <= E_ADDR_LO;
+            is_store_r     <= dispatch_is_store;
+            is_jr_r        <= dispatch_is_jr;
+            base_sel_r     <= dispatch_base_sel;
+            off6_r         <= dispatch_off6;
+            rd_rs2_sel_r   <= dispatch_rd_rs2_sel;
+            pending_valid  <= 1'b0;
+            state          <= E_ADDR_LO;
           end else begin
             if (dispatch_nop) pending_valid <= 1'b0;
             state <= E_IDLE;
