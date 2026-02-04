@@ -15,7 +15,7 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile.
 | Best clock period | 12 ns | 16 ns |
 | fMax (all corners) | 83.3 MHz | 62.5 MHz |
 | Utilization | 38.2% | 48.4% |
-| Transistor count (synth) | 10,044 | 13,082 |
+| Transistor count (synth) | 10,236 | 13,082 |
 
 RISCY-V02 is 33% faster and uses ~23% fewer transistors with room to grow.
 
