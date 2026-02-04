@@ -97,6 +97,7 @@ module tt_um_riscyv02 (
     .rst_n      (rst_n),
     .uio_in     (uio_in),
     .bus_free   (!exec_bus_active),
+    .ir_accept  (exec_ir_accept),
     .redirect   (redirect),
     .redirect_pc(redirect_pc),
     .ir_valid   (ir_valid),

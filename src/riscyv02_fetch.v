@@ -11,15 +11,16 @@
 // Always speculates sequential PC.  When execute resolves control flow
 // (JR, branches), it signals redirect to reset fetch to the correct PC.
 //
-// The ir output is combinational: {uio_in, ir_lo} during F_HI.
-// ir_valid pulses for one cycle when a complete instruction is available.
-// Execute must capture ir immediately when ir_valid=1.
+// Instruction holding: fetch holds the instruction until execute accepts it.
+// F_HI: instruction available combinationally from {uio_in, ir_r[7:0]}
+// F_HOLD: instruction fully registered in ir_r, waiting for execute to accept
 // =========================================================================
 module riscyv02_fetch (
     input  wire        clk,
     input  wire        rst_n,
     input  wire [7:0]  uio_in,
     input  wire        bus_free,
+    input  wire        ir_accept,
     input  wire        redirect,
     input  wire [15:0] redirect_pc,
     output wire        ir_valid,
@@ -27,26 +28,27 @@ module riscyv02_fetch (
     output wire [15:0] ab
 );
 
-  localparam F_LO = 1'd0;
-  localparam F_HI = 1'd1;
+  localparam F_LO   = 2'd0;
+  localparam F_HI   = 2'd1;
+  localparam F_HOLD = 2'd2;
 
-  reg        state;
+  reg [1:0]  state;
   reg [15:0] addr;
-  reg [7:0]  ir_lo;  // Low byte staging register
+  reg [15:0] ir_r;    // Low byte in F_HI, full instruction in F_HOLD
 
   wire [15:0] seq_pc = {addr[15:1] + 15'd1, 1'b0};
 
-  // Bus address
+  // Bus address: only active in F_LO/F_HI, not F_HOLD
   assign ab = (state == F_HI) ? {addr[15:1], 1'b1} : addr;
 
-  // Instruction output: combinational, valid only when ir_valid=1
-  assign ir = {uio_in, ir_lo};
-  assign ir_valid = (state == F_HI) && bus_free && !redirect;
+  // Instruction output: combinational in F_HI, registered in F_HOLD
+  assign ir = (state == F_HOLD) ? ir_r : {uio_in, ir_r[7:0]};
+  assign ir_valid = ((state == F_HI) && bus_free && !redirect) || (state == F_HOLD);
 
   always @(negedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state <= F_LO;
-      ir_lo <= 8'h00;
+      ir_r  <= 16'h0000;
       addr  <= 16'h0000;
     end else if (redirect) begin
       // Control flow redirect from execute: reset to new PC
@@ -55,11 +57,23 @@ module riscyv02_fetch (
     end else begin
       case (state)
         F_LO: if (bus_free) begin
-          ir_lo <= uio_in;
-          state <= F_HI;
+          ir_r[7:0] <= uio_in;
+          state     <= F_HI;
         end
 
         F_HI: if (bus_free) begin
+          if (ir_accept) begin
+            // Fast path: execute accepted immediately
+            addr  <= seq_pc;
+            state <= F_LO;
+          end else begin
+            // Slow path: register full instruction, wait for execute
+            ir_r  <= {uio_in, ir_r[7:0]};
+            state <= F_HOLD;
+          end
+        end
+
+        F_HOLD: if (ir_accept) begin
           addr  <= seq_pc;
           state <= F_LO;
         end
