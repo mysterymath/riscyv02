@@ -894,6 +894,55 @@ async def _measure_instruction_cycles(dut, prog, expected_cycles, test_name):
 
 
 @cocotb.test()
+async def test_cli_atomicity(dut):
+    """CLI with pending IRQ: IRQ fires immediately after CLI completes."""
+    dut._log.info("Test: CLI atomicity with pending IRQ")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Program: CLI at 0x0000, then spin. IRQ will be pending from start.
+    # After reset, I=1 masks the IRQ. CLI sets I=0, IRQ should fire immediately.
+    _place(prog, 0x0000, _encode_cli())
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))  # spin at 0x0002
+
+    # IRQ handler at 0x0004: write marker and spin
+    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=8))   # R1 = MEM[0x10] = 0xBEEF
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=12)) # MEM[0x18] = 0xBEEF
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))          # spin at 0x0008
+
+    # Data: marker value
+    prog[0x0010] = 0xEF
+    prog[0x0011] = 0xBE
+
+    # Clear marker location
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset with IRQB=0 (IRQ already pending, but masked by I=1)
+    dut.ena.value = 1
+    dut.ui_in.value = 0x04  # RDY=1, IRQB=0 (asserted!)
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Run - CLI should unmask the IRQ and it should fire immediately
+    await ClockCycles(dut.clk, 50)
+
+    # Check marker - should be written since CLI enabled the pending IRQ
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
+    val = lo | (hi << 8)
+    dut._log.info(f"Marker = {val:#06x} (expected 0xBEEF if IRQ fired after CLI)")
+    assert val == 0xBEEF, f"IRQ did not fire after CLI! Got marker {val:#06x}"
+    dut._log.info("PASS [cli_atomicity]")
+
+
+@cocotb.test()
 async def test_cycle_count_nop(dut):
     """NOP takes 2 cycles."""
     dut._log.info("Test: NOP cycle count")
