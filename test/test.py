@@ -832,3 +832,203 @@ async def test_irq_during_multicycle(dut):
     assert main_marker == 0x1234, f"Main code LW/SW failed! Got {main_marker:#06x}"
     assert irq_marker == 0x1234, f"IRQ saw wrong R5 value! Got {irq_marker:#06x}"
     dut._log.info("PASS [irq_during_multicycle]")
+
+
+# ---------------------------------------------------------------------------
+# Cycle count tests: verify each instruction path takes expected cycles
+# ---------------------------------------------------------------------------
+
+def _encode_nop():
+    """Encode NOP (any unrecognized instruction) -> 16-bit little-endian bytes."""
+    # Use 0x0000 as NOP - not recognized as LW/SW/JR/SEI/CLI/RETI
+    return (0x00, 0x00)
+
+
+async def _measure_instruction_cycles(dut, prog, expected_cycles, test_name):
+    """
+    Measure cycles for an instruction by counting SYNC pulses.
+
+    Program should have the test instruction at 0x0000, followed by a spin loop.
+    Returns the measured cycle count.
+    """
+    def get_sync():
+        return (int(dut.uo_out.value) >> 1) & 1
+
+    _load_program(dut, prog)
+
+    # Reset
+    dut.ena.value = 1
+    dut.ui_in.value = 0x05  # RDY=1, IRQB=1 (not asserted)
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Wait for first SYNC (instruction boundary after reset)
+    for _ in range(100):
+        await FallingEdge(dut.clk)
+        if get_sync():
+            break
+    else:
+        raise AssertionError(f"{test_name}: Failed to reach first SYNC")
+
+    # Count cycles until next SYNC
+    cycles = 0
+    # First wait for SYNC to go low
+    for _ in range(100):
+        await FallingEdge(dut.clk)
+        cycles += 1
+        if not get_sync():
+            break
+
+    # Then wait for SYNC to go high again
+    for _ in range(100):
+        await FallingEdge(dut.clk)
+        cycles += 1
+        if get_sync():
+            break
+    else:
+        raise AssertionError(f"{test_name}: Failed to reach second SYNC")
+
+    dut._log.info(f"{test_name}: measured {cycles} cycles (expected {expected_cycles})")
+    return cycles
+
+
+@cocotb.test()
+async def test_cycle_count_nop(dut):
+    """NOP takes 2 cycles."""
+    dut._log.info("Test: NOP cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: NOP
+    _place(prog, 0x0000, _encode_nop())
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    cycles = await _measure_instruction_cycles(dut, prog, 2, "NOP")
+    assert cycles == 2, f"NOP: expected 2 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_nop]")
+
+
+@cocotb.test()
+async def test_cycle_count_sei(dut):
+    """SEI takes 2 cycles."""
+    dut._log.info("Test: SEI cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: SEI
+    _place(prog, 0x0000, _encode_sei())
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    cycles = await _measure_instruction_cycles(dut, prog, 2, "SEI")
+    assert cycles == 2, f"SEI: expected 2 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_sei]")
+
+
+@cocotb.test()
+async def test_cycle_count_cli(dut):
+    """CLI takes 2 cycles."""
+    dut._log.info("Test: CLI cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: CLI
+    _place(prog, 0x0000, _encode_cli())
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    cycles = await _measure_instruction_cycles(dut, prog, 2, "CLI")
+    assert cycles == 2, f"CLI: expected 2 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_cli]")
+
+
+@cocotb.test()
+async def test_cycle_count_reti(dut):
+    """RETI takes 3 cycles (1 execute + 2 fetch after redirect)."""
+    dut._log.info("Test: RETI cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Simple approach: RETI at 0x0000, returns to EPC (0x0000 after reset)
+    # Creates an infinite RETI loop - we measure one iteration
+    # 0x0000: RETI (returns to 0x0000, creating a loop)
+    _place(prog, 0x0000, _encode_reti())
+
+    # RETI redirects, so throughput = 1 (E_EXEC) + 2 (fetch) = 3 cycles
+    cycles = await _measure_instruction_cycles(dut, prog, 3, "RETI")
+    assert cycles == 3, f"RETI: expected 3 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_reti]")
+
+
+@cocotb.test()
+async def test_cycle_count_lw(dut):
+    """LW takes 4 cycles throughput (pipelined)."""
+    dut._log.info("Test: LW cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: LW R1, 8(R0)  ; load from 0x10
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    # Data at 0x10
+    prog[0x0010] = 0x12
+    prog[0x0011] = 0x34
+
+    # LW: 4 cycles throughput (E_ADDR_LO, E_ADDR_HI, E_MEM_LO, E_MEM_HI)
+    # The 5-cycle latency includes overlapped fetch
+    cycles = await _measure_instruction_cycles(dut, prog, 4, "LW")
+    assert cycles == 4, f"LW: expected 4 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_lw]")
+
+
+@cocotb.test()
+async def test_cycle_count_sw(dut):
+    """SW takes 4 cycles throughput (pipelined)."""
+    dut._log.info("Test: SW cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: SW R0, 8(R0)  ; store R0 to 0x10
+    _place(prog, 0x0000, _encode_sw(rs2=0, rs1=0, off6=8))
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    # SW: 4 cycles throughput (same as LW)
+    cycles = await _measure_instruction_cycles(dut, prog, 4, "SW")
+    assert cycles == 4, f"SW: expected 4 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_sw]")
+
+
+@cocotb.test()
+async def test_cycle_count_jr(dut):
+    """JR takes 4 cycles."""
+    dut._log.info("Test: JR cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: JR R0, 1 (jump to 0x0002)
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=1))
+    # 0x0002: JR R0, 1 (spin at 0x0002)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    cycles = await _measure_instruction_cycles(dut, prog, 4, "JR")
+    assert cycles == 4, f"JR: expected 4 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_jr]")

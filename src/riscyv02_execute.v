@@ -266,7 +266,7 @@ module riscyv02_execute (
         // ---------------------------------------------------------------------
         case (state)
           E_IDLE:
-            if (retire) state <= E_EXEC;
+            if (retire) state <= is_multicycle ? E_ADDR_LO : E_EXEC;
 
           E_EXEC: begin
             // Apply instruction effects
@@ -306,8 +306,11 @@ module riscyv02_execute (
           E_MEM_HI: begin
             // LW: rd_hi written via w_we during this cycle
             // SW: rs2_hi output via dout during this cycle
-            // Can pipeline: accept next instruction directly into E_EXEC
-            state <= retire ? E_EXEC : E_IDLE;
+            // Can pipeline: accept next instruction directly
+            if (retire)
+              state <= is_multicycle ? E_ADDR_LO : E_EXEC;
+            else
+              state <= E_IDLE;
           end
 
           default: state <= E_IDLE;

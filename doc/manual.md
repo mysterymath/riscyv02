@@ -14,8 +14,8 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 17 ns | 16 ns |
 | fMax (slow corner) | 58.8 MHz | 62.5 MHz |
-| Utilization | 42.2% | 48.4% |
-| Transistor count (synth) | 10,878 | 13,082 |
+| Utilization | 42.3% | 48.4% |
+| Transistor count (synth) | 10,902 | 13,082 |
 
 RISCY-V02 uses ~17% fewer transistors with room to grow as more instructions are added.
 
@@ -198,18 +198,19 @@ All other    NOP           (ignored)
 
 The processor uses a 2-stage pipeline (Fetch and Execute) that overlap where possible. Most instructions take **2 cycles**. Loads and stores add **1 cycle for address computation** plus **1 cycle per byte** transferred.
 
-### Cycle Counts
+### Cycle Counts (Throughput)
+
+Throughput is measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| NOP/SEI/CLI | 2 | Base cost (fetch only) |
-| LW | 5 | 2 fetch + 2 address + 1 byte read |
-| SW | 5 | 2 fetch + 2 address + 1 byte written |
-| JR | 4 | 2 fetch + 2 address computation |
-| RETI | 2 | Fetch + redirect |
+| NOP/SEI/CLI | 2 | 1 execute + 1 overlapped fetch |
+| LW/SW | 4 | 4 execute (address computation overlaps with fetch) |
+| JR | 4 | 2 execute + 2 fetch after redirect |
+| RETI | 3 | 1 execute + 2 fetch after redirect |
 | IRQ entry | 2 | Redirect at instruction boundary |
 
-**Throughput note:** In pipelined execution, LW/SW achieve 4-cycle throughput because address computation overlaps with the next instruction's fetch. JR flushes the speculative fetch and redirects to the computed target.
+Instructions that redirect (JR, RETI) flush the speculative fetch and must wait for new instruction bytes. Non-redirecting instructions benefit from fetch/execute overlap.
 
 ### Control Flow Handling
 
