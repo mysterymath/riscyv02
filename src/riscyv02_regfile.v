@@ -2,12 +2,12 @@
  * Copyright (c) 2024 mysterymath
  * SPDX-License-Identifier: Apache-2.0
  *
- * Two-phase latch register file: 8 x 16-bit GP registers.
+ * Two-phase latch register file: 8 x 16-bit GP registers with 8-bit interface.
  *
  * Leader latches (sg13g2_dlhrq_1, transparent-high) capture w_data,
- * w_sel, and w_we at the falling clock edge.  Follower latches
+ * w_sel, w_hi, and w_we at the falling clock edge.  Follower latches
  * (sg13g2_dllrq_1, transparent-low) pass the leader's captured value
- * to the selected register during clk=0.  The opposite polarities
+ * to the selected register byte during clk=0.  The opposite polarities
  * guarantee by construction that leaders and followers are never
  * simultaneously transparent.
  *
@@ -21,26 +21,29 @@ module riscyv02_regfile (
     input  wire        clk,
     input  wire        rst_n,
 
-    // Write port
+    // Write port (8-bit)
     input  wire [2:0]  w_sel,
-    input  wire [15:0] w_data,
+    input  wire        w_hi,       // Select high byte for write
+    input  wire [7:0]  w_data,
     input  wire        w_we,
 
-    // Read port
+    // Read port (8-bit)
     input  wire [2:0]  r_sel,
-    output wire [15:0] r
+    input  wire        r_hi,       // Select high byte for read
+    output wire [7:0]  r
 );
 
   // Phase 1 — Leader latches (sg13g2_dlhrq_1): transparent when GATE=clk=1,
-  // capture at negedge. These hold w_data/w_sel/w_we stable during clk=0
+  // capture at negedge. These hold w_data/w_sel/w_hi/w_we stable during clk=0
   // so follower inputs never depend on live combinational paths.
-  wire [15:0] w_data_held;
-  wire [2:0]  w_sel_held;
-  wire        w_we_held;
+  wire [7:0] w_data_held;
+  wire [2:0] w_sel_held;
+  wire       w_hi_held;
+  wire       w_we_held;
 
   generate
     genvar li;
-    for (li = 0; li < 16; li = li + 1) begin : gen_leader_data
+    for (li = 0; li < 8; li = li + 1) begin : gen_leader_data
       sg13g2_dlhrq_1 u_leader (
         .D(w_data[li]),
         .GATE(clk),
@@ -58,6 +61,13 @@ module riscyv02_regfile (
     end
   endgenerate
 
+  sg13g2_dlhrq_1 u_leader_hi (
+    .D(w_hi),
+    .GATE(clk),
+    .RESET_B(rst_n),
+    .Q(w_hi_held)
+  );
+
   sg13g2_dlhrq_1 u_leader_we (
     .D(w_we),
     .GATE(clk),
@@ -66,27 +76,43 @@ module riscyv02_regfile (
   );
 
   // Phase 2 — Follower latches (sg13g2_dllrq_1): transparent when GATE_N=0,
-  // i.e. when ~(clk | ~wen[i]) = ~clk & wen[i]. Selected register passes
+  // i.e. when ~(clk | ~wen[i]) = ~clk & wen[i]. Selected register byte passes
   // leader's captured value during clk=0; all others hold.
+  //
+  // Byte-select writes: each follower's gate_n becomes clk | ~(wen & byte_match)
+  //   - Low bytes (bi<8): byte_match = ~w_hi_held
+  //   - High bytes (bi>=8): byte_match = w_hi_held
   wire [15:0] regs [0:7];
 
   generate
     genvar gi, bi;
     for (gi = 0; gi < 8; gi = gi + 1) begin : gen_reg
       wire wen = w_we_held && (w_sel_held == gi[2:0]);
-      wire gate_n = clk | ~wen;
-      for (bi = 0; bi < 16; bi = bi + 1) begin : gen_bit
+      // Low byte: write when wen and NOT w_hi_held
+      wire gate_n_lo = clk | ~(wen & ~w_hi_held);
+      // High byte: write when wen and w_hi_held
+      wire gate_n_hi = clk | ~(wen & w_hi_held);
+      for (bi = 0; bi < 8; bi = bi + 1) begin : gen_bit_lo
         sg13g2_dllrq_1 u_follower (
           .D(w_data_held[bi]),
-          .GATE_N(gate_n),
+          .GATE_N(gate_n_lo),
           .RESET_B(rst_n),
           .Q(regs[gi][bi])
+        );
+      end
+      for (bi = 0; bi < 8; bi = bi + 1) begin : gen_bit_hi
+        sg13g2_dllrq_1 u_follower (
+          .D(w_data_held[bi]),
+          .GATE_N(gate_n_hi),
+          .RESET_B(rst_n),
+          .Q(regs[gi][bi+8])
         );
       end
     end
   endgenerate
 
-  // Read port
-  assign r = regs[r_sel];
+  // Read port: 8:1 register mux, then 2:1 hi/lo byte mux
+  wire [15:0] r_full = regs[r_sel];
+  assign r = r_hi ? r_full[15:8] : r_full[7:0];
 
 endmodule

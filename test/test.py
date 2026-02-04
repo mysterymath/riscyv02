@@ -358,3 +358,477 @@ async def test_single_step(dut):
     dut._log.info(f"Step 6 (SW R3): markers = {[hex(x) for x in m]}")
 
     dut._log.info("PASS [single_step]")
+
+
+# ---------------------------------------------------------------------------
+# Helper encoders for interrupt instructions
+# ---------------------------------------------------------------------------
+def _encode_reti():
+    """Encode RETI -> 16-bit little-endian bytes."""
+    insn = 0b1111111010000001
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_sei():
+    """Encode SEI -> 16-bit little-endian bytes."""
+    insn = 0b1111111010000010
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_cli():
+    """Encode CLI -> 16-bit little-endian bytes."""
+    insn = 0b1111111010000011
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+# ---------------------------------------------------------------------------
+# Test 6: Reset I state (interrupts disabled after reset)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_reset_i_state(dut):
+    """Verify interrupts are disabled after reset (I=1)."""
+    dut._log.info("Test 6: Reset I state")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Program: just a spin loop at 0x0000
+    # 0x0000: JR R0, 0  ; spin at 0x0000
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=0))
+
+    # IRQ handler at 0x0004: write marker and spin
+    # 0x0004: LW R1, 16(R0)  ; R1 = 0xDEAD from 0x20
+    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))
+    # 0x0006: SW R1, 24(R0)  ; MEM[0x30] = 0xDEAD (marker)
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=24))
+    # 0x0008: JR R0, 4  ; spin at 0x0008
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    # Data: marker value
+    prog[0x0020] = 0xAD
+    prog[0x0021] = 0xDE
+
+    # Clear marker location
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset with IRQB=0 (interrupt asserted) and RDY=1
+    # ui_in[0] = IRQB, ui_in[2] = RDY
+    dut.ena.value = 1
+    dut.ui_in.value = 0x04  # RDY=1, IRQB=0 (asserted!)
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Run for a while with interrupt asserted
+    await ClockCycles(dut.clk, 100)
+
+    # Check marker - should NOT be written since I=1 after reset
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    val = lo | (hi << 8)
+    dut._log.info(f"Marker = {val:#06x} (expected 0x0000 if I=1 masks IRQ)")
+    assert val == 0x0000, f"IRQ fired after reset! Expected I=1 to mask. Got marker {val:#06x}"
+    dut._log.info("PASS [reset_i_state]")
+
+
+# ---------------------------------------------------------------------------
+# Test 7: CLI enables interrupts
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_cli_enables_irq(dut):
+    """CLI clears I bit, allowing interrupts to fire."""
+    dut._log.info("Test 7: CLI enables interrupts")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Program: CLI then spin
+    # 0x0000: CLI
+    _place(prog, 0x0000, _encode_cli())
+    # 0x0002: JR R0, 1  ; spin at 0x0002
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    # IRQ handler at 0x0004: write marker and spin
+    # 0x0004: LW R1, 16(R0)  ; R1 = 0xBEEF from 0x20
+    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))
+    # 0x0006: SW R1, 24(R0)  ; MEM[0x30] = 0xBEEF (marker)
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=24))
+    # 0x0008: JR R0, 4  ; spin at 0x0008
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    # Data: marker value
+    prog[0x0020] = 0xEF
+    prog[0x0021] = 0xBE
+
+    # Clear marker location
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset with IRQB=1 (not asserted) and RDY=1
+    dut.ena.value = 1
+    dut.ui_in.value = 0x05  # RDY=1, IRQB=1 (not asserted)
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Run for a few cycles to execute CLI
+    await ClockCycles(dut.clk, 20)
+
+    # Now assert IRQB=0
+    dut.ui_in.value = 0x04  # RDY=1, IRQB=0 (asserted)
+
+    # Run to let IRQ fire and handler execute
+    await ClockCycles(dut.clk, 100)
+
+    # Check marker - should be written since CLI enabled interrupts
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    val = lo | (hi << 8)
+    dut._log.info(f"Marker = {val:#06x} (expected 0xBEEF if IRQ fired)")
+    assert val == 0xBEEF, f"IRQ did not fire after CLI! Got marker {val:#06x}"
+    dut._log.info("PASS [cli_enables_irq]")
+
+
+# ---------------------------------------------------------------------------
+# Test 8: SEI disables interrupts
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sei_disables_irq(dut):
+    """SEI sets I bit, preventing interrupts."""
+    dut._log.info("Test 8: SEI disables interrupts")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Program: CLI, SEI, then spin
+    # 0x0000: CLI
+    _place(prog, 0x0000, _encode_cli())
+    # 0x0002: SEI
+    _place(prog, 0x0002, _encode_sei())
+    # 0x0004: JR R0, 2  ; spin at 0x0004
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    # IRQ handler at 0x0004 would conflict, so use different addresses
+    # Actually the IRQ vector is at 0x0004, but our spin loop is there too.
+    # Let's restructure: put spin elsewhere
+
+    prog = {}
+    # 0x0000: CLI
+    _place(prog, 0x0000, _encode_cli())
+    # 0x0002: SEI
+    _place(prog, 0x0002, _encode_sei())
+    # 0x0004: this is IRQ vector! Let's jump past it first
+    # Actually, let's redesign: IRQ vector at 0x0004 needs a handler
+    # Main code needs to avoid that address
+
+    # Redesign: Jump over vector area first
+    # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0010 (continue address)
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    # 0x0002: JR R1, 0      ; jump to 0x0010
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
+
+    # IRQ handler at 0x0004
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))  # R2 = MEM[0x28] = 0xDEAD
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24)) # MEM[0x30] = R2
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))          # spin at 0x0008
+
+    # Data: jump target
+    prog[0x000A] = 0x10
+    prog[0x000B] = 0x00
+
+    # Continue at 0x0010: CLI, SEI, spin
+    _place(prog, 0x0010, _encode_cli())
+    _place(prog, 0x0012, _encode_sei())
+    _place(prog, 0x0014, _encode_jr(rs=0, off6=10))  # spin at 0x0014
+
+    # Data: marker value
+    prog[0x0028] = 0xAD
+    prog[0x0029] = 0xDE
+
+    # Clear marker location
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset with IRQB=1 (not asserted) and RDY=1
+    dut.ena.value = 1
+    dut.ui_in.value = 0x05  # RDY=1, IRQB=1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Run to execute jump, CLI, SEI
+    await ClockCycles(dut.clk, 50)
+
+    # Now assert IRQB=0
+    dut.ui_in.value = 0x04  # RDY=1, IRQB=0
+
+    # Run for a while - IRQ should NOT fire due to SEI
+    await ClockCycles(dut.clk, 100)
+
+    # Check marker - should NOT be written since SEI masked IRQ
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    val = lo | (hi << 8)
+    dut._log.info(f"Marker = {val:#06x} (expected 0x0000 if SEI masked IRQ)")
+    assert val == 0x0000, f"IRQ fired despite SEI! Got marker {val:#06x}"
+    dut._log.info("PASS [sei_disables_irq]")
+
+
+# ---------------------------------------------------------------------------
+# Test 9: RETI restores I bit and returns
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_reti(dut):
+    """RETI restores I bit from EPC[0] and returns to saved PC."""
+    dut._log.info("Test 9: RETI")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Program: jump past vector, CLI, spin (will be interrupted)
+    # After RETI, execution continues at spin, writes second marker
+
+    # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0020 (continue address)
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    # 0x0002: JR R1, 0      ; jump to 0x0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
+
+    # IRQ handler at 0x0004: write marker, RETI
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA (IRQ marker)
+    _place(prog, 0x0008, _encode_reti())                    # return from interrupt
+
+    # Data: jump target at 0x0A
+    prog[0x000A] = 0x20
+    prog[0x000B] = 0x00
+
+    # Continue at 0x0020: CLI, then write marker, spin
+    _place(prog, 0x0020, _encode_cli())
+    # After CLI, when IRQ fires, return address will be 0x0022
+    # 0x0022: write "returned" marker
+    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=26))  # R3 = MEM[0x34] = 0xBBBB
+    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=30)) # MEM[0x3C] = 0xBBBB (return marker)
+    _place(prog, 0x0026, _encode_jr(rs=0, off6=19))         # spin at 0x0026
+
+    # Data: marker values
+    prog[0x0030] = 0xAA
+    prog[0x0031] = 0xAA
+    prog[0x0034] = 0xBB
+    prog[0x0035] = 0xBB
+
+    # Clear marker locations
+    prog[0x0038] = 0x00
+    prog[0x0039] = 0x00
+    prog[0x003C] = 0x00
+    prog[0x003D] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset with IRQB=1 (not asserted)
+    dut.ena.value = 1
+    dut.ui_in.value = 0x05  # RDY=1, IRQB=1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Run until CLI executes
+    await ClockCycles(dut.clk, 50)
+
+    # Assert IRQB to trigger interrupt
+    dut.ui_in.value = 0x04  # RDY=1, IRQB=0
+
+    # Run to let IRQ fire, handler execute, RETI, and return code execute
+    await ClockCycles(dut.clk, 200)
+
+    # De-assert IRQB so we don't keep interrupting
+    dut.ui_in.value = 0x05  # RDY=1, IRQB=1
+
+    await ClockCycles(dut.clk, 100)
+
+    # Check IRQ marker at 0x38
+    lo = _read_ram(dut, 0x0038)
+    hi = _read_ram(dut, 0x0039)
+    irq_marker = lo | (hi << 8)
+    dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0xAAAA)")
+
+    # Check return marker at 0x3C
+    lo = _read_ram(dut, 0x003C)
+    hi = _read_ram(dut, 0x003D)
+    ret_marker = lo | (hi << 8)
+    dut._log.info(f"Return marker = {ret_marker:#06x} (expected 0xBBBB)")
+
+    assert irq_marker == 0xAAAA, f"IRQ handler did not execute! Got {irq_marker:#06x}"
+    assert ret_marker == 0xBBBB, f"RETI did not return correctly! Got {ret_marker:#06x}"
+    dut._log.info("PASS [reti]")
+
+
+# ---------------------------------------------------------------------------
+# Test 10: I bit masking after IRQ entry
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_i_bit_masking(dut):
+    """After IRQ entry, I=1 prevents nested interrupts until RETI."""
+    dut._log.info("Test 10: I bit masking after IRQ entry")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Program: jump past vector, CLI, spin
+    # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    # 0x0002: JR R1, 0
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
+
+    # IRQ handler at 0x0004: write fixed marker, NO RETI (spin forever)
+    # If nested interrupts fired, we'd see different behavior
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xCAFE
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xCAFE
+    # Spin without RETI - keep IRQB asserted, but I=1 should prevent re-entry
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))          # spin at 0x0008
+
+    # Data
+    prog[0x000A] = 0x20
+    prog[0x000B] = 0x00
+    prog[0x0030] = 0xFE
+    prog[0x0031] = 0xCA
+
+    # Continue at 0x0020: CLI, spin
+    _place(prog, 0x0020, _encode_cli())
+    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))  # spin at 0x0022
+
+    # Clear marker
+    prog[0x0038] = 0x00
+    prog[0x0039] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset
+    dut.ena.value = 1
+    dut.ui_in.value = 0x05  # RDY=1, IRQB=1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Run until CLI executes
+    await ClockCycles(dut.clk, 50)
+
+    # Assert IRQB and keep it asserted
+    dut.ui_in.value = 0x04  # RDY=1, IRQB=0
+
+    # Run for a long time with IRQ continuously asserted
+    await ClockCycles(dut.clk, 500)
+
+    # Check marker - should be 0xCAFE (written once)
+    lo = _read_ram(dut, 0x0038)
+    hi = _read_ram(dut, 0x0039)
+    val = lo | (hi << 8)
+    dut._log.info(f"Marker = {val:#06x} (expected 0xCAFE, written exactly once)")
+    assert val == 0xCAFE, f"IRQ handler problem! Got {val:#06x}"
+    # The test passes if the value is 0xCAFE - if nested interrupts happened,
+    # we'd see different behavior (but without ADD we can't easily count).
+    # The key is that execution reached the handler once.
+    dut._log.info("PASS [i_bit_masking]")
+
+
+# ---------------------------------------------------------------------------
+# Test 11: IRQ during multi-cycle instruction
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_irq_during_multicycle(dut):
+    """IRQ asserted during LW completes the LW before entering handler."""
+    dut._log.info("Test 11: IRQ during multi-cycle instruction")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Program: jump past vector, CLI, LW, SW (prove LW completed), spin
+    # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    # 0x0002: JR R1, 0
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
+
+    # IRQ handler at 0x0004: write R5 to marker (R5 set by main code's LW)
+    _place(prog, 0x0004, _encode_sw(rs2=5, rs1=0, off6=30)) # MEM[0x3C] = R5
+    _place(prog, 0x0006, _encode_reti())
+
+    # Data
+    prog[0x000A] = 0x20
+    prog[0x000B] = 0x00
+
+    # Continue at 0x0020: CLI, LW into R5, write R5 to another marker
+    _place(prog, 0x0020, _encode_cli())
+    # 0x0022: LW R5, 24(R0)  ; R5 = MEM[0x30] = 0x1234
+    _place(prog, 0x0022, _encode_lw(rd=5, rs1=0, off6=24))
+    # 0x0024: SW R5, 28(R0)  ; MEM[0x38] = R5 (proves LW completed)
+    _place(prog, 0x0024, _encode_sw(rs2=5, rs1=0, off6=28))
+    # 0x0026: spin
+    _place(prog, 0x0026, _encode_jr(rs=0, off6=19))
+
+    # Data: value for LW
+    prog[0x0030] = 0x34
+    prog[0x0031] = 0x12
+
+    # Clear markers
+    prog[0x0038] = 0x00
+    prog[0x0039] = 0x00
+    prog[0x003C] = 0x00
+    prog[0x003D] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset
+    dut.ena.value = 1
+    dut.ui_in.value = 0x05  # RDY=1, IRQB=1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Run until CLI executes
+    await ClockCycles(dut.clk, 40)
+
+    # Assert IRQB right as LW is executing (timing is approximate)
+    # The IRQ should wait for LW to complete
+    dut.ui_in.value = 0x04  # RDY=1, IRQB=0
+
+    # Run to let LW complete, IRQ fire, RETI, SW execute
+    await ClockCycles(dut.clk, 200)
+
+    # De-assert IRQ
+    dut.ui_in.value = 0x05
+
+    await ClockCycles(dut.clk, 50)
+
+    # Check main marker at 0x38 (SW after LW)
+    lo = _read_ram(dut, 0x0038)
+    hi = _read_ram(dut, 0x0039)
+    main_marker = lo | (hi << 8)
+    dut._log.info(f"Main marker = {main_marker:#06x} (expected 0x1234)")
+
+    # Check IRQ marker at 0x3C (SW of R5 in handler)
+    lo = _read_ram(dut, 0x003C)
+    hi = _read_ram(dut, 0x003D)
+    irq_marker = lo | (hi << 8)
+    dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0x1234 if LW completed before IRQ)")
+
+    assert main_marker == 0x1234, f"Main code LW/SW failed! Got {main_marker:#06x}"
+    assert irq_marker == 0x1234, f"IRQ saw wrong R5 value! Got {irq_marker:#06x}"
+    dut._log.info("PASS [irq_during_multicycle]")

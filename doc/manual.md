@@ -4,20 +4,20 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor currently implements a minimal Turing-complete instruction subset: **LW**, **SW**, and **JR**. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor currently implements: **LW**, **SW**, **JR**, **RETI**, **SEI**, and **CLI**. IRQ interrupt handling is supported. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
-Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile.
+Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The clock speed is pinned to match the 6502 (~62 MHz), simulating 1970s DRAM constraints where raw clock speed improvements don't matter. The comparison focuses on IPC and transistor efficiency.
 
 | Metric | RISCY-V02 | Arlet 6502 |
 |---|---|---|
-| Best clock period | 12 ns | 16 ns |
-| fMax (all corners) | 83.3 MHz | 62.5 MHz |
-| Utilization | 38.2% | 48.4% |
-| Transistor count (synth) | 10,236 | 13,082 |
+| Clock period | 17 ns | 16 ns |
+| fMax (slow corner) | 58.8 MHz | 62.5 MHz |
+| Utilization | 41.1% | 48.4% |
+| Transistor count (synth) | 10,672 | 13,082 |
 
-RISCY-V02 is 33% faster and uses ~23% fewer transistors with room to grow.
+RISCY-V02 uses ~18% fewer transistors with room to grow as more instructions are added.
 
 ## Bus Protocol
 
@@ -34,6 +34,7 @@ RISCY-V02 uses the same TT mux/demux bus protocol as the Arlet 6502 wrapper. The
 - `uio[7:0]` = D[7:0] (bidirectional; output during writes, input during reads)
 
 **Control inputs:**
+- `ui_in[0]` = IRQB (active-low interrupt request)
 - `ui_in[2]` = RDY (active-high ready signal)
 
 ## Architecture
@@ -46,7 +47,38 @@ RISCY-V02 uses the same TT mux/demux bus protocol as the Arlet 6502 wrapper. The
 
 ### Reset
 
-On reset, PC is set to $0000 and execution begins. There is no vector fetch; code is placed directly at address $0000.
+On reset:
+- PC is set to $0000 and execution begins
+- I (interrupt disable) is set to 1 — interrupts are disabled
+- All registers are cleared to zero
+
+There is no vector fetch; code is placed directly at address $0000. Software must execute CLI to enable interrupts.
+
+### Interrupts
+
+RISCY-V02 supports maskable IRQ interrupts via the IRQB input (`ui_in[0]`).
+
+**Interrupt entry (when IRQB=0 and I=0):**
+1. Complete the current instruction
+2. Save EPC = (next_PC | I) — return address with I bit in bit 0
+3. Set I = 1 — disable further interrupts
+4. Jump to $0004 (IRQ vector)
+
+**Interrupt return (RETI instruction):**
+1. Restore I = EPC[0]
+2. Jump to EPC & $FFFE
+
+The IRQ vector at $0004 typically contains a trampoline (LW + JR) to reach the actual handler:
+
+```
+$0000: <reset code>
+$0002: ...
+$0004: LW t0, 5(R0)    ; Load handler address from $000A
+$0006: JR t0, 0        ; Jump to handler
+$0008: <handler_addr>  ; 16-bit address of IRQ handler
+```
+
+**Interrupt latency:** 2 cycles from instruction completion to first handler instruction fetch.
 
 ### Register Naming Convention
 
@@ -101,9 +133,45 @@ Unconditional jump to the address computed from a register plus a scaled signed 
 
 **Cycle count:** 4 (2 fetch + 2 address computation in execute)
 
+### RETI — Return from Interrupt
+
+```
+[1111111010000001]
+```
+
+`I = EPC[0]; PC = EPC & $FFFE`
+
+Restores the interrupt enable state from the saved EPC and returns to the interrupted code. The I bit is restored from EPC bit 0, and PC is set to EPC with bit 0 cleared (ensuring word alignment).
+
+**Cycle count:** 2 (fetch + redirect)
+
+### SEI — Set Interrupt Disable
+
+```
+[1111111010000010]
+```
+
+`I = 1`
+
+Disables interrupts by setting the I bit. While I=1, IRQB assertions are ignored.
+
+**Cycle count:** 2
+
+### CLI — Clear Interrupt Disable
+
+```
+[1111111010000011]
+```
+
+`I = 0`
+
+Enables interrupts by clearing the I bit. After CLI, a pending IRQ (IRQB=0) will be taken at the next instruction boundary.
+
+**Cycle count:** 2
+
 ### All Other Opcodes
 
-Any instruction not matching LW, SW, or JR is executed as a NOP: the PC advances past the instruction in 2 cycles with no other effect.
+Any instruction not matching the above is executed as a NOP: the PC advances past the instruction in 2 cycles with no other effect.
 
 ## Instruction Encoding Reference
 
@@ -117,6 +185,12 @@ Bits 15..9   Instruction   Format
 ──────────────────────────────────────────────
 1011100      JR            [off6:6][rs:3]
 
+Full 16-bit  Instruction
+──────────────────────────────────────────────
+1111111010000001  RETI
+1111111010000010  SEI
+1111111010000011  CLI
+
 All other    NOP           (ignored)
 ```
 
@@ -128,10 +202,12 @@ The processor uses a 2-stage pipeline (Fetch and Execute) that overlap where pos
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| Most instructions | 2 | Base cost (fetch only) |
+| NOP/SEI/CLI | 2 | Base cost (fetch only) |
 | LW | 5 | 2 fetch + 2 address + 1 byte read |
 | SW | 5 | 2 fetch + 2 address + 1 byte written |
 | JR | 4 | 2 fetch + 2 address computation |
+| RETI | 2 | Fetch + redirect |
+| IRQ entry | 2 | Redirect at instruction boundary |
 
 **Throughput note:** In pipelined execution, LW/SW achieve 4-cycle throughput because address computation overlaps with the next instruction's fetch. JR flushes the speculative fetch and redirects to the computed target.
 

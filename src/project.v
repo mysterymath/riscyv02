@@ -105,10 +105,14 @@ module tt_um_riscyv02 (
     .ab         (fetch_ab)
   );
 
+  // IRQB input: active-low interrupt request
+  wire irqb = ui_in[0];
+
   riscyv02_execute u_execute (
     .clk        (cpu_clk),
     .rst_n      (rst_n),
     .uio_in     (uio_in),
+    .irqb       (irqb),
     .ir_valid   (ir_valid),
     .fetch_ir   (fetch_ir),
     .bus_active (exec_bus_active),
@@ -150,6 +154,6 @@ module tt_um_riscyv02 (
   assign uio_oe  = mux_sel ? (RWB ? 8'h00 : 8'hFF) : 8'hFF;
 
   // Unused
-  wire _unused = &{ena, ui_in[7:3], ui_in[1:0], 1'b0};
+  wire _unused = &{ena, ui_in[7:3], ui_in[1], 1'b0};
 
 endmodule

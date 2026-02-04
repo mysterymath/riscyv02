@@ -40,8 +40,6 @@ module tb ();
     $dumpvars(0, uio_out);
     $dumpvars(0, uio_oe);
     $dumpvars(0, addr);
-    $dumpvars(0, trap_addr);
-    $dumpvars(0, trap_valid);
     #1;
   end
 
@@ -99,36 +97,6 @@ module tb ();
   always @(negedge clk) begin
     if (rst_n && !uo_out[0])
       ram[addr] <= uio_out;
-  end
-
-  // -----------------------------------------------------------------------
-  // Trap detector: flags when the address bus is stuck for >40 cycles.
-  // Used by cocotb to detect spin loops without polling memory.
-  // -----------------------------------------------------------------------
-  reg [15:0] trap_addr;
-  reg        trap_valid;
-  reg [15:0] prev_ab;
-  reg [7:0]  stuck_cnt;
-
-  always @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      trap_addr  <= 16'h0000;
-      trap_valid <= 1'b0;
-      prev_ab    <= 16'hFFFF;
-      stuck_cnt  <= 8'd0;
-    end else begin
-      if ({uio_out, uo_out} == prev_ab) begin
-        if (stuck_cnt < 8'd255)
-          stuck_cnt <= stuck_cnt + 8'd1;
-        if (stuck_cnt == 8'd41) begin
-          trap_addr  <= prev_ab;
-          trap_valid <= 1'b1;
-        end
-      end else begin
-        prev_ab   <= {uio_out, uo_out};
-        stuck_cnt <= 8'd0;
-      end
-    end
   end
 
 endmodule

@@ -42,8 +42,10 @@ module riscyv02_fetch (
   assign ab = (state == F_HI) ? {addr[15:1], 1'b1} : addr;
 
   // Instruction output: combinational in F_HI, registered in F_HOLD
+  // Note: ir_valid doesn't depend on redirect to avoid combinational loops
+  // with IRQ/RETI detection. The redirect is handled in the sequential block.
   assign ir = (state == F_HOLD) ? ir_r : {uio_in, ir_r[7:0]};
-  assign ir_valid = ((state == F_HI) && bus_free && !redirect) || (state == F_HOLD);
+  assign ir_valid = ((state == F_HI) && bus_free) || (state == F_HOLD);
 
   always @(negedge clk or negedge rst_n) begin
     if (!rst_n) begin

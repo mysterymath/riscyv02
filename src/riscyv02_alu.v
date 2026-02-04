@@ -11,11 +11,11 @@ module riscyv02_alu (
     input  wire [7:0] a,
     input  wire [7:0] b,
     input  wire       start,   // 1 = new op (ci=0), 0 = continue (ci=latched carry)
-    output wire [7:0] result,
-    output wire       co
+    output wire [7:0] result
 );
   reg carry;
   wire ci = start ? 1'b0 : carry;
+  wire co;
   assign {co, result} = a + b + ci;
 
   always @(negedge clk or negedge rst_n)
