@@ -60,7 +60,7 @@ module riscyv02_execute (
   reg        i_bit;    // Interrupt disable flag (0=enabled, 1=disabled)
 
   // -------------------------------------------------------------------------
-  // Decoded instruction state (latched at dispatch)
+  // Decoded instruction state (latched at ir_accept)
   // -------------------------------------------------------------------------
   reg        is_store_r;      // 1 = SW, 0 = LW or JR
   reg        is_jr_r;         // 1 = JR
@@ -122,17 +122,14 @@ module riscyv02_execute (
   //
   // At fsm_ready, two things can happen:
   //   - take_irq: IRQ entry (doesn't need ir_valid; redirects fetch to handler)
-  //   - dispatch: send instruction to FSM (needs ir_valid; consumes from fetch)
+  //   - ir_accept: accept instruction from fetch (needs ir_valid)
   //
   // IRQ takes priority. The instruction in fetch (if any) is from the
-  // interrupted code path, not the handler, so we can't dispatch it.
+  // interrupted code path, not the handler, so we can't accept it.
   // -------------------------------------------------------------------------
   wire irq_pending = !irqb && !i_bit;
   wire take_irq    = fsm_ready && irq_pending;
-  wire dispatch    = fsm_ready && ir_valid && !take_irq;
-
-  // Output to fetch: instruction consumed (fetch advances to next)
-  assign ir_accept = dispatch;
+  assign ir_accept = fsm_ready && ir_valid && !take_irq;
 
   // -------------------------------------------------------------------------
   // ALU
@@ -238,13 +235,13 @@ module riscyv02_execute (
       if (take_irq) begin
         epc   <= pc | {15'b0, i_bit};  // Save return address with I bit
         i_bit <= 1'b1;                       // Disable further interrupts
-        pc <= 16'h0004;                 // Set up for vector (dispatch will commit)
+        pc <= 16'h0004;                 // Set up for vector (ir_accept will commit)
         state <= E_IDLE;                     // Return to idle (important if in E_MEM_HI)
       end else begin
         // ---------------------------------------------------------------------
-        // Instruction dispatch: latch decoded fields, advance PC
+        // Instruction ir_accept: latch decoded fields, advance PC
         // ---------------------------------------------------------------------
-        if (dispatch) begin
+        if (ir_accept) begin
           // Latch instruction type and operands
           is_store_r      <= is_sw;
           is_jr_r         <= is_jr;
@@ -264,7 +261,7 @@ module riscyv02_execute (
         // ---------------------------------------------------------------------
         case (state)
           E_IDLE:
-            if (dispatch) state <= is_multicycle ? E_ADDR_LO : E_EXEC;
+            if (ir_accept) state <= is_multicycle ? E_ADDR_LO : E_EXEC;
 
           E_EXEC: begin
             // Apply instruction effects
@@ -305,7 +302,7 @@ module riscyv02_execute (
             // LW: rd_hi written via w_we during this cycle
             // SW: rs2_hi output via dout during this cycle
             // Can pipeline: accept next instruction directly
-            if (dispatch)
+            if (ir_accept)
               state <= is_multicycle ? E_ADDR_LO : E_EXEC;
             else
               state <= E_IDLE;
