@@ -20,7 +20,7 @@ module riscyv02_fetch (
     input  wire        redirect,
     input  wire [15:0] redirect_pc,
     output reg         ir_valid,
-    output reg  [15:0] new_ir,
+    output reg  [15:0] ir,
     output wire [15:0] ab
 );
 
@@ -28,11 +28,8 @@ module riscyv02_fetch (
   localparam F_HI = 1'd1;
 
   reg        state;
-  reg [7:0]  ir_lo;
   reg [15:0] addr;
-
-  // Combinational decode of the instruction being assembled
-  wire [15:0] fetched_ir = {uio_in, ir_lo};
+  reg [7:0]  ir_lo;  // Low byte staging register
 
   wire [15:0] seq_pc = {addr[15:1] + 15'd1, 1'b0};
 
@@ -42,9 +39,9 @@ module riscyv02_fetch (
   always @(negedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state    <= F_LO;
-      ir_lo    <= 8'h00;
       ir_valid <= 1'b0;
-      new_ir   <= 16'h0000;
+      ir       <= 16'h0000;
+      ir_lo    <= 8'h00;
       addr     <= 16'h0000;
     end else if (redirect) begin
       // Control flow redirect from execute: reset to new PC
@@ -62,7 +59,7 @@ module riscyv02_fetch (
         end
 
         F_HI: if (bus_free) begin
-          new_ir   <= fetched_ir;
+          ir       <= {uio_in, ir_lo};
           ir_valid <= 1'b1;
           addr     <= seq_pc;
           state    <= F_LO;
