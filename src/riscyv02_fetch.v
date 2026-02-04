@@ -10,17 +10,20 @@
 //
 // Always speculates sequential PC.  When execute resolves control flow
 // (JR, branches), it signals redirect to reset fetch to the correct PC.
+//
+// The ir output is combinational: {uio_in, ir_lo} during F_HI.
+// ir_valid pulses for one cycle when a complete instruction is available.
+// Execute must capture ir immediately when ir_valid=1.
 // =========================================================================
 module riscyv02_fetch (
     input  wire        clk,
     input  wire        rst_n,
     input  wire [7:0]  uio_in,
     input  wire        bus_free,
-    input  wire        ir_accept,
     input  wire        redirect,
     input  wire [15:0] redirect_pc,
-    output reg         ir_valid,
-    output reg  [15:0] ir,
+    output wire        ir_valid,
+    output wire [15:0] ir,
     output wire [15:0] ab
 );
 
@@ -36,22 +39,20 @@ module riscyv02_fetch (
   // Bus address
   assign ab = (state == F_HI) ? {addr[15:1], 1'b1} : addr;
 
+  // Instruction output: combinational, valid only when ir_valid=1
+  assign ir = {uio_in, ir_lo};
+  assign ir_valid = (state == F_HI) && bus_free && !redirect;
+
   always @(negedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state    <= F_LO;
-      ir_valid <= 1'b0;
-      ir       <= 16'h0000;
-      ir_lo    <= 8'h00;
-      addr     <= 16'h0000;
+      state <= F_LO;
+      ir_lo <= 8'h00;
+      addr  <= 16'h0000;
     end else if (redirect) begin
       // Control flow redirect from execute: reset to new PC
-      addr     <= redirect_pc;
-      ir_valid <= 1'b0;
-      state    <= F_LO;
+      addr  <= redirect_pc;
+      state <= F_LO;
     end else begin
-      if (ir_accept)
-        ir_valid <= 1'b0;
-
       case (state)
         F_LO: if (bus_free) begin
           ir_lo <= uio_in;
@@ -59,10 +60,8 @@ module riscyv02_fetch (
         end
 
         F_HI: if (bus_free) begin
-          ir       <= {uio_in, ir_lo};
-          ir_valid <= 1'b1;
-          addr     <= seq_pc;
-          state    <= F_LO;
+          addr  <= seq_pc;
+          state <= F_LO;
         end
 
         default: state <= F_LO;

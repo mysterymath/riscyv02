@@ -11,6 +11,11 @@
 // Handles LW, SW, and JR instructions.  JR computes its target using the
 // ALU and signals a redirect to fetch.  The register file lives here since
 // only execute needs register access.
+//
+// Pending instruction buffer: when fetch presents an instruction (ir_valid)
+// and execute is not ready, the instruction is captured into pending_ir.
+// When execute becomes ready, it dispatches from pending_ir.  If execute
+// is already ready when fetch presents, it dispatches directly (bypass).
 // =========================================================================
 module riscyv02_execute (
     input  wire        clk,
@@ -43,6 +48,12 @@ module riscyv02_execute (
   reg [15:0] store_data;  // Holds rs/rs1 in E_ADDR_LO, then rs2 in E_ADDR_HI (for store)
 
   // -------------------------------------------------------------------------
+  // Pending instruction buffer
+  // -------------------------------------------------------------------------
+  reg [15:0] pending_ir;
+  reg        pending_valid;
+
+  // -------------------------------------------------------------------------
   // Register file (internal to execute)
   // -------------------------------------------------------------------------
   wire [2:0]  r_sel;
@@ -69,8 +80,29 @@ module riscyv02_execute (
   assign bus_active = (state == E_LOAD_LO  || state == E_LOAD_HI ||
                        state == E_STORE_LO || state == E_STORE_HI);
 
-  // Ready states consume ir_valid (even for NOPs / unrecognised instructions).
-  assign ir_accept = ready && ir_valid;
+  // -------------------------------------------------------------------------
+  // Dispatch logic with pending buffer bypass
+  // -------------------------------------------------------------------------
+  // Dispatch source: pending buffer if valid, else direct from fetch
+  wire [15:0] dispatch_ir = pending_valid ? pending_ir : new_ir;
+  wire        dispatch_available = pending_valid || ir_valid;
+
+  // Decode on dispatch_ir (for dispatch decision)
+  wire is_lw_disp = (dispatch_ir[15:12] == 4'b1000);
+  wire is_sw_disp = (dispatch_ir[15:12] == 4'b1010);
+  wire is_jr_disp = (dispatch_ir[15:9] == 7'b1011100);
+
+  // Dispatch: recognised instruction that execute will act on
+  wire dispatch_valid = ready && dispatch_available && (is_lw_disp || is_sw_disp || is_jr_disp);
+
+  // NOP: instruction available but not recognized
+  wire dispatch_nop = ready && dispatch_available && !(is_lw_disp || is_sw_disp || is_jr_disp);
+
+  // Capture: fetch has instruction, buffer empty, not ready (can't dispatch now)
+  wire capture = ir_valid && !pending_valid && !ready;
+
+  // ir_accept: we consumed an instruction this cycle (for SYNC)
+  assign ir_accept = dispatch_valid || dispatch_nop;
 
   // -------------------------------------------------------------------------
   // ALU
@@ -97,20 +129,11 @@ module riscyv02_execute (
   assign alu_b = (state == E_ADDR_LO) ? {IR[8], IR[8:3], 1'b0} : {8{IR[8]}};
 
   // -------------------------------------------------------------------------
-  // Instruction decode
+  // Instruction decode on latched IR (for execution)
   // -------------------------------------------------------------------------
-  // Decode on new_ir (for dispatch decision)
-  wire is_lw = (new_ir[15:12] == 4'b1000);
-  wire is_sw = (new_ir[15:12] == 4'b1010);
-  wire is_jr = (new_ir[15:9] == 7'b1011100);
-
-  // Decode on latched IR (for execution)
   wire is_lw_ir = (IR[15:12] == 4'b1000);
   wire is_sw_ir = (IR[15:12] == 4'b1010);
   wire is_jr_ir = (IR[15:9] == 7'b1011100);
-
-  // Dispatch: recognised instruction that execute will act on.
-  wire dispatch_valid = ir_valid && (is_lw || is_sw || is_jr);
 
   // -------------------------------------------------------------------------
   // Register file interface
@@ -178,12 +201,23 @@ module riscyv02_execute (
       MAR          <= 16'h0000;
       mem_lo       <= 8'h00;
       store_data   <= 16'h0000;
+      pending_ir   <= 16'h0000;
+      pending_valid <= 1'b0;
     end else begin
+      // Capture instruction into pending buffer when not ready
+      if (capture) begin
+        pending_ir    <= new_ir;
+        pending_valid <= 1'b1;
+      end
+
       case (state)
         E_IDLE: begin
           if (dispatch_valid) begin
-            IR    <= new_ir;
-            state <= E_ADDR_LO;
+            IR            <= dispatch_ir;
+            pending_valid <= 1'b0;
+            state         <= E_ADDR_LO;
+          end else if (dispatch_nop) begin
+            pending_valid <= 1'b0;
           end
         end
 
@@ -201,9 +235,11 @@ module riscyv02_execute (
           if (is_jr_ir) begin
             // JR: done, redirect fires this cycle. Can dispatch next.
             if (dispatch_valid) begin
-              IR    <= new_ir;
-              state <= E_ADDR_LO;
+              IR            <= dispatch_ir;
+              pending_valid <= 1'b0;
+              state         <= E_ADDR_LO;
             end else begin
+              if (dispatch_nop) pending_valid <= 1'b0;
               state <= E_IDLE;
             end
           end else if (is_sw_ir) begin
@@ -223,9 +259,11 @@ module riscyv02_execute (
 
         E_LOAD_HI: begin
           if (dispatch_valid) begin
-            IR    <= new_ir;
-            state <= E_ADDR_LO;
+            IR            <= dispatch_ir;
+            pending_valid <= 1'b0;
+            state         <= E_ADDR_LO;
           end else begin
+            if (dispatch_nop) pending_valid <= 1'b0;
             state <= E_IDLE;
           end
         end
@@ -236,9 +274,11 @@ module riscyv02_execute (
 
         E_STORE_HI: begin
           if (dispatch_valid) begin
-            IR    <= new_ir;
-            state <= E_ADDR_LO;
+            IR            <= dispatch_ir;
+            pending_valid <= 1'b0;
+            state         <= E_ADDR_LO;
           end else begin
+            if (dispatch_nop) pending_valid <= 1'b0;
             state <= E_IDLE;
           end
         end
