@@ -109,7 +109,7 @@ module tt_um_riscyv02 (
     .rst_n      (rst_n),
     .uio_in     (uio_in),
     .ir_valid   (ir_valid),
-    .new_ir     (fetch_ir),
+    .fetch_ir   (fetch_ir),
     .bus_active (exec_bus_active),
     .ab         (exec_ab),
     .dout       (exec_dout),

@@ -22,7 +22,7 @@ module riscyv02_execute (
     input  wire        rst_n,
     input  wire [7:0]  uio_in,
     input  wire        ir_valid,
-    input  wire [15:0] new_ir,
+    input  wire [15:0] fetch_ir,
     output wire        bus_active,
     output reg  [15:0] ab,
     output reg  [7:0]  dout,
@@ -84,7 +84,7 @@ module riscyv02_execute (
   // Dispatch logic with pending buffer bypass
   // -------------------------------------------------------------------------
   // Dispatch source: pending buffer if valid, else direct from fetch
-  wire [15:0] dispatch_ir = pending_valid ? pending_ir : new_ir;
+  wire [15:0] dispatch_ir = pending_valid ? pending_ir : fetch_ir;
   wire        dispatch_available = pending_valid || ir_valid;
 
   // Decode on dispatch_ir (for dispatch decision)
@@ -206,7 +206,7 @@ module riscyv02_execute (
     end else begin
       // Capture instruction into pending buffer when not ready
       if (capture) begin
-        pending_ir    <= new_ir;
+        pending_ir    <= fetch_ir;
         pending_valid <= 1'b1;
       end
 
