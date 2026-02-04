@@ -60,7 +60,7 @@ module riscyv02_execute (
   reg        i_bit;    // Interrupt disable flag (0=enabled, 1=disabled)
 
   // -------------------------------------------------------------------------
-  // Decoded instruction state (latched at retire)
+  // Decoded instruction state (latched at dispatch)
   // -------------------------------------------------------------------------
   reg        is_store_r;      // 1 = SW, 0 = LW or JR
   reg        is_jr_r;         // 1 = JR
@@ -120,21 +120,19 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Instruction boundary control flow
   //
-  // Hierarchy:
-  //   at_boundary: FSM ready and instruction available (something CAN happen)
-  //     ├─ take_irq: IRQ hijacks this boundary (instruction NOT consumed)
-  //     └─ retire: normal instruction retirement (fetch advances, enter E_EXEC)
+  // At fsm_ready, two things can happen:
+  //   - take_irq: IRQ entry (doesn't need ir_valid; redirects fetch to handler)
+  //   - dispatch: send instruction to FSM (needs ir_valid; consumes from fetch)
   //
-  // All instructions enter the FSM via E_EXEC. Instruction-specific effects
-  // happen in E_EXEC (for 2-cycle) or later states (for multi-cycle).
+  // IRQ takes priority. The instruction in fetch (if any) is from the
+  // interrupted code path, not the handler, so we can't dispatch it.
   // -------------------------------------------------------------------------
-  wire at_boundary = fsm_ready && ir_valid;
   wire irq_pending = !irqb && !i_bit;
-  wire take_irq    = at_boundary && irq_pending;
-  wire retire      = at_boundary && !take_irq;
+  wire take_irq    = fsm_ready && irq_pending;
+  wire dispatch    = fsm_ready && ir_valid && !take_irq;
 
   // Output to fetch: instruction consumed (fetch advances to next)
-  assign ir_accept = retire;
+  assign ir_accept = dispatch;
 
   // -------------------------------------------------------------------------
   // ALU
@@ -240,13 +238,13 @@ module riscyv02_execute (
       if (take_irq) begin
         epc   <= pc | {15'b0, i_bit};  // Save return address with I bit
         i_bit <= 1'b1;                       // Disable further interrupts
-        pc <= 16'h0004;                 // Set up for vector (retire will commit)
+        pc <= 16'h0004;                 // Set up for vector (dispatch will commit)
         state <= E_IDLE;                     // Return to idle (important if in E_MEM_HI)
       end else begin
         // ---------------------------------------------------------------------
-        // Instruction retirement: latch instruction, advance PC, enter E_EXEC
+        // Instruction dispatch: latch decoded fields, advance PC
         // ---------------------------------------------------------------------
-        if (retire) begin
+        if (dispatch) begin
           // Latch instruction type and operands
           is_store_r      <= is_sw;
           is_jr_r         <= is_jr;
@@ -266,7 +264,7 @@ module riscyv02_execute (
         // ---------------------------------------------------------------------
         case (state)
           E_IDLE:
-            if (retire) state <= is_multicycle ? E_ADDR_LO : E_EXEC;
+            if (dispatch) state <= is_multicycle ? E_ADDR_LO : E_EXEC;
 
           E_EXEC: begin
             // Apply instruction effects
@@ -307,7 +305,7 @@ module riscyv02_execute (
             // LW: rd_hi written via w_we during this cycle
             // SW: rs2_hi output via dout during this cycle
             // Can pipeline: accept next instruction directly
-            if (retire)
+            if (dispatch)
               state <= is_multicycle ? E_ADDR_LO : E_EXEC;
             else
               state <= E_IDLE;
