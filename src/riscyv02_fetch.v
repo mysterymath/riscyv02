@@ -16,7 +16,6 @@ module riscyv02_fetch (
     input  wire        rst_n,
     input  wire [7:0]  uio_in,
     input  wire        bus_free,
-    input  wire        exec_busy,
     input  wire        ir_accept,
     input  wire        redirect,
     input  wire [15:0] redirect_pc,
@@ -62,7 +61,7 @@ module riscyv02_fetch (
           state <= F_HI;
         end
 
-        F_HI: if (bus_free && !exec_busy) begin
+        F_HI: if (bus_free) begin
           new_ir   <= fetched_ir;
           ir_valid <= 1'b1;
           addr     <= seq_pc;

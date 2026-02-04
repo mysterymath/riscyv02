@@ -18,7 +18,6 @@ module riscyv02_execute (
     input  wire [7:0]  uio_in,
     input  wire        ir_valid,
     input  wire [15:0] new_ir,
-    output wire        busy,
     output wire        bus_active,
     output reg  [15:0] ab,
     output reg  [7:0]  dout,
@@ -67,7 +66,6 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Ready states can accept a new dispatch.
   wire ready = (state == E_IDLE) || (state == E_LOAD_HI) || (state == E_STORE_HI);
-  assign busy       = bus_active;
   assign bus_active = (state == E_LOAD_LO  || state == E_LOAD_HI ||
                        state == E_STORE_LO || state == E_STORE_HI);
 

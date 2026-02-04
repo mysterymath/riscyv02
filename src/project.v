@@ -81,7 +81,6 @@ module tt_um_riscyv02 (
   wire [15:0] new_ir;
   wire [15:0] fetch_ab;
 
-  wire        exec_busy;
   wire        exec_bus_active;
   wire        exec_ir_accept;
   wire [15:0] exec_ab;
@@ -98,7 +97,6 @@ module tt_um_riscyv02 (
     .rst_n      (rst_n),
     .uio_in     (uio_in),
     .bus_free   (!exec_bus_active),
-    .exec_busy  (exec_busy),
     .ir_accept  (exec_ir_accept),
     .redirect   (redirect),
     .redirect_pc(redirect_pc),
@@ -113,7 +111,6 @@ module tt_um_riscyv02 (
     .uio_in     (uio_in),
     .ir_valid   (ir_valid),
     .new_ir     (new_ir),
-    .busy       (exec_busy),
     .bus_active (exec_bus_active),
     .ab         (exec_ab),
     .dout       (exec_dout),
