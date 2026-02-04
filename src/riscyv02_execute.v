@@ -12,10 +12,9 @@
 // ALU and signals a redirect to fetch.  The register file lives here since
 // only execute needs register access.
 //
-// Active instruction state is stored in decoded form: control signals
-// (is_store, is_jr) plus extracted fields (base register, offset, dest/src).
-// This makes behavioral sharing explicit — LW and SW share E_MEM_LO/HI
-// states, differing only in the is_store_r control signal.
+// Active instruction state is stored in decoded form: a 3-bit opcode
+// plus extracted fields (base register, offset, dest/src). LW and SW
+// share E_MEM_LO/HI states, differing only in the opcode comparison.
 //
 // Instruction holding is done by fetch: fetch presents ir_valid and holds
 // the instruction stable until execute asserts ir_accept.  Execute decodes
@@ -62,12 +61,16 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Decoded instruction state (latched at ir_accept)
   // -------------------------------------------------------------------------
-  reg        is_store_r;      // 1 = SW, 0 = LW or JR
-  reg        is_jr_r;         // 1 = JR
-  reg        is_sei_r;        // 1 = SEI
-  reg        is_cli_r;        // 1 = CLI
-  reg        is_reti_r;       // 1 = RETI
-  reg        is_multicycle_r; // 1 = LW/SW/JR (needs address computation)
+  // 3-bit opcode encoding (saves DFFs vs one-hot)
+  localparam OP_NOP  = 3'd0;
+  localparam OP_SEI  = 3'd1;
+  localparam OP_CLI  = 3'd2;
+  localparam OP_RETI = 3'd3;
+  localparam OP_LW   = 3'd4;
+  localparam OP_SW   = 3'd5;
+  localparam OP_JR   = 3'd6;
+
+  reg [2:0]  op_r;            // Instruction opcode
   reg [2:0]  base_sel_r;      // Base register selector
   reg [5:0]  off6_r;          // 6-bit offset
   reg [2:0]  rd_rs2_sel_r;    // Destination (LW) or source (SW)
@@ -169,7 +172,7 @@ module riscyv02_execute (
   assign r_hi = (state == E_ADDR_HI) || (state == E_MEM_HI);
 
   // Write port: fires in E_MEM_LO and E_MEM_HI for loads
-  assign w_we   = bus_active && !is_store_r;
+  assign w_we   = bus_active && (op_r != OP_SW);
   assign w_sel  = rd_rs2_sel_r;
   assign w_hi   = (state == E_MEM_HI);
   assign w_data = uio_in;
@@ -177,8 +180,8 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Redirect interface (JR, RETI, IRQ entry)
   // -------------------------------------------------------------------------
-  wire jr_redirect   = (state == E_ADDR_HI) && is_jr_r;
-  wire reti_redirect = (state == E_EXEC) && is_reti_r;
+  wire jr_redirect   = (state == E_ADDR_HI) && (op_r == OP_JR);
+  wire reti_redirect = (state == E_EXEC) && (op_r == OP_RETI);
 
   assign redirect    = jr_redirect || reti_redirect || take_irq;
   assign redirect_pc = take_irq     ? 16'h0004 :
@@ -196,12 +199,12 @@ module riscyv02_execute (
       E_MEM_LO: begin
         ab   = MAR;
         dout = r;  // rs2_lo direct from regfile
-        rwb  = !is_store_r;
+        rwb  = (op_r != OP_SW);
       end
       E_MEM_HI: begin
         ab   = {MAR[15:1], 1'b1};
         dout = r;  // rs2_hi direct from regfile
-        rwb  = !is_store_r;
+        rwb  = (op_r != OP_SW);
       end
       default: ;
     endcase
@@ -215,12 +218,7 @@ module riscyv02_execute (
       state            <= E_IDLE;
       MAR              <= 16'h0000;
       // Decoded instruction state
-      is_store_r       <= 1'b0;
-      is_jr_r          <= 1'b0;
-      is_sei_r         <= 1'b0;
-      is_cli_r         <= 1'b0;
-      is_reti_r        <= 1'b0;
-      is_multicycle_r  <= 1'b0;
+      op_r             <= OP_NOP;
       base_sel_r       <= 3'b000;
       off6_r           <= 6'b000000;
       rd_rs2_sel_r     <= 3'b000;
@@ -242,16 +240,16 @@ module riscyv02_execute (
         // Instruction ir_accept: latch decoded fields, advance PC
         // ---------------------------------------------------------------------
         if (ir_accept) begin
-          // Latch instruction type and operands
-          is_store_r      <= is_sw;
-          is_jr_r         <= is_jr;
-          is_sei_r        <= is_sei;
-          is_cli_r        <= is_cli;
-          is_reti_r       <= is_reti;
-          is_multicycle_r <= is_multicycle;
-          base_sel_r      <= ir_base_sel;
-          off6_r          <= ir_off6;
-          rd_rs2_sel_r    <= ir_rd_rs2_sel;
+          // Latch instruction opcode and operands
+          op_r         <= is_sw   ? OP_SW   :
+                          is_lw   ? OP_LW   :
+                          is_jr   ? OP_JR   :
+                          is_reti ? OP_RETI :
+                          is_sei  ? OP_SEI  :
+                          is_cli  ? OP_CLI  : OP_NOP;
+          base_sel_r   <= ir_base_sel;
+          off6_r       <= ir_off6;
+          rd_rs2_sel_r <= ir_rd_rs2_sel;
           // Advance PC sequentially
           pc <= pc + 16'd2;
         end
@@ -265,14 +263,14 @@ module riscyv02_execute (
 
           E_EXEC: begin
             // Apply instruction effects
-            if (is_sei_r) i_bit <= 1'b1;
-            if (is_cli_r) i_bit <= 1'b0;
-            if (is_reti_r) begin
-              i_bit   <= epc[0];
-              pc <= {epc[15:1], 1'b0};  // Override for redirect
+            if (op_r == OP_SEI) i_bit <= 1'b1;
+            if (op_r == OP_CLI) i_bit <= 1'b0;
+            if (op_r == OP_RETI) begin
+              i_bit <= epc[0];
+              pc    <= {epc[15:1], 1'b0};  // Override for redirect
             end
             // Transition based on instruction type
-            state <= is_multicycle_r ? E_ADDR_LO : E_IDLE;
+            state <= (op_r == OP_LW || op_r == OP_SW || op_r == OP_JR) ? E_ADDR_LO : E_IDLE;
           end
 
           E_ADDR_LO: begin
@@ -282,10 +280,10 @@ module riscyv02_execute (
 
           E_ADDR_HI: begin
             MAR[15:8] <= alu_result;
-            if (is_jr_r) begin
+            if (op_r == OP_JR) begin
               // JR: redirect fires this cycle, return to idle
-              pc <= {alu_result, MAR[7:0]};
-              state   <= E_IDLE;
+              pc    <= {alu_result, MAR[7:0]};
+              state <= E_IDLE;
             end else begin
               // LW or SW: proceed to memory access
               state <= E_MEM_LO;
