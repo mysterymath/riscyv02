@@ -42,11 +42,12 @@ module riscyv02_execute (
     output wire [15:0] redirect_pc
 );
 
-  localparam E_IDLE    = 3'd0;
-  localparam E_ADDR_LO = 3'd1;  // Computing address low byte
-  localparam E_ADDR_HI = 3'd2;  // Computing address high byte
-  localparam E_MEM_LO  = 3'd3;  // Memory access low byte
-  localparam E_MEM_HI  = 3'd4;  // Memory access high byte (can dispatch)
+  localparam E_IDLE    = 3'd0;  // Waiting for instruction
+  localparam E_EXEC    = 3'd1;  // Execute instruction effects
+  localparam E_ADDR_LO = 3'd2;  // Computing address low byte
+  localparam E_ADDR_HI = 3'd3;  // Computing address high byte
+  localparam E_MEM_LO  = 3'd4;  // Memory access low byte
+  localparam E_MEM_HI  = 3'd5;  // Memory access high byte (can accept next)
 
   reg [2:0]  state;
   reg [15:0] MAR;
@@ -54,16 +55,19 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Interrupt and PC state
   // -------------------------------------------------------------------------
-  reg [15:0] pc;       // Current PC (address of instruction in execute)
-  reg [15:0] next_pc;  // Computed next PC (sequential or branch target)
+  reg [15:0] pc;       // Program counter (next instruction address)
   reg [15:0] epc;      // Exception PC (bit 0 used for I on save)
   reg        i_bit;    // Interrupt disable flag (0=enabled, 1=disabled)
 
   // -------------------------------------------------------------------------
-  // Decoded instruction state (active)
+  // Decoded instruction state (latched at retire)
   // -------------------------------------------------------------------------
   reg        is_store_r;      // 1 = SW, 0 = LW or JR
   reg        is_jr_r;         // 1 = JR
+  reg        is_sei_r;        // 1 = SEI
+  reg        is_cli_r;        // 1 = CLI
+  reg        is_reti_r;       // 1 = RETI
+  reg        is_multicycle_r; // 1 = LW/SW/JR (needs address computation)
   reg [2:0]  base_sel_r;      // Base register selector
   reg [5:0]  off6_r;          // 6-bit offset
   reg [2:0]  rd_rs2_sel_r;    // Destination (LW) or source (SW)
@@ -94,8 +98,8 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Control signals
   // -------------------------------------------------------------------------
-  // Ready states can accept a new dispatch.
-  wire ready = (state == E_IDLE) || (state == E_MEM_HI);
+  // FSM can accept new work in idle or final cycle of previous instruction
+  wire fsm_ready = (state == E_IDLE) || (state == E_MEM_HI);
   assign bus_active = (state == E_MEM_LO) || (state == E_MEM_HI);
 
   // -------------------------------------------------------------------------
@@ -107,24 +111,30 @@ module riscyv02_execute (
   wire is_reti = (fetch_ir == 16'b1111111010000001);
   wire is_sei  = (fetch_ir == 16'b1111111010000010);
   wire is_cli  = (fetch_ir == 16'b1111111010000011);
-  wire is_recognized = is_lw || is_sw || is_jr;
-
-  // -------------------------------------------------------------------------
-  // Interrupt detection
-  // -------------------------------------------------------------------------
-  wire irq_pending = !irqb && !i_bit;
-  wire irq_entry = ready && ir_valid && irq_pending;
+  wire is_multicycle = is_lw || is_sw || is_jr;
 
   wire [2:0] ir_base_sel    = is_jr ? fetch_ir[2:0] : fetch_ir[11:9];
   wire [5:0] ir_off6        = fetch_ir[8:3];
   wire [2:0] ir_rd_rs2_sel  = fetch_ir[2:0];
 
-  // Dispatch: accepting a recognized instruction this cycle (not on IRQ entry)
-  wire dispatch = ready && ir_valid && is_recognized && !irq_entry;
+  // -------------------------------------------------------------------------
+  // Instruction boundary control flow
+  //
+  // Hierarchy:
+  //   at_boundary: FSM ready and instruction available (something CAN happen)
+  //     ├─ take_irq: IRQ hijacks this boundary (instruction NOT consumed)
+  //     └─ retire: normal instruction retirement (fetch advances, enter E_EXEC)
+  //
+  // All instructions enter the FSM via E_EXEC. Instruction-specific effects
+  // happen in E_EXEC (for 2-cycle) or later states (for multi-cycle).
+  // -------------------------------------------------------------------------
+  wire at_boundary = fsm_ready && ir_valid;
+  wire irq_pending = !irqb && !i_bit;
+  wire take_irq    = at_boundary && irq_pending;
+  wire retire      = at_boundary && !take_irq;
 
-  // ir_accept: we consumed an instruction (recognized or NOP), not on IRQ entry
-  // On IRQ entry, the instruction is not consumed - it will be re-fetched after RETI
-  assign ir_accept = ready && ir_valid && !irq_entry;
+  // Output to fetch: instruction consumed (fetch advances to next)
+  assign ir_accept = retire;
 
   // -------------------------------------------------------------------------
   // ALU
@@ -158,14 +168,13 @@ module riscyv02_execute (
   //   E_ADDR_HI: base_sel_r, hi=1 (base_hi for ALU)
   //   E_MEM_LO (SW): rd_rs2_sel_r, hi=0 (rs2_lo for dout)
   //   E_MEM_HI (SW): rd_rs2_sel_r, hi=1 (rs2_hi for dout)
-  wire in_mem_state = (state == E_MEM_LO) || (state == E_MEM_HI);
-  assign r_sel = in_mem_state ? rd_rs2_sel_r : base_sel_r;
+  assign r_sel = bus_active ? rd_rs2_sel_r : base_sel_r;
 
   // r_hi: select high byte in E_ADDR_HI and E_MEM_HI
   assign r_hi = (state == E_ADDR_HI) || (state == E_MEM_HI);
 
   // Write port: fires in E_MEM_LO and E_MEM_HI for loads
-  assign w_we   = in_mem_state && !is_store_r;
+  assign w_we   = bus_active && !is_store_r;
   assign w_sel  = rd_rs2_sel_r;
   assign w_hi   = (state == E_MEM_HI);
   assign w_data = uio_in;
@@ -174,10 +183,10 @@ module riscyv02_execute (
   // Redirect interface (JR, RETI, IRQ entry)
   // -------------------------------------------------------------------------
   wire jr_redirect   = (state == E_ADDR_HI) && is_jr_r;
-  wire reti_redirect = ready && ir_valid && is_reti && !irq_entry;
+  wire reti_redirect = (state == E_EXEC) && is_reti_r;
 
-  assign redirect    = jr_redirect || reti_redirect || irq_entry;
-  assign redirect_pc = irq_entry   ? 16'h0004 :
+  assign redirect    = jr_redirect || reti_redirect || take_irq;
+  assign redirect_pc = take_irq     ? 16'h0004 :
                        reti_redirect ? {epc[15:1], 1'b0} :
                        {alu_result, MAR[7:0]};  // JR
 
@@ -213,64 +222,63 @@ module riscyv02_execute (
       // Decoded instruction state
       is_store_r       <= 1'b0;
       is_jr_r          <= 1'b0;
+      is_sei_r         <= 1'b0;
+      is_cli_r         <= 1'b0;
+      is_reti_r        <= 1'b0;
+      is_multicycle_r  <= 1'b0;
       base_sel_r       <= 3'b000;
       off6_r           <= 6'b000000;
       rd_rs2_sel_r     <= 3'b000;
       // Interrupt and PC state
       pc               <= 16'h0000;
-      next_pc          <= 16'h0000;
       epc              <= 16'h0000;
       i_bit            <= 1'b1;  // Interrupts disabled after reset
     end else begin
       // -----------------------------------------------------------------------
       // IRQ entry: save EPC and jump to vector (highest priority)
       // -----------------------------------------------------------------------
-      if (irq_entry) begin
-        epc   <= next_pc | {15'b0, i_bit};  // Save return address with I bit
+      if (take_irq) begin
+        epc   <= pc | {15'b0, i_bit};  // Save return address with I bit
         i_bit <= 1'b1;                       // Disable further interrupts
-        next_pc <= 16'h0004;                 // Set up for vector (ir_accept will commit)
+        pc <= 16'h0004;                 // Set up for vector (retire will commit)
         state <= E_IDLE;                     // Return to idle (important if in E_MEM_HI)
       end else begin
         // ---------------------------------------------------------------------
-        // Normal instruction processing
+        // Instruction retirement: latch instruction, advance PC, enter E_EXEC
         // ---------------------------------------------------------------------
-
-        // RETI: restore I bit and redirect to saved PC
-        if (reti_redirect) begin
-          i_bit   <= epc[0];
-          next_pc <= {epc[15:1], 1'b0};  // Set up for return (ir_accept will commit)
+        if (retire) begin
+          // Latch instruction type and operands
+          is_store_r      <= is_sw;
+          is_jr_r         <= is_jr;
+          is_sei_r        <= is_sei;
+          is_cli_r        <= is_cli;
+          is_reti_r       <= is_reti;
+          is_multicycle_r <= is_multicycle;
+          base_sel_r      <= ir_base_sel;
+          off6_r          <= ir_off6;
+          rd_rs2_sel_r    <= ir_rd_rs2_sel;
+          // Advance PC sequentially
+          pc <= pc + 16'd2;
         end
 
-        // SEI: set interrupt disable
-        if (ready && ir_valid && is_sei) begin
-          i_bit <= 1'b1;
-        end
-
-        // CLI: clear interrupt disable
-        if (ready && ir_valid && is_cli) begin
-          i_bit <= 1'b0;
-        end
-
-        // Dispatch: latch decoded fields when accepting a recognized instruction.
-        // dispatch implies ready, so this only fires in E_IDLE/E_MEM_HI.
-        if (dispatch) begin
-          is_store_r     <= is_sw;
-          is_jr_r        <= is_jr;
-          base_sel_r     <= ir_base_sel;
-          off6_r         <= ir_off6;
-          rd_rs2_sel_r   <= ir_rd_rs2_sel;
-        end
-
-        // PC update on instruction acceptance (sequential)
-        if (ir_accept && !reti_redirect) begin
-          pc      <= next_pc;
-          next_pc <= next_pc + 16'd2;
-        end
-
+        // ---------------------------------------------------------------------
+        // FSM state transitions and effects
+        // ---------------------------------------------------------------------
         case (state)
           E_IDLE:
-            if (dispatch) state <= E_ADDR_LO;
-            // NOP, SEI, CLI, or no instruction: stay in E_IDLE
+            if (retire) state <= E_EXEC;
+
+          E_EXEC: begin
+            // Apply instruction effects
+            if (is_sei_r) i_bit <= 1'b1;
+            if (is_cli_r) i_bit <= 1'b0;
+            if (is_reti_r) begin
+              i_bit   <= epc[0];
+              pc <= {epc[15:1], 1'b0};  // Override for redirect
+            end
+            // Transition based on instruction type
+            state <= is_multicycle_r ? E_ADDR_LO : E_IDLE;
+          end
 
           E_ADDR_LO: begin
             MAR[7:0] <= alu_result;
@@ -281,8 +289,7 @@ module riscyv02_execute (
             MAR[15:8] <= alu_result;
             if (is_jr_r) begin
               // JR: redirect fires this cycle, return to idle
-              // Update next_pc to branch target (for potential IRQ entry)
-              next_pc <= {alu_result, MAR[7:0]};
+              pc <= {alu_result, MAR[7:0]};
               state   <= E_IDLE;
             end else begin
               // LW or SW: proceed to memory access
@@ -296,10 +303,12 @@ module riscyv02_execute (
             state <= E_MEM_HI;
           end
 
-          E_MEM_HI:
+          E_MEM_HI: begin
             // LW: rd_hi written via w_we during this cycle
             // SW: rs2_hi output via dout during this cycle
-            state <= dispatch ? E_ADDR_LO : E_IDLE;
+            // Can pipeline: accept next instruction directly into E_EXEC
+            state <= retire ? E_EXEC : E_IDLE;
+          end
 
           default: state <= E_IDLE;
         endcase
