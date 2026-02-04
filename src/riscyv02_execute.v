@@ -84,26 +84,21 @@ module riscyv02_execute (
   assign bus_active = (state == E_MEM_LO) || (state == E_MEM_HI);
 
   // -------------------------------------------------------------------------
-  // Dispatch logic (fetch holds instruction until accepted)
+  // Instruction decode (from fetch_ir, stable when ir_valid)
   // -------------------------------------------------------------------------
-  // Decode directly from fetch_ir (stable when ir_valid)
-  wire is_lw_disp = (fetch_ir[15:12] == 4'b1000);
-  wire is_sw_disp = (fetch_ir[15:12] == 4'b1010);
-  wire is_jr_disp = (fetch_ir[15:9] == 7'b1011100);
-  wire dispatch_is_valid = is_lw_disp || is_sw_disp || is_jr_disp;
-  wire dispatch_is_store = is_sw_disp;
-  wire dispatch_is_jr = is_jr_disp;
-  wire [2:0] dispatch_base_sel = is_jr_disp ? fetch_ir[2:0] : fetch_ir[11:9];
-  wire [5:0] dispatch_off6 = fetch_ir[8:3];
-  wire [2:0] dispatch_rd_rs2_sel = fetch_ir[2:0];
+  wire is_lw = (fetch_ir[15:12] == 4'b1000);
+  wire is_sw = (fetch_ir[15:12] == 4'b1010);
+  wire is_jr = (fetch_ir[15:9] == 7'b1011100);
+  wire is_recognized = is_lw || is_sw || is_jr;
 
-  // Dispatch: recognised instruction that execute will act on
-  wire dispatch_valid = ready && ir_valid && dispatch_is_valid;
+  wire [2:0] ir_base_sel    = is_jr ? fetch_ir[2:0] : fetch_ir[11:9];
+  wire [5:0] ir_off6        = fetch_ir[8:3];
+  wire [2:0] ir_rd_rs2_sel  = fetch_ir[2:0];
 
-  // NOP: instruction available but not recognized
-  wire dispatch_nop = ready && ir_valid && !dispatch_is_valid;
+  // Dispatch: accepting a recognized instruction this cycle
+  wire dispatch = ready && ir_valid && is_recognized;
 
-  // ir_accept: we consumed an instruction this cycle
+  // ir_accept: we consumed an instruction (recognized or NOP)
   assign ir_accept = ready && ir_valid;
 
   // -------------------------------------------------------------------------
@@ -188,67 +183,46 @@ module riscyv02_execute (
       off6_r           <= 6'b000000;
       rd_rs2_sel_r     <= 3'b000;
     end else begin
+      // Dispatch: latch decoded fields when accepting a recognized instruction.
+      // dispatch implies ready, so this only fires in E_IDLE/E_MEM_HI.
+      if (dispatch) begin
+        is_store_r     <= is_sw;
+        is_jr_r        <= is_jr;
+        base_sel_r     <= ir_base_sel;
+        off6_r         <= ir_off6;
+        rd_rs2_sel_r   <= ir_rd_rs2_sel;
+      end
+
       case (state)
-        E_IDLE: begin
-          if (dispatch_valid) begin
-            // Latch decoded instruction fields
-            is_store_r     <= dispatch_is_store;
-            is_jr_r        <= dispatch_is_jr;
-            base_sel_r     <= dispatch_base_sel;
-            off6_r         <= dispatch_off6;
-            rd_rs2_sel_r   <= dispatch_rd_rs2_sel;
-            state          <= E_ADDR_LO;
-          end
-          // dispatch_nop: just accept (ir_accept fires), stay in E_IDLE
-        end
+        E_IDLE:
+          if (dispatch) state <= E_ADDR_LO;
+          // NOP or no instruction: stay in E_IDLE
 
         E_ADDR_LO: begin
-          // Compute and latch low byte of address.
-          // Latch register value for ALU high byte next cycle.
           MAR[7:0]   <= alu_result;
           store_data <= r;
           state      <= E_ADDR_HI;
         end
 
         E_ADDR_HI: begin
-          // Compute high byte.  Next state depends on instruction type.
           MAR[15:8] <= alu_result;
           if (is_jr_r) begin
-            // JR: done, redirect fires this cycle. Can dispatch next.
-            if (dispatch_valid) begin
-              is_store_r     <= dispatch_is_store;
-              is_jr_r        <= dispatch_is_jr;
-              base_sel_r     <= dispatch_base_sel;
-              off6_r         <= dispatch_off6;
-              rd_rs2_sel_r   <= dispatch_rd_rs2_sel;
-              state          <= E_ADDR_LO;
-            end else begin
-              state <= E_IDLE;
-            end
+            // JR: redirect fires this cycle, return to idle
+            state <= E_IDLE;
           end else begin
             // LW or SW: proceed to memory access
-            if (is_store_r) store_data <= r;  // Latch rs2 for store
+            if (is_store_r) store_data <= r;
             state <= E_MEM_LO;
           end
         end
 
         E_MEM_LO: begin
-          if (!is_store_r) mem_lo <= uio_in;  // Capture low byte for load
+          if (!is_store_r) mem_lo <= uio_in;
           state <= E_MEM_HI;
         end
 
-        E_MEM_HI: begin
-          if (dispatch_valid) begin
-            is_store_r     <= dispatch_is_store;
-            is_jr_r        <= dispatch_is_jr;
-            base_sel_r     <= dispatch_base_sel;
-            off6_r         <= dispatch_off6;
-            rd_rs2_sel_r   <= dispatch_rd_rs2_sel;
-            state          <= E_ADDR_LO;
-          end else begin
-            state <= E_IDLE;
-          end
-        end
+        E_MEM_HI:
+          state <= dispatch ? E_ADDR_LO : E_IDLE;
 
         default: state <= E_IDLE;
       endcase
