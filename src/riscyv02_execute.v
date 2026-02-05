@@ -54,7 +54,7 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Interrupt and PC state
   // -------------------------------------------------------------------------
-  reg [15:0] pc;       // Program counter (next instruction address)
+  reg [15:0] pc;       // Program counter (current instruction address)
   reg [15:0] epc;      // Exception PC (bit 0 used for I on save)
   reg        i_bit;    // Interrupt disable flag (0=enabled, 1=disabled)
 
@@ -101,9 +101,15 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Control signals
   // -------------------------------------------------------------------------
-  // FSM can accept new work in idle or final cycle of previous instruction
+  // FSM can accept new instruction in idle or final cycle of LW/SW
   wire fsm_ready = (state == E_IDLE) || (state == E_MEM_HI);
   assign bus_active = (state == E_MEM_LO) || (state == E_MEM_HI);
+
+  // JR completes in E_ADDR_HI once target is computed
+  wire jr_completing = (state == E_ADDR_HI) && (op_r == OP_JR);
+
+  // Can take IRQ at any instruction boundary
+  wire can_take_irq = fsm_ready || jr_completing;
 
   // -------------------------------------------------------------------------
   // Instruction decode (from fetch_ir, stable when ir_valid)
@@ -131,7 +137,7 @@ module riscyv02_execute (
   // interrupted code path, not the handler, so we can't accept it.
   // -------------------------------------------------------------------------
   wire irq_pending = !irqb && !i_bit;
-  wire take_irq    = fsm_ready && irq_pending;
+  wire take_irq    = can_take_irq && irq_pending;
   assign ir_accept = fsm_ready && ir_valid && !take_irq;
 
   // -------------------------------------------------------------------------
@@ -157,6 +163,24 @@ module riscyv02_execute (
   assign alu_start = (state == E_ADDR_LO);
   assign alu_a = r;
   assign alu_b = (state == E_ADDR_LO) ? {off6_r[5], off6_r, 1'b0} : {8{off6_r[5]}};
+
+  // -------------------------------------------------------------------------
+  // Next PC: where execution continues after current instruction
+  // -------------------------------------------------------------------------
+  // INVARIANT: All PC updates MUST go through next_pc. When take_irq fires,
+  // epc <= next_pc and the FSM's normal PC updates are skipped. Using next_pc
+  // for all PC writes ensures the interrupted value is always saved correctly.
+  //
+  // In E_IDLE: PC already advanced by previous instruction
+  // In E_EXEC (RETI): return to saved EPC
+  // In E_EXEC (other): advance to pc + 2
+  // In E_MEM_HI: completing LW/SW, advance to pc + 2
+  // In E_ADDR_HI (JR): completing JR, go to computed target
+  wire reti_completing = (state == E_EXEC) && (op_r == OP_RETI);
+  wire [15:0] next_pc = jr_completing     ? {alu_result, MAR[7:0]} :
+                        reti_completing   ? {epc[15:1], 1'b0} :
+                        (state == E_IDLE) ? pc :
+                        pc + 16'd2;
 
   // -------------------------------------------------------------------------
   // Register file interface
@@ -231,10 +255,10 @@ module riscyv02_execute (
       // IRQ entry: save EPC and jump to vector (highest priority)
       // -----------------------------------------------------------------------
       if (take_irq) begin
-        epc   <= pc | {15'b0, i_bit};  // Save return address with I bit
+        epc   <= next_pc | {15'b0, i_bit};  // Save return address with I bit
         i_bit <= 1'b1;                       // Disable further interrupts
-        pc <= 16'h0004;                 // Set up for vector (ir_accept will commit)
-        state <= E_IDLE;                     // Return to idle (important if in E_MEM_HI)
+        pc    <= 16'h0004;                   // Jump to vector
+        state <= E_IDLE;
       end else begin
         // ---------------------------------------------------------------------
         // Instruction ir_accept: latch decoded fields, advance PC
@@ -250,8 +274,7 @@ module riscyv02_execute (
           base_sel_r   <= ir_base_sel;
           off6_r       <= ir_off6;
           rd_rs2_sel_r <= ir_rd_rs2_sel;
-          // Advance PC sequentially
-          pc <= pc + 16'd2;
+          // Note: PC stays at current instruction; updated at completion
         end
 
         // ---------------------------------------------------------------------
@@ -265,10 +288,9 @@ module riscyv02_execute (
             // Apply instruction effects
             if (op_r == OP_SEI) i_bit <= 1'b1;
             if (op_r == OP_CLI) i_bit <= 1'b0;
-            if (op_r == OP_RETI) begin
-              i_bit <= epc[0];
-              pc    <= {epc[15:1], 1'b0};  // Override for redirect
-            end
+            if (op_r == OP_RETI) i_bit <= epc[0];
+            // Update PC via next_pc (RETI -> epc, others -> pc+2)
+            pc <= next_pc;
             // Transition based on instruction type
             state <= (op_r == OP_LW || op_r == OP_SW || op_r == OP_JR) ? E_ADDR_LO : E_IDLE;
           end
@@ -281,8 +303,8 @@ module riscyv02_execute (
           E_ADDR_HI: begin
             MAR[15:8] <= alu_result;
             if (op_r == OP_JR) begin
-              // JR: redirect fires this cycle, return to idle
-              pc    <= {alu_result, MAR[7:0]};
+              // JR: update PC via next_pc (computed target), return to idle
+              pc    <= next_pc;
               state <= E_IDLE;
             end else begin
               // LW or SW: proceed to memory access
@@ -299,6 +321,8 @@ module riscyv02_execute (
           E_MEM_HI: begin
             // LW: rd_hi written via w_we during this cycle
             // SW: rs2_hi output via dout during this cycle
+            // Advance PC via next_pc
+            pc <= next_pc;
             // Can pipeline: accept next instruction directly
             if (ir_accept)
               state <= is_multicycle ? E_ADDR_LO : E_EXEC;

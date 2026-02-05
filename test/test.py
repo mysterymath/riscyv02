@@ -835,6 +835,99 @@ async def test_irq_during_multicycle(dut):
 
 
 # ---------------------------------------------------------------------------
+# Test 12: IRQ interrupts JR - verifies EPC saves JR target, not return addr
+# ---------------------------------------------------------------------------
+# Test 12: IRQ during JR completion - verifies EPC saves JR target, not pc+2
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_irq_interrupts_jr(dut):
+    """IRQ fires during JR's E_ADDR_HI; RETI must return to JR target.
+
+    This test keeps IRQ asserted throughout. Expected flow:
+    1. CLI enables interrupts (I=0)
+    2. IRQ fires immediately in E_IDLE after CLI, handler runs, RETI (I=0)
+    3. Return to JR at 0x0002
+    4. JR executes, IRQ fires during E_ADDR_HI (when target is computed)
+    5. EPC must save JR target (0x0020), not pc+2 (0x0004)
+    6. Handler runs, RETI returns to 0x0020
+    7. JR target code writes marker, proving correct EPC value
+    """
+    dut._log.info("Test 12: IRQ interrupts JR")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Program layout:
+    # 0x0000: CLI              ; Enable interrupts
+    # 0x0002: JR R0, 16        ; Jump to 0x0020 (R0=0, offset=16, addr=0+16*2=0x20)
+    # 0x0004: IRQ vector       ; Handler writes marker, RETI
+    #
+    # 0x0020: JR target        ; SW marker to prove we got here, then spin
+    #
+    # Key invariant: IRQ during E_ADDR_HI must save JR target to EPC
+
+    # Main code
+    _place(prog, 0x0000, _encode_cli())
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=16))  # JR to 0x0020
+
+    # IRQ handler at 0x0004: write 0xBEEF to marker at 0x003C, then RETI
+    # First load 0xBEEF into R1
+    prog[0x0010] = 0xEF
+    prog[0x0011] = 0xBE
+    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=8))   # R1 = MEM[0x10] = 0xBEEF
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=30)) # MEM[0x3C] = 0xBEEF
+    _place(prog, 0x0008, _encode_reti())
+
+    # JR target at 0x0020: write 0xCAFE to marker at 0x0038, then spin
+    prog[0x0034] = 0xFE
+    prog[0x0035] = 0xCA
+    _place(prog, 0x0020, _encode_lw(rd=2, rs1=0, off6=26))  # R2 = MEM[0x34] = 0xCAFE
+    _place(prog, 0x0022, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xCAFE
+    _place(prog, 0x0024, _encode_jr(rs=0, off6=18))         # Spin at 0x24
+
+    # Clear markers
+    prog[0x003C] = 0x00
+    prog[0x003D] = 0x00
+    prog[0x0038] = 0x00
+    prog[0x0039] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset with IRQ already asserted (but I=1 after reset, so won't fire yet)
+    dut.ena.value = 1
+    dut.ui_in.value = 0x04  # RDY=1, IRQB=0 (asserted, active low)
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Run - CLI enables IRQ, JR executes, IRQ should fire after JR completes
+    await ClockCycles(dut.clk, 300)
+
+    # De-assert IRQ
+    dut.ui_in.value = 0x05
+
+    await ClockCycles(dut.clk, 100)
+
+    # Check IRQ marker at 0x3C (proves handler ran)
+    lo = _read_ram(dut, 0x003C)
+    hi = _read_ram(dut, 0x003D)
+    irq_marker = lo | (hi << 8)
+    dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0xBEEF)")
+
+    # Check JR target marker at 0x38 (proves RETI returned to JR target)
+    lo = _read_ram(dut, 0x0038)
+    hi = _read_ram(dut, 0x0039)
+    jr_marker = lo | (hi << 8)
+    dut._log.info(f"JR target marker = {jr_marker:#06x} (expected 0xCAFE)")
+
+    assert irq_marker == 0xBEEF, f"IRQ handler didn't run! Got {irq_marker:#06x}"
+    assert jr_marker == 0xCAFE, f"RETI didn't return to JR target! Got {jr_marker:#06x}"
+    dut._log.info("PASS [irq_interrupts_jr]")
+
+
+# ---------------------------------------------------------------------------
 # Cycle count tests: verify each instruction path takes expected cycles
 # ---------------------------------------------------------------------------
 
