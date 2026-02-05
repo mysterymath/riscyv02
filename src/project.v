@@ -61,6 +61,18 @@ module tt_um_riscyv02 (
   // -----------------------------------------------------------------------
   // Mux select: dual-edge register (identical to 6502 wrapper).
   // Runs on clk so protocol timing continues even when CPU is halted.
+  //
+  // Timing diagram (mux_sel toggles on both clock edges):
+  //
+  //       ┌───┐   ┌───┐   ┌───┐   ┌───┐
+  //  clk  │   │   │   │   │   │   │   │
+  //    ───┘   └───┘   └───┘   └───┘   └───
+  //       0   1   0   1   0   1   0   1      <- mux_sel
+  //       └─┬─┘   └─┬─┘   └─┬─┘   └─┬─┘
+  //        addr    data   addr    data
+  //
+  // mux_sel=0: Address phase (AB on uo_out/uio_out)
+  // mux_sel=1: Data phase (RWB/SYNC on uo_out, D on uio)
   // -----------------------------------------------------------------------
   wire mux_sel = q ^ q_d;
 

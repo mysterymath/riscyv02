@@ -87,11 +87,15 @@ module riscyv02_regfile (
   generate
     genvar gi, bi;
     for (gi = 0; gi < 8; gi = gi + 1) begin : gen_reg
+      // Register selected for write?
       wire wen = w_we_held && (w_sel_held == gi[2:0]);
-      // Low byte: write when wen and NOT w_hi_held
-      wire gate_n_lo = clk | ~(wen & ~w_hi_held);
-      // High byte: write when wen and w_hi_held
-      wire gate_n_hi = clk | ~(wen & w_hi_held);
+      // Byte-select: which byte of this register to write
+      wire write_lo = wen & ~w_hi_held;
+      wire write_hi = wen & w_hi_held;
+      // Gate signals: transparent when clk=0 AND write enabled for this byte
+      // (GATE_N=0 means transparent, so gate_n = clk | ~write_xx)
+      wire gate_n_lo = clk | ~write_lo;
+      wire gate_n_hi = clk | ~write_hi;
       for (bi = 0; bi < 8; bi = bi + 1) begin : gen_bit_lo
         sg13g2_dllrq_1 u_follower (
           .D(w_data_held[bi]),
