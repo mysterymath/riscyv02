@@ -11,8 +11,9 @@
 // Handles LW, SW, JR, RETI, SEI, CLI instructions. The register file lives
 // here since only execute needs register access.
 //
-// Code is organized by instruction behavior rather than signal type, so each
-// instruction's complete behavior is visible in a cohesive section.
+// Code is organized by state: combinational signals are computed in a single
+// state-property block (SECTION 3) so each state's behavior is visible in one
+// place.
 // ============================================================================
 
 module riscyv02_execute (
@@ -22,7 +23,7 @@ module riscyv02_execute (
     input  wire        irqb,         // Interrupt request (active low)
     input  wire        ir_valid,
     input  wire [15:0] fetch_ir,
-    output wire        bus_active,
+    output reg         bus_active,
     output reg  [15:0] ab,
     output reg  [7:0]  dout,
     output reg         rwb,
@@ -74,165 +75,134 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Register file (8-bit interface)
   // -------------------------------------------------------------------------
-  wire [2:0]  r_sel;
-  wire        r_hi;
-  wire [7:0]  r;
-  wire [2:0]  w_sel;
-  wire        w_hi;
-  wire [7:0]  w_data;
-  wire        w_we;
+  reg  [2:0] r_sel;
+  reg        r_hi;
+  wire [7:0] r;
+  reg        w_hi;
+  reg        w_we;
 
   riscyv02_regfile u_regfile (
-    .clk      (clk),
-    .rst_n    (rst_n),
-    .w_sel    (w_sel),
-    .w_hi     (w_hi),
-    .w_data   (w_data),
-    .w_we     (w_we),
-    .r_sel    (r_sel),
-    .r_hi     (r_hi),
-    .r        (r)
+    .clk    (clk),
+    .rst_n  (rst_n),
+    .w_sel  (rd_rs2_sel_r),
+    .w_hi   (w_hi),
+    .w_data (uio_in),
+    .w_we   (w_we),
+    .r_sel  (r_sel),
+    .r_hi   (r_hi),
+    .r      (r)
   );
 
   // -------------------------------------------------------------------------
   // ALU
   // -------------------------------------------------------------------------
-  wire [7:0] alu_a, alu_b;
-  wire       alu_new_op;
+  reg  [7:0] alu_b;
+  reg        alu_new_op;
   wire [7:0] alu_result;
 
   riscyv02_alu u_alu (
     .clk    (clk),
     .rst_n  (rst_n),
-    .a      (alu_a),
+    .a      (r),
     .b      (alu_b),
     .new_op (alu_new_op),
     .result (alu_result)
   );
 
   // -------------------------------------------------------------------------
-  // Instruction decode (from fetch_ir, stable when ir_valid)
+  // State-driven signals (computed in state-property block below)
   // -------------------------------------------------------------------------
-  wire is_lw   = (fetch_ir[15:12] == 4'b1000);
-  wire is_sw   = (fetch_ir[15:12] == 4'b1010);
-  wire is_jr   = (fetch_ir[15:9] == 7'b1011100);
-  wire is_reti = (fetch_ir == 16'b1111111010000001);
-  wire is_sei  = (fetch_ir == 16'b1111111010000010);
-  wire is_cli  = (fetch_ir == 16'b1111111010000011);
-  wire is_multicycle = is_lw || is_sw || is_jr;
-
-  wire [2:0] ir_base_sel   = is_jr ? fetch_ir[2:0] : fetch_ir[11:9];
-  wire [5:0] ir_off6       = fetch_ir[8:3];
-  wire [2:0] ir_rd_rs2_sel = fetch_ir[2:0];
-
-  // -------------------------------------------------------------------------
-  // Phase identification signals (document what the FSM is doing)
-  // -------------------------------------------------------------------------
-  wire in_addr_phase = (state == E_ADDR_LO) || (state == E_ADDR_HI);
-  wire in_mem_phase  = (state == E_MEM_LO)  || (state == E_MEM_HI);
-
-  // -------------------------------------------------------------------------
-  // Core control signals
-  // -------------------------------------------------------------------------
-  assign bus_active = in_mem_phase;
-
-  // Instruction-driven jump: JR or RETI completing (non-sequential control flow)
-  wire jr_completing   = (state == E_ADDR_HI) && (op_r == OP_JR);
-  wire reti_completing = (state == E_EXEC) && (op_r == OP_RETI);
-  wire insn_jump       = jr_completing || reti_completing;
-
-  // Instruction completing: current instruction finishes, PC updates to next_pc
-  wire insn_completing = (state == E_EXEC) || jr_completing || (state == E_MEM_HI);
-
-  // FSM ready: at instruction boundary, can accept new instruction or take IRQ
-  // (E_IDLE is ready but not completing; E_EXEC without jump completes but isn't ready)
-  wire fsm_ready = (state == E_IDLE) || (state == E_MEM_HI) || insn_jump;
+  reg        jr_completing;
+  reg        reti_completing;
+  reg        insn_completing;
+  reg        fsm_ready;
+  reg [15:0] next_pc;
 
   // Interrupt control
-  wire irq_pending = !irqb && !i_bit;
-  wire take_irq    = fsm_ready && irq_pending;
-  assign ir_accept = fsm_ready && ir_valid && !redirect;
+  wire take_irq = fsm_ready && !irqb && !i_bit;
+  assign ir_accept  = fsm_ready && ir_valid && !redirect;
 
   // ==========================================================================
-  // SECTION 3: Per-Instruction-Group Behavior
+  // SECTION 3: State-Property Block
+  //
+  // All state-dependent combinational signals computed in one place.
+  // Each state's properties are visible together.
   // ==========================================================================
 
-  // -------------------------------------------------------------------------
-  // 3a. Address Computation (LW, SW, JR share this)
-  //
-  // Timing: E_ADDR_LO → E_ADDR_HI
-  // Resources: ALU computes base + sign-extended offset * 2
-  // Result: MAR holds computed address
-  //
-  // E_ADDR_LO: read base_lo, ALU adds offset_lo (new operation, ci=0)
-  // E_ADDR_HI: read base_hi, ALU adds offset_hi (continue, ci=carry)
-  // -------------------------------------------------------------------------
-  assign alu_new_op = (state == E_ADDR_LO);
-  assign alu_a = r;  // base_lo or base_hi from regfile
-  assign alu_b = (state == E_ADDR_LO) ? {off6_r[5], off6_r, 1'b0}  // offset * 2
-                                      : {8{off6_r[5]}};            // sign extension
-
-  // -------------------------------------------------------------------------
-  // 3b. Memory Operations (LW, SW)
-  //
-  // Timing: E_MEM_LO → E_MEM_HI
-  // Resources: Bus for memory access, regfile for data transfer
-  //
-  // LW: reads from memory, writes to rd (w_we active)
-  // SW: reads from rs2, writes to memory (rwb low)
-  // -------------------------------------------------------------------------
-
-  // Read port: base register during addr phase, rs2 during mem phase
-  assign r_sel = in_mem_phase ? rd_rs2_sel_r : base_sel_r;
-  assign r_hi  = (state == E_ADDR_HI) || (state == E_MEM_HI);
-
-  // Write port: active during mem phase for LW only
-  assign w_we   = in_mem_phase && (op_r != OP_SW);
-  assign w_sel  = rd_rs2_sel_r;
-  assign w_hi   = (state == E_MEM_HI);
-  assign w_data = uio_in;
-
-  // -------------------------------------------------------------------------
-  // 3c. Jump Operations (JR, RETI)
-  //
-  // JR:   Timing: E_ADDR_LO → E_ADDR_HI (completes with address)
-  //       Target: computed address from ALU
-  //
-  // RETI: Timing: E_EXEC (single cycle)
-  //       Target: saved EPC (low bit cleared)
-  //       Effect: restores I flag from epc[0]
-  // -------------------------------------------------------------------------
+  // Jump target: RETI uses saved EPC, JR uses computed address
   wire [15:0] jump_target = (op_r == OP_RETI) ? {epc[15:1], 1'b0}
                                               : {alu_result, MAR[7:0]};
 
-  // -------------------------------------------------------------------------
-  // 3d. Flag Operations (SEI, CLI)
-  //
-  // Timing: E_EXEC (single cycle)
-  // SEI: sets i_bit to disable interrupts
-  // CLI: clears i_bit to enable interrupts
-  // (Effects applied in FSM sequential block)
-  // -------------------------------------------------------------------------
+  always @(*) begin
+    // Defaults
+    bus_active      = 1'b0;
+    alu_new_op      = 1'bx;
+    alu_b           = 8'bx;
+    r_sel           = 3'bx;
+    r_hi            = 1'bx;
+    w_hi            = 1'bx;
+    w_we            = 1'b0;
+    jr_completing   = 1'b0;
+    reti_completing = 1'b0;
+    insn_completing = 1'b0;
+    fsm_ready       = 1'b0;
+    next_pc         = 16'bx;
+
+    case (state)
+      E_IDLE: begin
+        fsm_ready = 1'b1;
+        next_pc   = pc;  // PC already advanced
+      end
+
+      E_EXEC: begin
+        reti_completing = (op_r == OP_RETI);
+        insn_completing = 1'b1;
+        fsm_ready       = reti_completing;
+        next_pc         = reti_completing ? jump_target : pc + 16'd2;
+      end
+
+      E_ADDR_LO: begin
+        alu_new_op = 1'b1;
+        alu_b      = {off6_r[5], off6_r, 1'b0};  // offset * 2
+        r_sel      = base_sel_r;
+        r_hi       = 1'b0;
+      end
+
+      E_ADDR_HI: begin
+        alu_new_op      = 1'b0;
+        alu_b           = {8{off6_r[5]}};  // sign extension
+        r_sel           = base_sel_r;      // base register
+        r_hi            = 1'b1;
+        jr_completing   = (op_r == OP_JR);
+        insn_completing = jr_completing;
+        fsm_ready       = jr_completing;
+        if (jr_completing) next_pc = jump_target;
+      end
+
+      E_MEM_LO: begin
+        bus_active   = 1'b1;
+        r_sel        = rd_rs2_sel_r;
+        r_hi         = 1'b0;
+        w_hi         = 1'b0;
+        w_we         = (op_r != OP_SW);
+      end
+
+      E_MEM_HI: begin
+        bus_active      = 1'b1;
+        r_sel           = rd_rs2_sel_r;
+        r_hi            = 1'b1;
+        w_hi            = 1'b1;
+        w_we            = (op_r != OP_SW);
+        insn_completing = 1'b1;
+        fsm_ready       = 1'b1;
+        next_pc         = pc + 16'd2;
+      end
+    endcase
+  end
 
   // ==========================================================================
-  // SECTION 4: Control Flow Aggregation
+  // SECTION 4: Control Flow
   // ==========================================================================
-
-  // -------------------------------------------------------------------------
-  // Next PC: where execution continues after current instruction
-  //
-  // INVARIANT: All PC updates MUST go through next_pc. When take_irq fires,
-  // epc <= next_pc and the FSM's normal PC updates are skipped. Using next_pc
-  // for all PC writes ensures the interrupted value is always saved correctly.
-  //
-  // Cases:
-  //   insn_jump:      go to jump_target (JR computed address, RETI saved EPC)
-  //   E_IDLE:         PC already advanced by previous instruction
-  //   Otherwise:      advance to pc + 2
-  // -------------------------------------------------------------------------
-  wire [15:0] next_pc = insn_jump         ? jump_target :
-                        (state == E_IDLE) ? pc :
-                        pc + 16'd2;
 
   // -------------------------------------------------------------------------
   // Redirect interface (JR, RETI, IRQ entry)
@@ -240,7 +210,7 @@ module riscyv02_execute (
   // redirect: asserted when fetch should discard current instruction stream
   // redirect_pc: target address for the redirect
   // -------------------------------------------------------------------------
-  assign redirect    = insn_jump || take_irq;
+  assign redirect    = jr_completing || reti_completing || take_irq;
   assign redirect_pc = take_irq ? 16'h0004 : jump_target;
 
   // ==========================================================================
@@ -249,15 +219,17 @@ module riscyv02_execute (
 
   // -------------------------------------------------------------------------
   // Bus outputs (active only during memory phase)
+  // When bus_active=0, these are muxed away or ignored by project.v
   // -------------------------------------------------------------------------
   always @(*) begin
-    ab   = 16'h0000;
-    dout = 8'h00;
-    rwb  = 1'b1;
-    if (in_mem_phase) begin
+    if (bus_active) begin
       ab   = (state == E_MEM_LO) ? MAR : {MAR[15:1], 1'b1};
       dout = r;   // rs2_lo or rs2_hi from regfile (only meaningful for SW)
       rwb  = (op_r != OP_SW);
+    end else begin
+      ab   = 16'bx;
+      dout = 8'bx;
+      rwb  = 1'bx;
     end
   end
 
@@ -303,16 +275,22 @@ module riscyv02_execute (
       //   - Transition to E_EXEC (single-cycle) or E_ADDR_LO (multi-cycle)
       // ---------------------------------------------------------------------
       else if (ir_accept) begin
-        op_r         <= is_sw   ? OP_SW   :
-                        is_lw   ? OP_LW   :
-                        is_jr   ? OP_JR   :
-                        is_reti ? OP_RETI :
-                        is_sei  ? OP_SEI  :
-                        is_cli  ? OP_CLI  : OP_NOP;
-        base_sel_r   <= ir_base_sel;
-        off6_r       <= ir_off6;
-        rd_rs2_sel_r <= ir_rd_rs2_sel;
-        state        <= is_multicycle ? E_ADDR_LO : E_EXEC;
+        // Decode opcode from fetch_ir bit patterns
+        if      (fetch_ir[15:12] == 4'b1010)        op_r <= OP_SW;
+        else if (fetch_ir[15:12] == 4'b1000)        op_r <= OP_LW;
+        else if (fetch_ir[15:9]  == 7'b1011100)     op_r <= OP_JR;
+        else if (fetch_ir == 16'b1111111010000001)  op_r <= OP_RETI;
+        else if (fetch_ir == 16'b1111111010000010)  op_r <= OP_SEI;
+        else if (fetch_ir == 16'b1111111010000011)  op_r <= OP_CLI;
+        else                                        op_r <= OP_NOP;
+        // JR uses rs field for base; LW/SW use rs1 field
+        base_sel_r   <= (fetch_ir[15:9] == 7'b1011100) ? fetch_ir[2:0] : fetch_ir[11:9];
+        off6_r       <= fetch_ir[8:3];
+        rd_rs2_sel_r <= fetch_ir[2:0];
+        // LW, SW, JR are multi-cycle; others go to E_EXEC
+        state <= (fetch_ir[15:12] == 4'b1000 ||
+                  fetch_ir[15:12] == 4'b1010 ||
+                  fetch_ir[15:9]  == 7'b1011100) ? E_ADDR_LO : E_EXEC;
       end
 
       // ---------------------------------------------------------------------

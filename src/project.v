@@ -163,7 +163,16 @@ module tt_um_riscyv02 (
   // -----------------------------------------------------------------------
   assign uo_out  = mux_sel ? {6'b0, SYNC, RWB} : AB[7:0];
   assign uio_out = mux_sel ? DO : AB[15:8];
-  assign uio_oe  = mux_sel ? (RWB ? 8'h00 : 8'hFF) : 8'hFF;
+
+  // uio_oe: tristate during mux_sel read cycles, drive otherwise
+  reg [7:0] uio_oe_r;
+  always @(*) begin
+    if (mux_sel && RWB)
+      uio_oe_r = 8'h00;  // Read: tristate for external data
+    else
+      uio_oe_r = 8'hFF;  // Write or address phase: drive
+  end
+  assign uio_oe = uio_oe_r;
 
   // Unused
   wire _unused = &{ena, ui_in[7:3], ui_in[1], 1'b0};
