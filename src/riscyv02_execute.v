@@ -101,15 +101,14 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Control signals
   // -------------------------------------------------------------------------
-  // FSM can accept new instruction in idle or final cycle of LW/SW
-  wire fsm_ready = (state == E_IDLE) || (state == E_MEM_HI);
   assign bus_active = (state == E_MEM_LO) || (state == E_MEM_HI);
 
-  // JR completes in E_ADDR_HI once target is computed
-  wire jr_completing = (state == E_ADDR_HI) && (op_r == OP_JR);
+  // Instruction-driven jump: JR or RETI completing (non-sequential control flow)
+  wire insn_jump = ((state == E_ADDR_HI) && (op_r == OP_JR)) ||
+                   ((state == E_EXEC) && (op_r == OP_RETI));
 
-  // Can take IRQ at any instruction boundary
-  wire can_take_irq = fsm_ready || jr_completing;
+  // FSM ready: at instruction boundary, can accept new instruction or take IRQ
+  wire fsm_ready = (state == E_IDLE) || (state == E_MEM_HI) || insn_jump;
 
   // -------------------------------------------------------------------------
   // Instruction decode (from fetch_ir, stable when ir_valid)
@@ -137,8 +136,8 @@ module riscyv02_execute (
   // interrupted code path, not the handler, so we can't accept it.
   // -------------------------------------------------------------------------
   wire irq_pending = !irqb && !i_bit;
-  wire take_irq    = can_take_irq && irq_pending;
-  assign ir_accept = fsm_ready && ir_valid && !take_irq;
+  wire take_irq    = fsm_ready && irq_pending;
+  assign ir_accept = fsm_ready && ir_valid && !redirect;
 
   // -------------------------------------------------------------------------
   // ALU
@@ -165,6 +164,12 @@ module riscyv02_execute (
   assign alu_b = (state == E_ADDR_LO) ? {off6_r[5], off6_r, 1'b0} : {8{off6_r[5]}};
 
   // -------------------------------------------------------------------------
+  // Jump target: where instruction-driven jumps go
+  // -------------------------------------------------------------------------
+  wire [15:0] jump_target = (op_r == OP_RETI) ? {epc[15:1], 1'b0} :
+                            {alu_result, MAR[7:0]};  // JR
+
+  // -------------------------------------------------------------------------
   // Next PC: where execution continues after current instruction
   // -------------------------------------------------------------------------
   // INVARIANT: All PC updates MUST go through next_pc. When take_irq fires,
@@ -172,13 +177,9 @@ module riscyv02_execute (
   // for all PC writes ensures the interrupted value is always saved correctly.
   //
   // In E_IDLE: PC already advanced by previous instruction
-  // In E_EXEC (RETI): return to saved EPC
-  // In E_EXEC (other): advance to pc + 2
-  // In E_MEM_HI: completing LW/SW, advance to pc + 2
-  // In E_ADDR_HI (JR): completing JR, go to computed target
-  wire reti_completing = (state == E_EXEC) && (op_r == OP_RETI);
-  wire [15:0] next_pc = jr_completing     ? {alu_result, MAR[7:0]} :
-                        reti_completing   ? {epc[15:1], 1'b0} :
+  // In insn_jump: go to jump_target (JR computed address, RETI saved EPC)
+  // Otherwise: advance to pc + 2
+  wire [15:0] next_pc = insn_jump         ? jump_target :
                         (state == E_IDLE) ? pc :
                         pc + 16'd2;
 
@@ -204,13 +205,8 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Redirect interface (JR, RETI, IRQ entry)
   // -------------------------------------------------------------------------
-  wire jr_redirect   = (state == E_ADDR_HI) && (op_r == OP_JR);
-  wire reti_redirect = (state == E_EXEC) && (op_r == OP_RETI);
-
-  assign redirect    = jr_redirect || reti_redirect || take_irq;
-  assign redirect_pc = take_irq     ? 16'h0004 :
-                       reti_redirect ? {epc[15:1], 1'b0} :
-                       {alu_result, MAR[7:0]};  // JR
+  assign redirect    = insn_jump || take_irq;
+  assign redirect_pc = take_irq ? 16'h0004 : jump_target;
 
   // -------------------------------------------------------------------------
   // Bus outputs (combinational)
