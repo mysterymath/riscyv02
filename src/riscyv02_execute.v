@@ -141,7 +141,11 @@ module riscyv02_execute (
   wire reti_completing = (state == E_EXEC) && (op_r == OP_RETI);
   wire insn_jump       = jr_completing || reti_completing;
 
+  // Instruction completing: current instruction finishes, PC updates to next_pc
+  wire insn_completing = (state == E_EXEC) || jr_completing || (state == E_MEM_HI);
+
   // FSM ready: at instruction boundary, can accept new instruction or take IRQ
+  // (E_IDLE is ready but not completing; E_EXEC without jump completes but isn't ready)
   wire fsm_ready = (state == E_IDLE) || (state == E_MEM_HI) || insn_jump;
 
   // Interrupt control
@@ -274,95 +278,71 @@ module riscyv02_execute (
     end else begin
 
       // ---------------------------------------------------------------------
+      // PC update (centralized)
+      // ---------------------------------------------------------------------
+      if (take_irq)
+        pc <= 16'h0004;
+      else if (insn_completing)
+        pc <= next_pc;
+
+      // ---------------------------------------------------------------------
       // IRQ entry (highest priority)
       // ---------------------------------------------------------------------
       if (take_irq) begin
         epc   <= next_pc | {15'b0, i_bit};  // Save return address with I flag
         i_bit <= 1'b1;                       // Disable further interrupts
-        pc    <= 16'h0004;                   // Jump to vector
         state <= E_IDLE;
-      end else begin
+      end
 
-        // -------------------------------------------------------------------
-        // Instruction accept: latch decoded fields
-        // -------------------------------------------------------------------
-        if (ir_accept) begin
-          op_r         <= is_sw   ? OP_SW   :
-                          is_lw   ? OP_LW   :
-                          is_jr   ? OP_JR   :
-                          is_reti ? OP_RETI :
-                          is_sei  ? OP_SEI  :
-                          is_cli  ? OP_CLI  : OP_NOP;
-          base_sel_r   <= ir_base_sel;
-          off6_r       <= ir_off6;
-          rd_rs2_sel_r <= ir_rd_rs2_sel;
+      // ---------------------------------------------------------------------
+      // Instruction dispatch (centralized)
+      //
+      // ir_accept fires from E_IDLE or E_MEM_HI (not during insn_jump since
+      // that sets redirect). All dispatch actions happen here:
+      //   - Latch decoded instruction fields
+      //   - Transition to E_EXEC (single-cycle) or E_ADDR_LO (multi-cycle)
+      // ---------------------------------------------------------------------
+      else if (ir_accept) begin
+        op_r         <= is_sw   ? OP_SW   :
+                        is_lw   ? OP_LW   :
+                        is_jr   ? OP_JR   :
+                        is_reti ? OP_RETI :
+                        is_sei  ? OP_SEI  :
+                        is_cli  ? OP_CLI  : OP_NOP;
+        base_sel_r   <= ir_base_sel;
+        off6_r       <= ir_off6;
+        rd_rs2_sel_r <= ir_rd_rs2_sel;
+        state        <= is_multicycle ? E_ADDR_LO : E_EXEC;
+      end
+
+      // ---------------------------------------------------------------------
+      // Non-dispatch state transitions and instruction effects
+      // ---------------------------------------------------------------------
+      else case (state)
+
+        E_EXEC: begin
+          if (op_r == OP_SEI) i_bit <= 1'b1;
+          if (op_r == OP_CLI) i_bit <= 1'b0;
+          if (op_r == OP_RETI) i_bit <= epc[0];
+          state <= E_IDLE;
         end
 
-        // -------------------------------------------------------------------
-        // FSM state transitions and instruction effects
-        // -------------------------------------------------------------------
-        case (state)
+        E_ADDR_LO: begin
+          MAR[7:0] <= alu_result;
+          state    <= E_ADDR_HI;
+        end
 
-          // ----- E_IDLE: waiting for instruction -----
-          E_IDLE:
-            if (ir_accept)
-              state <= is_multicycle ? E_ADDR_LO : E_EXEC;
+        E_ADDR_HI: begin
+          MAR[15:8] <= alu_result;
+          state     <= (op_r == OP_JR) ? E_IDLE : E_MEM_LO;
+        end
 
-          // ----- E_EXEC: single-cycle instruction effects -----
-          E_EXEC: begin
-            // SEI: disable interrupts
-            if (op_r == OP_SEI) i_bit <= 1'b1;
-            // CLI: enable interrupts
-            if (op_r == OP_CLI) i_bit <= 1'b0;
-            // RETI: restore I flag from saved EPC, redirect via insn_jump
-            if (op_r == OP_RETI) i_bit <= epc[0];
-            // Update PC
-            pc <= next_pc;
-            // Multi-cycle instructions that came through E_EXEC proceed to addr
-            state <= (op_r == OP_LW || op_r == OP_SW || op_r == OP_JR) ? E_ADDR_LO : E_IDLE;
-          end
+        E_MEM_LO: state <= E_MEM_HI;
 
-          // ----- E_ADDR_LO: compute address low byte -----
-          E_ADDR_LO: begin
-            MAR[7:0] <= alu_result;
-            state    <= E_ADDR_HI;
-          end
+        E_MEM_HI: state <= E_IDLE;
 
-          // ----- E_ADDR_HI: compute address high byte -----
-          E_ADDR_HI: begin
-            MAR[15:8] <= alu_result;
-            if (op_r == OP_JR) begin
-              // JR completes: redirect via insn_jump
-              pc    <= next_pc;
-              state <= E_IDLE;
-            end else begin
-              // LW/SW: proceed to memory access
-              state <= E_MEM_LO;
-            end
-          end
-
-          // ----- E_MEM_LO: memory access low byte -----
-          E_MEM_LO: begin
-            // LW: rd_lo written via w_we
-            // SW: rs2_lo output via dout
-            state <= E_MEM_HI;
-          end
-
-          // ----- E_MEM_HI: memory access high byte (can pipeline) -----
-          E_MEM_HI: begin
-            // LW: rd_hi written via w_we
-            // SW: rs2_hi output via dout
-            pc <= next_pc;
-            // Pipeline: accept next instruction directly if available
-            if (ir_accept)
-              state <= is_multicycle ? E_ADDR_LO : E_EXEC;
-            else
-              state <= E_IDLE;
-          end
-
-          default: state <= E_IDLE;
-        endcase
-      end
+        default: state <= E_IDLE;
+      endcase
     end
   end
 
