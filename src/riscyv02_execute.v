@@ -326,7 +326,7 @@ module riscyv02_execute (
 
       // PC update: redirect_pc for jumps/interrupts, next_pc otherwise.
       // Interrupt entry also saves EPC and sets I=1.
-      pc <= redirect ? jump_pc : next_pc;
+      pc <= redirect ? redirect_pc : next_pc;
       if (take_nmi || take_irq) begin
         epc   <= next_pc | {15'b0, i_bit};  // Save return address with I flag
         i_bit <= 1'b1;                       // Disable further interrupts
