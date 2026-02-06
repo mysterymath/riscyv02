@@ -188,7 +188,10 @@ module riscyv02_execute (
           r_hi  = 1'b0;
         end else begin
           next_pc += 16'd2;
-          if (op_r == OP_BRK) jump = 1'b1;
+          if (op_r == OP_BRK)
+            jump = 1'b1;
+          else if (op_r != OP_WAI && op_r != OP_STP)
+            insn_completing = 1'b1;
         end
       end
 
@@ -311,109 +314,110 @@ module riscyv02_execute (
       if (!nmi_pending) nmi_ack <= 1'b0;
       else if (take_nmi) nmi_ack <= 1'b1;
 
-      // EPCW high byte: unconditional so it executes even when ir_accept
-      // dispatches the next instruction in E_EXEC_HI. Interrupt entry
-      // overwrites the full epc, so priority is correct.
-      if (state == E_EXEC_HI && op_r == OP_EPCW)
-        epc[15:8] <= r;
-
-      // PC update (BRK overrides below in E_EXEC_LO)
+      // PC update
       if (take_nmi)
         pc <= 16'h0008;
       else if (take_irq)
         pc <= 16'h0004;
       else
         pc <= next_pc;
-      // Interrupt entry also saves EPC and sets I=1.
-      if (take_nmi || take_irq) begin
-        epc   <= next_pc | {15'b0, i_bit};  // Save return address with I flag
-        i_bit <= 1'b1;                       // Disable further interrupts
-        op_r  <= OP_NOP;                     // Clear halt condition (WAI/STP)
-        state <= E_IDLE;
-      end else begin
-        // ---------------------------------------------------------------------
-        // Instruction dispatch (centralized)
-        //
-        // ir_accept fires from E_IDLE, E_MEM_LO (SB), or E_MEM_HI (not during jump since
-        // that sets fetch_flush). All dispatch actions happen here:
-        //   - Latch decoded instruction fields
-        //   - Transition to E_EXEC_LO (single-cycle) or E_ADDR_LO (multi-cycle)
-        // ---------------------------------------------------------------------
-        if (ir_accept) begin
-          // Decode opcode from fetch_ir bit patterns
-          if      (fetch_ir[15:12] == 4'b1010)        op_r <= OP_SW;
-          else if (fetch_ir[15:12] == 4'b1000)        op_r <= OP_LW;
-          else if (fetch_ir[15:9]  == 7'b1011100)     op_r <= OP_JR;
-          else if (fetch_ir == 16'b1111111010000001)  op_r <= OP_RETI;
-          else if (fetch_ir == 16'b1111111010000010)  op_r <= OP_SEI;
-          else if (fetch_ir == 16'b1111111010000011)  op_r <= OP_CLI;
-          else if (fetch_ir == 16'b1111111010000100)  op_r <= OP_BRK;
-          else if (fetch_ir == 16'b1111111010000101)  op_r <= OP_WAI;
-          else if (fetch_ir == 16'b1111111010000110)  op_r <= OP_STP;
-          else if (fetch_ir[15:3] == 13'b1111111001110)  op_r <= OP_EPCR;
-          else if (fetch_ir[15:3] == 13'b1111111001111)  op_r <= OP_EPCW;
-          else if (fetch_ir[15:13] == 3'b001)           op_r <= OP_AUIPC;
-          else if (fetch_ir[15:12] == 4'b0110)        op_r <= OP_LB;
-          else if (fetch_ir[15:12] == 4'b0111)        op_r <= OP_LBU;
-          else if (fetch_ir[15:12] == 4'b1001)        op_r <= OP_SB;
-          else                                        op_r <= OP_NOP;
-          // AUIPC captures imm10[9:6]; JR uses rs; others use rs1
-          if (fetch_ir[15:13] == 3'b001)
-            base_sel_r <= fetch_ir[12:9];
-          else if (fetch_ir[15:9] == 7'b1011100)
-            base_sel_r <= {1'b0, fetch_ir[2:0]};
+
+      // ---------------------------------------------------------------------
+      // State machine: transitions and per-state effects.
+      // Ordered before interrupt entry and dispatch so their overrides
+      // (state, epc, i_bit, pc, op_r) take priority via last-NBA-wins.
+      // ---------------------------------------------------------------------
+      case (state)
+        E_IDLE: ;
+
+        E_EXEC_LO: begin
+          if (op_r == OP_SEI) i_bit <= 1'b1;
+          if (op_r == OP_CLI) i_bit <= 1'b0;
+          if (op_r == OP_RETI) i_bit <= epc[0];
+          if (op_r == OP_EPCW) epc[7:0] <= r;
+          if (op_r == OP_BRK) begin
+            epc   <= next_pc | {15'b0, i_bit};
+            i_bit <= 1'b1;
+            pc    <= 16'h000C;
+          end
+          if (op_r == OP_EPCR || op_r == OP_EPCW)
+            state <= E_EXEC_HI;
           else
-            base_sel_r <= {1'b0, fetch_ir[11:9]};
-          off6_r       <= fetch_ir[8:3];
-          rd_rs2_sel_r <= fetch_ir[2:0];
-          // AUIPC, LB, LBU, LW, SB, SW, JR are multi-cycle; others go to E_EXEC_LO
-          state <= (fetch_ir[15:13] == 3'b001 ||
-                    fetch_ir[15:12] == 4'b0110 ||
-                    fetch_ir[15:12] == 4'b0111 ||
-                    fetch_ir[15:12] == 4'b1000 ||
-                    fetch_ir[15:12] == 4'b1001 ||
-                    fetch_ir[15:12] == 4'b1010 ||
-                    fetch_ir[15:9]  == 7'b1011100) ? E_ADDR_LO : E_EXEC_LO;
-        end else case (state)
-          // ---------------------------------------------------------------------
-          // Non-dispatch state transitions and instruction effects
-          // ---------------------------------------------------------------------
-          E_IDLE: ;  // Wait for ir_accept (handled above)
+            state <= E_IDLE;
+        end
 
-          E_EXEC_LO: begin
-            if (op_r == OP_SEI) i_bit <= 1'b1;
-            if (op_r == OP_CLI) i_bit <= 1'b0;
-            if (op_r == OP_RETI) i_bit <= epc[0];
-            if (op_r == OP_BRK) begin
-              epc   <= next_pc | {15'b0, i_bit};
-              i_bit <= 1'b1;
-              pc    <= 16'h000C;
-            end
-            if (op_r == OP_EPCW) epc[7:0] <= r;
-            if (op_r == OP_EPCR || op_r == OP_EPCW)
-              state <= E_EXEC_HI;
-            else
-              state <= E_IDLE;
-          end
+        E_ADDR_LO: begin
+          MAR[7:0] <= alu_result;
+          state    <= E_ADDR_HI;
+        end
 
-          E_ADDR_LO: begin
-            MAR[7:0] <= alu_result;
-            state    <= E_ADDR_HI;
-          end
+        E_ADDR_HI: begin
+          MAR[15:8] <= alu_result;
+          state     <= (op_r == OP_JR || op_r == OP_AUIPC) ? E_IDLE : E_MEM_LO;
+        end
 
-          E_ADDR_HI: begin
-            MAR[15:8] <= alu_result;
-            state     <= (op_r == OP_JR || op_r == OP_AUIPC) ? E_IDLE : E_MEM_LO;
-          end
+        E_MEM_LO: state <= (op_r == OP_SB) ? E_IDLE : E_MEM_HI;
 
-          E_MEM_LO: state <= (op_r == OP_SB) ? E_IDLE : E_MEM_HI;
+        E_MEM_HI: state <= E_IDLE;
 
-          E_MEM_HI: state <= E_IDLE;
+        E_EXEC_HI: begin
+          if (op_r == OP_EPCW) epc[15:8] <= r;
+          state <= E_IDLE;
+        end
 
-          E_EXEC_HI: state <= E_IDLE;
+        default: state <= 3'bx;
+      endcase
 
-          default: state <= 3'bx;
-        endcase
+      // ---------------------------------------------------------------------
+      // Interrupt entry (overrides state, epc, i_bit from case block)
+      // ---------------------------------------------------------------------
+      if (take_nmi || take_irq) begin
+        epc   <= next_pc | {15'b0, i_bit};
+        i_bit <= 1'b1;
+        op_r  <= OP_NOP;
+        state <= E_IDLE;
+      end
+
+      // ---------------------------------------------------------------------
+      // Instruction dispatch (overrides state, op_r from case block).
+      // ir_accept fires in any completing state (insn_completing=1) or
+      // E_IDLE, as long as ir_valid && !fetch_flush.
+      // ---------------------------------------------------------------------
+      if (ir_accept) begin
+        // Decode opcode from fetch_ir bit patterns
+        if      (fetch_ir[15:12] == 4'b1010)        op_r <= OP_SW;
+        else if (fetch_ir[15:12] == 4'b1000)        op_r <= OP_LW;
+        else if (fetch_ir[15:9]  == 7'b1011100)     op_r <= OP_JR;
+        else if (fetch_ir == 16'b1111111010000001)  op_r <= OP_RETI;
+        else if (fetch_ir == 16'b1111111010000010)  op_r <= OP_SEI;
+        else if (fetch_ir == 16'b1111111010000011)  op_r <= OP_CLI;
+        else if (fetch_ir == 16'b1111111010000100)  op_r <= OP_BRK;
+        else if (fetch_ir == 16'b1111111010000101)  op_r <= OP_WAI;
+        else if (fetch_ir == 16'b1111111010000110)  op_r <= OP_STP;
+        else if (fetch_ir[15:3] == 13'b1111111001110)  op_r <= OP_EPCR;
+        else if (fetch_ir[15:3] == 13'b1111111001111)  op_r <= OP_EPCW;
+        else if (fetch_ir[15:13] == 3'b001)           op_r <= OP_AUIPC;
+        else if (fetch_ir[15:12] == 4'b0110)        op_r <= OP_LB;
+        else if (fetch_ir[15:12] == 4'b0111)        op_r <= OP_LBU;
+        else if (fetch_ir[15:12] == 4'b1001)        op_r <= OP_SB;
+        else                                        op_r <= OP_NOP;
+        // AUIPC captures imm10[9:6]; JR uses rs; others use rs1
+        if (fetch_ir[15:13] == 3'b001)
+          base_sel_r <= fetch_ir[12:9];
+        else if (fetch_ir[15:9] == 7'b1011100)
+          base_sel_r <= {1'b0, fetch_ir[2:0]};
+        else
+          base_sel_r <= {1'b0, fetch_ir[11:9]};
+        off6_r       <= fetch_ir[8:3];
+        rd_rs2_sel_r <= fetch_ir[2:0];
+        // AUIPC, LB, LBU, LW, SB, SW, JR are multi-cycle; others go to E_EXEC_LO
+        state <= (fetch_ir[15:13] == 3'b001 ||
+                  fetch_ir[15:12] == 4'b0110 ||
+                  fetch_ir[15:12] == 4'b0111 ||
+                  fetch_ir[15:12] == 4'b1000 ||
+                  fetch_ir[15:12] == 4'b1001 ||
+                  fetch_ir[15:12] == 4'b1010 ||
+                  fetch_ir[15:9]  == 7'b1011100) ? E_ADDR_LO : E_EXEC_LO;
       end
     end
   end
