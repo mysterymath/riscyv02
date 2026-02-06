@@ -80,7 +80,7 @@ module riscyv02_fetch (
           state <= F_LO;
         end
 
-        default: state <= F_LO;
+        default: state <= 2'bx;
       endcase
     end
   end

@@ -282,6 +282,8 @@ module riscyv02_execute (
           // ---------------------------------------------------------------------
           // Non-dispatch state transitions and instruction effects
           // ---------------------------------------------------------------------
+          E_IDLE: ;  // Wait for ir_accept (handled above)
+
           E_EXEC: begin
             if (op_r == OP_SEI) i_bit <= 1'b1;
             if (op_r == OP_CLI) i_bit <= 1'b0;
@@ -303,7 +305,7 @@ module riscyv02_execute (
 
           E_MEM_HI: state <= E_IDLE;
 
-          default: state <= E_IDLE;
+          default: state <= 3'bx;
         endcase
       end
     end
