@@ -39,7 +39,7 @@ module tt_um_riscyv02 (
     output wire [7:0] uo_out,
     input  wire [7:0] uio_in,
     output wire [7:0] uio_out,
-    output wire [7:0] uio_oe,
+    output reg  [7:0] uio_oe,
     input  wire       ena,
     input  wire       clk,
     input  wire       rst_n
@@ -117,14 +117,16 @@ module tt_um_riscyv02 (
     .ab         (fetch_ab)
   );
 
-  // IRQB input: active-low interrupt request
-  wire irqb = ui_in[0];
+  // Interrupt inputs
+  wire irqb = ui_in[0];  // Active-low interrupt request (level-sensitive)
+  wire nmib = ui_in[1];  // Active-low non-maskable interrupt (edge-triggered)
 
   riscyv02_execute u_execute (
     .clk        (cpu_clk),
     .rst_n      (rst_n),
     .uio_in     (uio_in),
     .irqb       (irqb),
+    .nmib       (nmib),
     .ir_valid   (ir_valid),
     .fetch_ir   (fetch_ir),
     .bus_active (exec_bus_active),
@@ -165,16 +167,14 @@ module tt_um_riscyv02 (
   assign uio_out = mux_sel ? DO : AB[15:8];
 
   // uio_oe: tristate during mux_sel read cycles, drive otherwise
-  reg [7:0] uio_oe_r;
   always @(*) begin
     if (mux_sel && RWB)
-      uio_oe_r = 8'h00;  // Read: tristate for external data
+      uio_oe = 8'h00;  // Read: tristate for external data
     else
-      uio_oe_r = 8'hFF;  // Write or address phase: drive
+      uio_oe = 8'hFF;  // Write or address phase: drive
   end
-  assign uio_oe = uio_oe_r;
 
   // Unused
-  wire _unused = &{ena, ui_in[7:3], ui_in[1], 1'b0};
+  wire _unused = &{ena, ui_in[7:3], 1'b0};
 
 endmodule

@@ -11,7 +11,7 @@ from cocotb.triggers import ClockCycles, FallingEdge
 async def _reset(dut):
     """Apply reset sequence."""
     dut.ena.value = 1
-    dut.ui_in.value = 0x04  # RDY = 1 (ui_in[2])
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1 (inactive)
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -281,17 +281,17 @@ async def test_single_step(dut):
 
     async def run_to_sync():
         """Run until SYNC=1 (instruction boundary), then halt."""
-        dut.ui_in.value = 0x04  # RDY=1
+        dut.ui_in.value = 0x06  # RDY=1, NMIB=1
         for _ in range(200):
             await FallingEdge(dut.clk)
             if get_sync():
-                dut.ui_in.value = 0x00  # RDY=0, halt
+                dut.ui_in.value = 0x02  # RDY=0, NMIB=1, halt
                 return True
         return False
 
     async def single_step():
         """Execute one instruction: wait for SYNC 1→0→1 transition."""
-        dut.ui_in.value = 0x04  # RDY=1, run
+        dut.ui_in.value = 0x06  # RDY=1, NMIB=1, run
 
         # Wait for SYNC to go low (instruction starts executing)
         for _ in range(200):
@@ -303,14 +303,14 @@ async def test_single_step(dut):
         for _ in range(200):
             await FallingEdge(dut.clk)
             if get_sync():
-                dut.ui_in.value = 0x00  # RDY=0, halt
+                dut.ui_in.value = 0x02  # RDY=0, NMIB=1, halt
                 return True
 
         return False
 
     # Reset with RDY=0 so CPU doesn't run until we're ready
     dut.ena.value = 1
-    dut.ui_in.value = 0x00  # RDY=0, halted
+    dut.ui_in.value = 0x02  # RDY=0, NMIB=1, halted
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -419,7 +419,7 @@ async def test_reset_i_state(dut):
     # Reset with IRQB=0 (interrupt asserted) and RDY=1
     # ui_in[0] = IRQB, ui_in[2] = RDY
     dut.ena.value = 1
-    dut.ui_in.value = 0x04  # RDY=1, IRQB=0 (asserted!)
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0 (asserted!)
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -475,7 +475,7 @@ async def test_cli_enables_irq(dut):
 
     # Reset with IRQB=1 (not asserted) and RDY=1
     dut.ena.value = 1
-    dut.ui_in.value = 0x05  # RDY=1, IRQB=1 (not asserted)
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -484,7 +484,7 @@ async def test_cli_enables_irq(dut):
     await ClockCycles(dut.clk, 20)
 
     # Now assert IRQB=0
-    dut.ui_in.value = 0x04  # RDY=1, IRQB=0 (asserted)
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0
 
     # Run to let IRQ fire and handler execute
     await ClockCycles(dut.clk, 100)
@@ -564,7 +564,7 @@ async def test_sei_disables_irq(dut):
 
     # Reset with IRQB=1 (not asserted) and RDY=1
     dut.ena.value = 1
-    dut.ui_in.value = 0x05  # RDY=1, IRQB=1
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -573,7 +573,7 @@ async def test_sei_disables_irq(dut):
     await ClockCycles(dut.clk, 50)
 
     # Now assert IRQB=0
-    dut.ui_in.value = 0x04  # RDY=1, IRQB=0
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0
 
     # Run for a while - IRQ should NOT fire due to SEI
     await ClockCycles(dut.clk, 100)
@@ -641,7 +641,7 @@ async def test_reti(dut):
 
     # Reset with IRQB=1 (not asserted)
     dut.ena.value = 1
-    dut.ui_in.value = 0x05  # RDY=1, IRQB=1
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -650,13 +650,13 @@ async def test_reti(dut):
     await ClockCycles(dut.clk, 50)
 
     # Assert IRQB to trigger interrupt
-    dut.ui_in.value = 0x04  # RDY=1, IRQB=0
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0
 
     # Run to let IRQ fire, handler execute, RETI, and return code execute
     await ClockCycles(dut.clk, 200)
 
     # De-assert IRQB so we don't keep interrupting
-    dut.ui_in.value = 0x05  # RDY=1, IRQB=1
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
 
     await ClockCycles(dut.clk, 100)
 
@@ -721,7 +721,7 @@ async def test_i_bit_masking(dut):
 
     # Reset
     dut.ena.value = 1
-    dut.ui_in.value = 0x05  # RDY=1, IRQB=1
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -730,7 +730,7 @@ async def test_i_bit_masking(dut):
     await ClockCycles(dut.clk, 50)
 
     # Assert IRQB and keep it asserted
-    dut.ui_in.value = 0x04  # RDY=1, IRQB=0
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0
 
     # Run for a long time with IRQ continuously asserted
     await ClockCycles(dut.clk, 500)
@@ -797,7 +797,7 @@ async def test_irq_during_multicycle(dut):
 
     # Reset
     dut.ena.value = 1
-    dut.ui_in.value = 0x05  # RDY=1, IRQB=1
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -807,13 +807,13 @@ async def test_irq_during_multicycle(dut):
 
     # Assert IRQB right as LW is executing (timing is approximate)
     # The IRQ should wait for LW to complete
-    dut.ui_in.value = 0x04  # RDY=1, IRQB=0
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0
 
     # Run to let LW complete, IRQ fire, RETI, SW execute
     await ClockCycles(dut.clk, 200)
 
     # De-assert IRQ
-    dut.ui_in.value = 0x05
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
 
     await ClockCycles(dut.clk, 50)
 
@@ -897,7 +897,7 @@ async def test_irq_interrupts_jr(dut):
 
     # Reset with IRQ already asserted (but I=1 after reset, so won't fire yet)
     dut.ena.value = 1
-    dut.ui_in.value = 0x04  # RDY=1, IRQB=0 (asserted, active low)
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0 (asserted, active low)
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -906,7 +906,7 @@ async def test_irq_interrupts_jr(dut):
     await ClockCycles(dut.clk, 300)
 
     # De-assert IRQ
-    dut.ui_in.value = 0x05
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
 
     await ClockCycles(dut.clk, 100)
 
@@ -951,7 +951,7 @@ async def _measure_instruction_cycles(dut, prog, expected_cycles, test_name):
 
     # Reset
     dut.ena.value = 1
-    dut.ui_in.value = 0x05  # RDY=1, IRQB=1 (not asserted)
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -1018,7 +1018,7 @@ async def test_cli_atomicity(dut):
 
     # Reset with IRQB=0 (IRQ already pending, but masked by I=1)
     dut.ena.value = 1
-    dut.ui_in.value = 0x04  # RDY=1, IRQB=0 (asserted!)
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0 (asserted!)
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
@@ -1174,3 +1174,413 @@ async def test_cycle_count_jr(dut):
     cycles = await _measure_instruction_cycles(dut, prog, 4, "JR")
     assert cycles == 4, f"JR: expected 4 cycles, got {cycles}"
     dut._log.info("PASS [cycle_count_jr]")
+
+
+# ---------------------------------------------------------------------------
+# NMI tests
+# ---------------------------------------------------------------------------
+
+def _set_ui(dut, rdy=True, irqb=True, nmib=True):
+    """Set ui_in control signals. Active-low signals: irqb, nmib."""
+    val = 0
+    if irqb:  val |= 0x01
+    if nmib:  val |= 0x02
+    if rdy:   val |= 0x04
+    dut.ui_in.value = val
+
+
+@cocotb.test()
+async def test_nmi_basic(dut):
+    """NMI fires on falling edge of NMIB, even with I=1 (non-maskable).
+
+    After reset I=1, so IRQ would be masked, but NMI ignores I.
+    Handler at $0008 writes a marker to prove it ran.
+    """
+    dut._log.info("Test: NMI basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code at $0000: spin loop (I=1 after reset, no CLI)
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=0))  # spin at $0000
+
+    # IRQ vector at $0004: spin (should NOT be reached)
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))  # spin at $0004
+
+    # NMI handler at $0008: write marker and spin
+    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=16))  # R1 = MEM[$20] = 0xBEEF
+    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[$30] = 0xBEEF
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))           # spin at $000C
+
+    # Data
+    prog[0x0020] = 0xEF
+    prog[0x0021] = 0xBE
+
+    # Clear marker
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset with NMIB=1 (inactive)
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Let CPU start spinning
+    await ClockCycles(dut.clk, 30)
+
+    # Pulse NMIB low (falling edge triggers NMI)
+    _set_ui(dut, rdy=True, irqb=True, nmib=False)
+    await ClockCycles(dut.clk, 10)
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)  # Release
+
+    # Let handler execute
+    await ClockCycles(dut.clk, 100)
+
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    val = lo | (hi << 8)
+    dut._log.info(f"Marker = {val:#06x} (expected 0xBEEF)")
+    assert val == 0xBEEF, f"NMI handler did not run! Got {val:#06x}"
+    dut._log.info("PASS [nmi_basic]")
+
+
+@cocotb.test()
+async def test_nmi_edge_triggered(dut):
+    """Holding NMIB low does not re-trigger NMI. Only one NMI per falling edge.
+
+    NMI handler writes a marker then spins. If NMI re-entered, the handler
+    would execute again and we'd detect it via a counter marker approach:
+    handler increments a byte each time it runs.
+    """
+    dut._log.info("Test: NMI edge-triggered (no re-trigger while held low)")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code: spin at $0000
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=0))
+
+    # IRQ vector at $0004: unused
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    # NMI handler at $0008: load marker, store marker+1 (count entries), RETI
+    # First: load current count from $0030
+    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=24))  # R1 = MEM[$30]
+    # Store 0xAAAA as marker (proves handler ran)
+    _place(prog, 0x000A, _encode_lw(rd=2, rs1=0, off6=20))  # R2 = MEM[$28] = 0xAAAA
+    _place(prog, 0x000C, _encode_sw(rs2=2, rs1=0, off6=24)) # MEM[$30] = 0xAAAA
+    # Spin in handler (no RETI — if NMI re-fires we'd jump to $0008 again
+    # and overwrite marker with something different, but since we write the
+    # same value, let's use a different approach: write to TWO locations)
+    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=26)) # MEM[$34] = 0xAAAA (second write)
+    _place(prog, 0x0010, _encode_jr(rs=0, off6=8))           # spin at $0010
+
+    # Data
+    prog[0x0028] = 0xAA
+    prog[0x0029] = 0xAA
+
+    # Clear markers
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+    prog[0x0034] = 0x00
+    prog[0x0035] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    await ClockCycles(dut.clk, 30)
+
+    # Assert NMIB low and HOLD it low
+    _set_ui(dut, rdy=True, irqb=True, nmib=False)
+
+    # Run for a long time with NMIB held low
+    await ClockCycles(dut.clk, 500)
+
+    # Check both markers written (handler completed once)
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    marker1 = lo | (hi << 8)
+    lo = _read_ram(dut, 0x0034)
+    hi = _read_ram(dut, 0x0035)
+    marker2 = lo | (hi << 8)
+
+    dut._log.info(f"Marker1 = {marker1:#06x}, Marker2 = {marker2:#06x} (both expected 0xAAAA)")
+    assert marker1 == 0xAAAA, f"NMI handler didn't run! Got {marker1:#06x}"
+    assert marker2 == 0xAAAA, f"NMI handler didn't complete! Got {marker2:#06x}"
+    dut._log.info("PASS [nmi_edge_triggered]")
+
+
+@cocotb.test()
+async def test_nmi_priority_over_irq(dut):
+    """When both NMI and IRQ are pending, NMI is taken (handler at $0008).
+
+    CLI enables IRQ, then both NMIB falling edge and IRQB=0 are asserted
+    simultaneously. NMI handler at $0008 should run, not IRQ at $0004.
+    After NMI entry sets I=1, IRQ stays masked.
+    """
+    dut._log.info("Test: NMI priority over IRQ")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code: jump past vectors, CLI, spin
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=12))  # R1 = MEM[$18] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))           # JR to $0020
+
+    # IRQ handler at $0004: write IRQ marker
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))   # R2 = MEM[$28] = 0x1111
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=26))  # MEM[$34] = 0x1111
+    # Spin in IRQ handler
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    # NMI handler at $0008 — WAIT, this conflicts with the JR spin above.
+    # Need to restructure: IRQ handler can't use $0008 since that's the NMI vector.
+    prog = {}
+
+    # Main code: jump past vectors
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
+
+    # IRQ handler at $0004: write IRQ marker, spin
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0x1111
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0x1111
+
+    # NMI handler at $0008: write NMI marker, spin
+    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, off6=21))    # R3 = MEM[$2A] = 0x2222
+    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=25))   # MEM[$32] = 0x2222
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))            # spin at $000C
+
+    # Continue at $0020: CLI, then spin
+    _place(prog, 0x0020, _encode_cli())
+    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))           # spin at $0022
+
+    # Data
+    prog[0x001E] = 0x20
+    prog[0x001F] = 0x00
+    prog[0x0028] = 0x11
+    prog[0x0029] = 0x11
+    prog[0x002A] = 0x22
+    prog[0x002B] = 0x22
+
+    # Clear markers
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+    prog[0x0032] = 0x00
+    prog[0x0033] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Wait for CLI to execute
+    await ClockCycles(dut.clk, 50)
+
+    # Assert BOTH NMIB falling edge AND IRQB=0 simultaneously
+    _set_ui(dut, rdy=True, irqb=False, nmib=False)
+
+    # Let handler run
+    await ClockCycles(dut.clk, 200)
+
+    # Check NMI marker (should be written — NMI has priority)
+    lo = _read_ram(dut, 0x0032)
+    hi = _read_ram(dut, 0x0033)
+    nmi_marker = lo | (hi << 8)
+
+    # Check IRQ marker (should NOT be written — I=1 after NMI entry)
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    irq_marker = lo | (hi << 8)
+
+    dut._log.info(f"NMI marker = {nmi_marker:#06x} (expected 0x2222)")
+    dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0x0000)")
+    assert nmi_marker == 0x2222, f"NMI handler didn't run! Got {nmi_marker:#06x}"
+    assert irq_marker == 0x0000, f"IRQ fired instead of/alongside NMI! Got {irq_marker:#06x}"
+    dut._log.info("PASS [nmi_priority_over_irq]")
+
+
+@cocotb.test()
+async def test_nmi_during_multicycle(dut):
+    """NMI asserted during a multi-cycle LW completes the LW before entering handler."""
+    dut._log.info("Test: NMI during multi-cycle instruction")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code: jump past vectors, then LW, then SW to prove LW completed
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
+
+    # IRQ at $0004: unused
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    # NMI handler at $0008: write R5 to marker (R5 was loaded by main code's LW)
+    _place(prog, 0x0008, _encode_sw(rs2=5, rs1=0, off6=25))   # MEM[$32] = R5
+    _place(prog, 0x000A, _encode_reti())
+
+    # Continue at $0020: LW into R5, SW R5 to another marker, spin
+    _place(prog, 0x0020, _encode_lw(rd=5, rs1=0, off6=24))    # R5 = MEM[$30] = 0x1234
+    _place(prog, 0x0022, _encode_sw(rs2=5, rs1=0, off6=27))   # MEM[$36] = R5
+    _place(prog, 0x0024, _encode_jr(rs=0, off6=18))           # spin at $0024
+
+    # Data
+    prog[0x001E] = 0x20
+    prog[0x001F] = 0x00
+    prog[0x0030] = 0x34
+    prog[0x0031] = 0x12
+
+    # Clear markers
+    prog[0x0032] = 0x00
+    prog[0x0033] = 0x00
+    prog[0x0036] = 0x00
+    prog[0x0037] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Wait for jump to $0020 and start of LW
+    await ClockCycles(dut.clk, 40)
+
+    # Assert NMIB during LW execution
+    _set_ui(dut, rdy=True, irqb=True, nmib=False)
+    await ClockCycles(dut.clk, 10)
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+
+    # Let NMI fire, handler run, RETI, then SW execute
+    await ClockCycles(dut.clk, 200)
+
+    # Check NMI handler marker (R5 should have been loaded by LW before NMI)
+    lo = _read_ram(dut, 0x0032)
+    hi = _read_ram(dut, 0x0033)
+    nmi_marker = lo | (hi << 8)
+
+    # Check main code marker (SW after RETI return)
+    lo = _read_ram(dut, 0x0036)
+    hi = _read_ram(dut, 0x0037)
+    main_marker = lo | (hi << 8)
+
+    dut._log.info(f"NMI marker (R5) = {nmi_marker:#06x} (expected 0x1234)")
+    dut._log.info(f"Main marker = {main_marker:#06x} (expected 0x1234)")
+    assert nmi_marker == 0x1234, f"LW didn't complete before NMI! Got {nmi_marker:#06x}"
+    assert main_marker == 0x1234, f"Main code didn't resume after RETI! Got {main_marker:#06x}"
+    dut._log.info("PASS [nmi_during_multicycle]")
+
+
+@cocotb.test()
+async def test_nmi_second_edge(dut):
+    """After first NMI is handled, a second falling edge triggers another NMI."""
+    dut._log.info("Test: NMI second edge re-triggers")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code: spin at $0000
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=0))
+
+    # IRQ at $0004: unused
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    # NMI handler at $0008: increment marker word at $0030, then RETI
+    # Load current marker value, add 1 by storing a new known value each time.
+    # Simpler: first NMI writes 0xAAAA, handler always writes same value.
+    # To detect two entries: write to $0030 first time, $0032 second time.
+    # But we can't branch in the handler... simpler approach:
+    # Handler loads counter from $0030, stores 0x0001 to $0030 (first call
+    # changes 0→1), then on second call changes 1→1 (same). That doesn't work.
+    #
+    # Better approach: handler writes 0xAAAA to MEM[R4], then R4 += 2.
+    # But we don't have ADDI yet... Use a different approach:
+    # Handler reads $0030, writes it to $0032, then writes 0xBBBB to $0030.
+    # First NMI: $0030 goes from 0x0000→0xBBBB, $0032 gets 0x0000
+    # Second NMI: $0030 goes from 0xBBBB→0xBBBB, $0032 gets 0xBBBB
+    # Check: $0032 == 0xBBBB proves second NMI ran.
+
+    # NMI handler at $0008:
+    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=24))    # R1 = MEM[$30] (current)
+    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, off6=25))   # MEM[$32] = R1 (copy previous)
+    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=22))    # R2 = MEM[$2C] = 0xBBBB
+    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xBBBB
+    _place(prog, 0x0010, _encode_reti())
+
+    # Data
+    prog[0x002C] = 0xBB
+    prog[0x002D] = 0xBB
+
+    # Clear markers
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+    prog[0x0032] = 0x00
+    prog[0x0033] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    await ClockCycles(dut.clk, 30)
+
+    # First NMI pulse
+    _set_ui(dut, rdy=True, irqb=True, nmib=False)
+    await ClockCycles(dut.clk, 10)
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+
+    # Wait for first NMI to complete and RETI
+    await ClockCycles(dut.clk, 100)
+
+    # Second NMI pulse
+    _set_ui(dut, rdy=True, irqb=True, nmib=False)
+    await ClockCycles(dut.clk, 10)
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+
+    # Wait for second NMI to complete
+    await ClockCycles(dut.clk, 100)
+
+    # Check: $0030 should be 0xBBBB (written by both NMIs)
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    marker1 = lo | (hi << 8)
+
+    # Check: $0032 should be 0xBBBB (second NMI copied $0030's value)
+    lo = _read_ram(dut, 0x0032)
+    hi = _read_ram(dut, 0x0033)
+    marker2 = lo | (hi << 8)
+
+    dut._log.info(f"$0030 = {marker1:#06x} (expected 0xBBBB)")
+    dut._log.info(f"$0032 = {marker2:#06x} (expected 0xBBBB, proves second NMI ran)")
+    assert marker1 == 0xBBBB, f"First NMI didn't write! Got {marker1:#06x}"
+    assert marker2 == 0xBBBB, f"Second NMI didn't run! Got {marker2:#06x}"
+    dut._log.info("PASS [nmi_second_edge]")

@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor currently implements: **LW**, **SW**, **JR**, **RETI**, **SEI**, and **CLI**. IRQ interrupt handling is supported. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor currently implements: **LW**, **SW**, **JR**, **RETI**, **SEI**, and **CLI**. IRQ and NMI interrupt handling is supported. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -14,10 +14,10 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 17 ns | 16 ns |
 | fMax (slow corner) | 58.8 MHz | 62.5 MHz |
-| Utilization | 43.8% | 48.4% |
-| Transistor count (synth) | 11,168 | 13,082 |
+| Utilization | 43.6% | 48.4% |
+| Transistor count (synth) | 11,340 | 13,082 |
 
-RISCY-V02 uses ~15% fewer transistors with room to grow as more instructions are added.
+RISCY-V02 uses ~13% fewer transistors with room to grow as more instructions are added.
 
 ## Bus Protocol
 
@@ -34,7 +34,8 @@ RISCY-V02 uses the same TT mux/demux bus protocol as the Arlet 6502 wrapper. The
 - `uio[7:0]` = D[7:0] (bidirectional; output during writes, input during reads)
 
 **Control inputs:**
-- `ui_in[0]` = IRQB (active-low interrupt request)
+- `ui_in[0]` = IRQB (active-low interrupt request, level-sensitive)
+- `ui_in[1]` = NMIB (active-low non-maskable interrupt, edge-triggered)
 - `ui_in[2]` = RDY (active-high ready signal)
 
 ## Architecture
@@ -56,29 +57,39 @@ There is no vector fetch; code is placed directly at address $0000. Software mus
 
 ### Interrupts
 
-RISCY-V02 supports maskable IRQ interrupts via the IRQB input (`ui_in[0]`).
+RISCY-V02 supports maskable IRQ and non-maskable NMI interrupts.
 
-**Interrupt entry (when IRQB=0 and I=0):**
+**Vector table** (4-byte spacing for two-instruction trampolines):
+
+| Vector | Address | Trigger |
+|---|---|---|
+| RESET | $0000 | RESB rising edge |
+| IRQ | $0004 | IRQB low, level-sensitive, masked by I=1 |
+| NMI | $0008 | NMIB falling edge, non-maskable |
+
+Each vector has room for a two-instruction trampoline (LW + JR) to reach the actual handler.
+
+**IRQ entry (when IRQB=0 and I=0):**
 1. Complete the current instruction
 2. Save EPC = (next_PC | I) — return address with I bit in bit 0
 3. Set I = 1 — disable further interrupts
-4. Jump to $0004 (IRQ vector)
+4. Jump to $0004
+
+**NMI entry (on NMIB falling edge, regardless of I):**
+1. Complete the current instruction
+2. Save EPC = (next_PC | I) — overwrites any previous EPC
+3. Set I = 1 — disable IRQs
+4. Jump to $0008
+
+NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low does not re-trigger. NMIB must return high and fall again for a new NMI. NMI has priority over IRQ; if both are pending simultaneously, NMI is taken first, and the subsequent I=1 masks the IRQ.
+
+**Warning:** RETI from an NMI handler is undefined behavior. NMI overwrites EPC unconditionally, so if an NMI interrupts an IRQ handler before it saves EPC, the IRQ's return address is lost. NMI handlers typically reset, halt, or spin.
 
 **Interrupt return (RETI instruction):**
 1. Restore I = EPC[0]
 2. Jump to EPC & $FFFE
 
-The IRQ vector at $0004 typically contains a trampoline (LW + JR) to reach the actual handler:
-
-```
-$0000: <reset code>
-$0002: ...
-$0004: LW t0, 5(R0)    ; Load handler address from $000A
-$0006: JR t0, 0        ; Jump to handler
-$0008: <handler_addr>  ; 16-bit address of IRQ handler
-```
-
-**Interrupt latency:** 2 cycles from instruction completion to first handler instruction fetch.
+**Interrupt latency:** 2 cycles from instruction completion to first handler instruction fetch. NMI edge detection is combinational — if the falling edge arrives on the same cycle that the FSM is ready, the NMI is taken immediately with no additional detection delay.
 
 ### Register Naming Convention
 
@@ -209,6 +220,7 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | JR | 4 | 2 execute + 2 fetch after redirect |
 | RETI | 3 | 1 execute + 2 fetch after redirect |
 | IRQ entry | 2 | Redirect at instruction boundary |
+| NMI entry | 2 | Redirect at instruction boundary |
 
 Instructions that redirect (JR, RETI) flush the speculative fetch and must wait for new instruction bytes. Non-redirecting instructions benefit from fetch/execute overlap.
 

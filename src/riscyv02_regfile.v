@@ -6,10 +6,14 @@
  *
  * Leader latches (sg13g2_dlhrq_1, transparent-high) capture w_data,
  * w_sel, w_hi, and w_we at the falling clock edge.  Follower latches
- * (sg13g2_dllrq_1, transparent-low) pass the leader's captured value
- * to the selected register byte during clk=0.  The opposite polarities
- * guarantee by construction that leaders and followers are never
- * simultaneously transparent.
+ * (also sg13g2_dlhrq_1) use GATE = ~clk & write_enable to pass the
+ * leader's captured value to the selected register byte during clk=0.
+ *
+ * Both phases use sg13g2_dlhrq_1 (27.22 µm²) rather than sg13g2_dllrq_1
+ * (29.03 µm²) for followers, saving ~232 µm² across 128 follower latches.
+ * The ~clk inverter in the follower gate path actually improves hold-time
+ * margin: leaders close (clk falls) before followers open (~clk rises
+ * through the inverter), providing a natural non-overlap guarantee.
  *
  * Single read port: execute only.  Fetch no longer needs register
  * access since JR is handled by execute.
@@ -75,14 +79,14 @@ module riscyv02_regfile (
     .Q(w_we_held)
   );
 
-  // Phase 2 — Follower latches (sg13g2_dllrq_1): transparent when GATE_N=0,
-  // i.e. when ~(clk | ~wen[i]) = ~clk & wen[i]. Selected register byte passes
-  // leader's captured value during clk=0; all others hold.
+  // Phase 2 — Follower latches (sg13g2_dlhrq_1): transparent when GATE=1,
+  // i.e. when ~clk & write_enable. Selected register byte passes leader's
+  // captured value during clk=0; all others hold.
   //
-  // Byte-select writes: each follower's gate_n becomes clk | ~(wen & byte_match)
-  //   - Low bytes (bi<8): byte_match = ~w_hi_held
-  //   - High bytes (bi>=8): byte_match = w_hi_held
+  // The ~clk inverter provides natural non-overlap: leaders close at negedge
+  // before followers open through the inverter delay.
   wire [15:0] regs [0:7];
+  wire clk_n = ~clk;
 
   generate
     genvar gi, bi;
@@ -93,21 +97,20 @@ module riscyv02_regfile (
       wire write_lo = wen & ~w_hi_held;
       wire write_hi = wen & w_hi_held;
       // Gate signals: transparent when clk=0 AND write enabled for this byte
-      // (GATE_N=0 means transparent, so gate_n = clk | ~write_xx)
-      wire gate_n_lo = clk | ~write_lo;
-      wire gate_n_hi = clk | ~write_hi;
+      wire gate_lo = clk_n & write_lo;
+      wire gate_hi = clk_n & write_hi;
       for (bi = 0; bi < 8; bi = bi + 1) begin : gen_bit_lo
-        sg13g2_dllrq_1 u_follower (
+        sg13g2_dlhrq_1 u_follower (
           .D(w_data_held[bi]),
-          .GATE_N(gate_n_lo),
+          .GATE(gate_lo),
           .RESET_B(rst_n),
           .Q(regs[gi][bi])
         );
       end
       for (bi = 0; bi < 8; bi = bi + 1) begin : gen_bit_hi
-        sg13g2_dllrq_1 u_follower (
+        sg13g2_dlhrq_1 u_follower (
           .D(w_data_held[bi]),
-          .GATE_N(gate_n_hi),
+          .GATE(gate_hi),
           .RESET_B(rst_n),
           .Q(regs[gi][bi+8])
         );
