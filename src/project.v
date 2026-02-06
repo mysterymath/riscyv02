@@ -121,7 +121,7 @@ module tt_um_riscyv02 (
   wire [15:0] exec_ab;
   wire [7:0]  exec_dout;
   wire        exec_rwb;
-  wire        redirect;
+  wire        flush;
   wire [15:0] fetch_pc;
 
   // -----------------------------------------------------------------------
@@ -133,7 +133,7 @@ module tt_um_riscyv02 (
     .uio_in     (uio_in),
     .bus_free   (!exec_bus_active),
     .ir_accept  (exec_ir_accept),
-    .redirect   (redirect),
+    .flush      (flush),
     .fetch_pc   (fetch_pc),
     .ir_valid   (ir_valid),
     .ir         (fetch_ir),
@@ -160,7 +160,7 @@ module tt_um_riscyv02 (
     .nmi_ack       (exec_nmi_ack),
     .waiting       (exec_waiting),
     .stopped       (exec_stopped),
-    .redirect      (redirect),
+    .fetch_flush   (flush),
     .fetch_pc      (fetch_pc)
   );
 

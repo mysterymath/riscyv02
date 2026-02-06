@@ -32,8 +32,8 @@ module riscyv02_execute (
     output reg         nmi_ack,      // NMI acknowledged (registered, for clearing nmi_pending)
     output wire        waiting,      // WAI: halted until interrupt (gates cpu_clk)
     output wire        stopped,      // STP: halted permanently, only reset recovers
-    // Control flow redirect to fetch
-    output reg         redirect,
+    // Fetch pipeline flush and next-instruction address
+    output reg         fetch_flush,
     output reg  [15:0] fetch_pc
 );
 
@@ -127,21 +127,20 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // State-driven signals (computed in state-property block below)
   // -------------------------------------------------------------------------
-  reg        fsm_ready;
-  reg [15:0] next_pc;
-  reg        jump;      // Instruction wants to redirect fetch to next_pc
-  reg [15:0] redirect_pc;
-
+  reg        insn_completing;
+  reg [15:0] next_pc;   // The next instruction in non-interrupted control flow
+  reg        jump;      // Whether next_pc isn't the sequential next instruction
 
   // Interrupt control: NMI has priority over IRQ.
   // nmi_edge is combinational so NMI is taken the same cycle the falling
   // edge arrives (no 1-cycle detection latency when fsm_ready).
   // nmi_ack guard prevents double-fire while waiting for project.v to clear
   // nmi_pending (nmi_ack stays high until the handshake completes).
+  wire fsm_ready = state == E_IDLE || insn_completing;
   wire take_nmi = fsm_ready && (nmi_pending || nmi_edge) && !nmi_ack;
   wire take_irq = fsm_ready && !irqb && !i_bit && !take_nmi;
   wire take_brk = (state == E_EXEC_LO) && (op_r == OP_BRK);
-  assign ir_accept      = fsm_ready && ir_valid && !redirect;
+  assign ir_accept      = fsm_ready && ir_valid && !fetch_flush;
   assign waiting = (state == E_IDLE) && (op_r == OP_WAI);
   assign stopped = (state == E_IDLE) && (op_r == OP_STP);
 
@@ -166,20 +165,19 @@ module riscyv02_execute (
     w_hi            = 1'bx;
     w_data          = uio_in;
     w_we            = 1'b0;
-    fsm_ready       = 1'b0;
+    insn_completing = 1'b0;
     next_pc         = pc;
     fetch_pc        = pc + 16'd2;
     jump            = 1'b0;
 
     case (state)
       E_IDLE: begin
-        fsm_ready = 1'b1;
         fetch_pc  = pc;
       end
 
       E_EXEC_LO: begin
         if (op_r == OP_RETI) begin
-          fsm_ready = 1'b1;
+          insn_completing = 1'b1;
           jump      = 1'b1;
           next_pc   = {epc[15:1], 1'b0};
         end else begin
@@ -196,7 +194,7 @@ module riscyv02_execute (
       end
 
       E_EXEC_HI: begin
-        fsm_ready = 1'b1;
+        insn_completing = 1'b1;
         fetch_pc  = pc;
         if (op_r == OP_EPCR) begin
           w_data = epc[15:8];
@@ -234,14 +232,14 @@ module riscyv02_execute (
           w_data    = alu_result;
           w_hi      = 1'b1;
           w_we      = 1'b1;
-          fsm_ready = 1'b1;
+          insn_completing = 1'b1;
           next_pc  += 16'd2;
         end else begin
           alu_b     = {8{off6_r[5]}};  // sign extension
           r_sel     = base_sel_r[2:0];
           r_hi      = 1'b1;
           if (op_r == OP_JR) begin
-            fsm_ready = 1'b1;
+            insn_completing = 1'b1;
             jump      = 1'b1;
             next_pc   = {alu_result, MAR[7:0]};
           end
@@ -256,13 +254,13 @@ module riscyv02_execute (
         w_hi         = 1'b0;
         w_we         = (op_r != OP_SW && op_r != OP_SB);
         if (op_r == OP_SB) begin
-          fsm_ready  = 1'b1;
-          next_pc   += 16'd2;
+          insn_completing = 1'b1;
+          next_pc        += 16'd2;
         end
       end
 
       E_MEM_HI: begin
-        fsm_ready       = 1'b1;
+        insn_completing = 1'b1;
         next_pc        += 16'd2;
         w_hi            = 1'b1;
         if (op_r == OP_LB || op_r == OP_LBU) begin
@@ -288,12 +286,8 @@ module riscyv02_execute (
       end
     endcase
 
-    // Redirect priority: NMI > IRQ > BRK > instruction jump.
-    redirect = take_nmi || take_irq || take_brk || jump;
-    if (take_nmi)       redirect_pc = 16'h0008;
-    else if (take_irq)  redirect_pc = 16'h0004;
-    else if (take_brk)  redirect_pc = 16'h000C;
-    else                redirect_pc = next_pc;
+    // Flush priority: NMI > IRQ > BRK > instruction jump.
+    fetch_flush = take_nmi || take_irq || take_brk || jump;
   end
 
   // ==========================================================================
@@ -324,9 +318,16 @@ module riscyv02_execute (
       if (state == E_EXEC_HI && op_r == OP_EPCW)
         epc[15:8] <= r;
 
-      // PC update: redirect_pc for jumps/interrupts, next_pc otherwise.
+      // PC update
+      if (take_nmi)
+        pc <= 16'h0008;
+      else if (take_irq)
+        pc <= 16'h0004;
+      else if (take_brk)
+        pc <= 16'h000C;
+      else
+        pc <= next_pc;
       // Interrupt entry also saves EPC and sets I=1.
-      pc <= redirect ? redirect_pc : next_pc;
       if (take_nmi || take_irq) begin
         epc   <= next_pc | {15'b0, i_bit};  // Save return address with I flag
         i_bit <= 1'b1;                       // Disable further interrupts
@@ -337,7 +338,7 @@ module riscyv02_execute (
         // Instruction dispatch (centralized)
         //
         // ir_accept fires from E_IDLE, E_MEM_LO (SB), or E_MEM_HI (not during jump since
-        // that sets redirect). All dispatch actions happen here:
+        // that sets fetch_flush). All dispatch actions happen here:
         //   - Latch decoded instruction fields
         //   - Transition to E_EXEC_LO (single-cycle) or E_ADDR_LO (multi-cycle)
         // ---------------------------------------------------------------------

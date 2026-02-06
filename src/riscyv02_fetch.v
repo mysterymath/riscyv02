@@ -9,7 +9,7 @@
 // Fetch unit: instruction fetch only, no register access.
 //
 // Address derived combinationally from execute's fetch_pc signal — no
-// local PC register or adder needed.  When execute redirects (JR,
+// local PC register or adder needed.  When execute flushes (JR,
 // interrupts), fetch resets to F_LO and fetch_pc already points to
 // the new address.
 //
@@ -23,7 +23,7 @@ module riscyv02_fetch (
     input  wire [7:0]  uio_in,
     input  wire        bus_free,
     input  wire        ir_accept,
-    input  wire        redirect,
+    input  wire        flush,
     input  wire [15:0] fetch_pc,
     output wire        ir_valid,
     output wire [15:0] ir,
@@ -41,8 +41,8 @@ module riscyv02_fetch (
   assign ab = (state == F_HI) ? {fetch_pc[15:1], 1'b1} : fetch_pc;
 
   // Instruction output: combinational in F_HI, registered in F_HOLD
-  // Note: ir_valid doesn't depend on redirect to avoid combinational loops
-  // with IRQ/RETI detection. The redirect is handled in the sequential block.
+  // Note: ir_valid doesn't depend on flush to avoid combinational loops
+  // with IRQ/RETI detection. The flush is handled in the sequential block.
   assign ir = (state == F_HOLD) ? ir_r : {uio_in, ir_r[7:0]};
   assign ir_valid = ((state == F_HI) && bus_free) || (state == F_HOLD);
 
@@ -50,7 +50,7 @@ module riscyv02_fetch (
     if (!rst_n) begin
       state <= F_LO;
       ir_r  <= 16'h0000;
-    end else if (redirect)
+    end else if (flush)
       state <= F_LO;
     else case (state)
       F_LO: if (bus_free) begin
