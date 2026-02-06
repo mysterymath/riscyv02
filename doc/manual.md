@@ -14,10 +14,10 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 17 ns | 16 ns |
 | fMax (slow corner) | 58.8 MHz | 62.5 MHz |
-| Utilization | 43.6% | 48.4% |
-| Transistor count (synth) | 11,340 | 13,082 |
+| Utilization | 42.6% | 48.4% |
+| Transistor count (synth) | 11,102 | 13,082 |
 
-RISCY-V02 uses ~13% fewer transistors with room to grow as more instructions are added.
+RISCY-V02 uses ~15% fewer transistors with room to grow as more instructions are added.
 
 ## Bus Protocol
 
