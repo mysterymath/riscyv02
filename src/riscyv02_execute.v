@@ -8,7 +8,7 @@
 // ============================================================================
 // Execute unit: FSM + ALU + register file.
 //
-// Handles LW, SW, JR, RETI, SEI, CLI instructions. The register file lives
+// Handles LW, SW, LB, LBU, SB, JR, AUIPC, RETI, SEI, CLI, BRK, EPCR, EPCW instructions. The register file lives
 // here since only execute needs register access.
 //
 // Code is organized by state: combinational signals are computed in a single
@@ -20,7 +20,8 @@ module riscyv02_execute (
     input  wire        rst_n,
     input  wire [7:0]  uio_in,
     input  wire        irqb,         // Interrupt request (active low, level-sensitive)
-    input  wire        nmib,         // Non-maskable interrupt (active low, edge-triggered)
+    input  wire        nmi_pending,  // NMI pending (from project.v, ungated domain)
+    input  wire        nmi_edge,     // NMI combinational edge (same-cycle detection)
     input  wire        ir_valid,
     input  wire [15:0] fetch_ir,
     output reg         bus_active,
@@ -28,9 +29,12 @@ module riscyv02_execute (
     output reg  [7:0]  dout,
     output reg         rwb,
     output wire        ir_accept,
+    output reg         nmi_ack,      // NMI acknowledged (registered, for clearing nmi_pending)
+    output wire        waiting,      // WAI: halted until interrupt (gates cpu_clk)
+    output wire        stopped,      // STP: halted permanently, only reset recovers
     // Control flow redirect to fetch
     output reg         redirect,
-    output reg  [15:0] redirect_pc
+    output reg  [15:0] fetch_pc
 );
 
   // ==========================================================================
@@ -39,11 +43,12 @@ module riscyv02_execute (
 
   // FSM states
   localparam E_IDLE    = 3'd0;  // Waiting for instruction
-  localparam E_EXEC    = 3'd1;  // Execute single-cycle instruction effects
+  localparam E_EXEC_LO = 3'd1;  // Execute low byte / single-cycle effects
   localparam E_ADDR_LO = 3'd2;  // Computing address low byte
   localparam E_ADDR_HI = 3'd3;  // Computing address high byte
   localparam E_MEM_LO  = 3'd4;  // Memory access low byte
   localparam E_MEM_HI  = 3'd5;  // Memory access high byte (can accept next)
+  localparam E_EXEC_HI = 3'd6;  // Execute high byte (two-cycle instructions)
 
   reg [2:0]  state;
   reg [15:0] MAR;       // Memory Address Register
@@ -52,21 +57,27 @@ module riscyv02_execute (
   reg [15:0] pc;        // Program counter (current instruction address)
   reg [15:0] epc;       // Exception PC (bit 0 used for I flag on save)
   reg        i_bit;     // Interrupt disable flag (0=enabled, 1=disabled)
-  reg        nmib_prev; // Previous NMIB value for falling-edge detection
-  reg        nmi_pending; // Latched NMI (set on falling edge, cleared when taken)
 
   // Decoded instruction state (latched at ir_accept)
-  // 3-bit opcode encoding (saves DFFs vs one-hot)
-  localparam OP_NOP  = 3'd0;
-  localparam OP_SEI  = 3'd1;
-  localparam OP_CLI  = 3'd2;
-  localparam OP_RETI = 3'd3;
-  localparam OP_LW   = 3'd4;
-  localparam OP_SW   = 3'd5;
-  localparam OP_JR   = 3'd6;
+  localparam OP_NOP  = 4'd0;
+  localparam OP_SEI  = 4'd1;
+  localparam OP_CLI  = 4'd2;
+  localparam OP_RETI = 4'd3;
+  localparam OP_LW   = 4'd4;
+  localparam OP_SW   = 4'd5;
+  localparam OP_JR   = 4'd6;
+  localparam OP_WAI  = 4'd7;
+  localparam OP_STP  = 4'd8;
+  localparam OP_BRK  = 4'd9;
+  localparam OP_EPCR = 4'd10;
+  localparam OP_EPCW = 4'd11;
+  localparam OP_LB   = 4'd12;
+  localparam OP_LBU  = 4'd13;
+  localparam OP_SB    = 4'd14;
+  localparam OP_AUIPC = 4'd15;
 
-  reg [2:0]  op_r;            // Instruction opcode
-  reg [2:0]  base_sel_r;      // Base register selector
+  reg [3:0]  op_r;            // Instruction opcode
+  reg [3:0]  base_sel_r;      // Base register (or imm10[9:6] for AUIPC)
   reg [5:0]  off6_r;          // 6-bit offset
   reg [2:0]  rd_rs2_sel_r;    // Destination (LW) or source (SW)
 
@@ -82,13 +93,14 @@ module riscyv02_execute (
   wire [7:0] r;
   reg        w_hi;
   reg        w_we;
+  reg  [7:0] w_data;
 
   riscyv02_regfile u_regfile (
     .clk    (clk),
     .rst_n  (rst_n),
     .w_sel  (rd_rs2_sel_r),
     .w_hi   (w_hi),
-    .w_data (uio_in),
+    .w_data (w_data),
     .w_we   (w_we),
     .r_sel  (r_sel),
     .r_hi   (r_hi),
@@ -98,6 +110,7 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // ALU
   // -------------------------------------------------------------------------
+  reg  [7:0] alu_a;
   reg  [7:0] alu_b;
   reg        alu_new_op;
   wire [7:0] alu_result;
@@ -105,7 +118,7 @@ module riscyv02_execute (
   riscyv02_alu u_alu (
     .clk    (clk),
     .rst_n  (rst_n),
-    .a      (r),
+    .a      (alu_a),
     .b      (alu_b),
     .new_op (alu_new_op),
     .result (alu_result)
@@ -117,14 +130,20 @@ module riscyv02_execute (
   reg        fsm_ready;
   reg [15:0] next_pc;
   reg        jump;      // Instruction wants to redirect fetch to next_pc
+  reg [15:0] redirect_pc;
+
 
   // Interrupt control: NMI has priority over IRQ.
   // nmi_edge is combinational so NMI is taken the same cycle the falling
   // edge arrives (no 1-cycle detection latency when fsm_ready).
-  wire nmi_edge = nmib_prev && !nmib;
-  wire take_nmi = fsm_ready && (nmi_pending || nmi_edge);
+  // nmi_ack guard prevents double-fire while waiting for project.v to clear
+  // nmi_pending (nmi_ack stays high until the handshake completes).
+  wire take_nmi = fsm_ready && (nmi_pending || nmi_edge) && !nmi_ack;
   wire take_irq = fsm_ready && !irqb && !i_bit && !take_nmi;
-  assign ir_accept  = fsm_ready && ir_valid && !redirect;
+  wire take_brk = (state == E_EXEC_LO) && (op_r == OP_BRK);
+  assign ir_accept      = fsm_ready && ir_valid && !redirect;
+  assign waiting = (state == E_IDLE) && (op_r == OP_WAI);
+  assign stopped = (state == E_IDLE) && (op_r == OP_STP);
 
   // ==========================================================================
   // State-Property Block
@@ -139,45 +158,93 @@ module riscyv02_execute (
     ab              = 16'bx;
     dout            = 8'bx;
     rwb             = 1'bx;
+    alu_a           = r;
     alu_new_op      = 1'bx;
     alu_b           = 8'bx;
     r_sel           = 3'bx;
     r_hi            = 1'bx;
     w_hi            = 1'bx;
+    w_data          = uio_in;
     w_we            = 1'b0;
     fsm_ready       = 1'b0;
     next_pc         = pc;
+    fetch_pc        = pc + 16'd2;
     jump            = 1'b0;
 
     case (state)
-      E_IDLE:
+      E_IDLE: begin
         fsm_ready = 1'b1;
+        fetch_pc  = pc;
+      end
 
-      E_EXEC: begin
+      E_EXEC_LO: begin
         if (op_r == OP_RETI) begin
           fsm_ready = 1'b1;
           jump      = 1'b1;
           next_pc   = {epc[15:1], 1'b0};
-        end else
+        end else begin
           next_pc += 16'd2;
+          if (op_r == OP_EPCR) begin
+            w_data = epc[7:0];
+            w_hi   = 1'b0;
+            w_we   = 1'b1;
+          end else if (op_r == OP_EPCW) begin
+            r_sel = rd_rs2_sel_r;
+            r_hi  = 1'b0;
+          end
+        end
+      end
+
+      E_EXEC_HI: begin
+        fsm_ready = 1'b1;
+        fetch_pc  = pc;
+        if (op_r == OP_EPCR) begin
+          w_data = epc[15:8];
+          w_hi   = 1'b1;
+          w_we   = 1'b1;
+        end else begin
+          r_sel = rd_rs2_sel_r;
+          r_hi  = 1'b1;
+        end
       end
 
       E_ADDR_LO: begin
         alu_new_op = 1'b1;
-        alu_b      = {off6_r[5], off6_r, 1'b0};  // offset * 2
-        r_sel      = base_sel_r;
-        r_hi       = 1'b0;
+        if (op_r == OP_AUIPC) begin
+          alu_a  = pc[7:0];
+          alu_b  = {off6_r[1:0], 6'b0};            // (imm10 << 6) low byte
+          w_data = alu_result;
+          w_hi   = 1'b0;
+          w_we   = 1'b1;
+        end else begin
+          if (op_r == OP_LB || op_r == OP_LBU || op_r == OP_SB)
+            alu_b = {{2{off6_r[5]}}, off6_r};      // unscaled
+          else
+            alu_b = {off6_r[5], off6_r, 1'b0};     // offset * 2
+          r_sel  = base_sel_r[2:0];
+          r_hi   = 1'b0;
+        end
       end
 
       E_ADDR_HI: begin
         alu_new_op = 1'b0;
-        alu_b      = {8{off6_r[5]}};  // sign extension
-        r_sel      = base_sel_r;      // base register
-        r_hi       = 1'b1;
-        if (op_r == OP_JR) begin
+        if (op_r == OP_AUIPC) begin
+          alu_a     = pc[15:8];
+          alu_b     = {base_sel_r, off6_r[5:2]};   // (imm10 << 6) high byte
+          w_data    = alu_result;
+          w_hi      = 1'b1;
+          w_we      = 1'b1;
           fsm_ready = 1'b1;
-          jump      = 1'b1;
-          next_pc   = {alu_result, MAR[7:0]};
+          next_pc  += 16'd2;
+        end else begin
+          alu_b     = {8{off6_r[5]}};  // sign extension
+          r_sel     = base_sel_r[2:0];
+          r_hi      = 1'b1;
+          if (op_r == OP_JR) begin
+            fsm_ready = 1'b1;
+            jump      = 1'b1;
+            next_pc   = {alu_result, MAR[7:0]};
+          end
         end
       end
 
@@ -187,34 +254,45 @@ module riscyv02_execute (
         r_sel        = rd_rs2_sel_r;
         r_hi         = 1'b0;
         w_hi         = 1'b0;
-        w_we         = (op_r != OP_SW);
+        w_we         = (op_r != OP_SW && op_r != OP_SB);
+        if (op_r == OP_SB) begin
+          fsm_ready  = 1'b1;
+          next_pc   += 16'd2;
+        end
       end
 
       E_MEM_HI: begin
-        bus_active      = 1'b1;
-        ab              = {MAR[15:1], 1'b1};
-        r_sel           = rd_rs2_sel_r;
-        r_hi            = 1'b1;
-        w_hi            = 1'b1;
-        w_we            = (op_r != OP_SW);
         fsm_ready       = 1'b1;
         next_pc        += 16'd2;
+        w_hi            = 1'b1;
+        if (op_r == OP_LB || op_r == OP_LBU) begin
+          r_sel         = rd_rs2_sel_r;
+          r_hi          = 1'b0;
+          w_data        = (op_r == OP_LB) ? {8{r[7]}} : 8'h00;
+          w_we          = 1'b1;
+        end else begin
+          bus_active    = 1'b1;
+          ab            = {MAR[15:1], 1'b1};
+          r_sel         = rd_rs2_sel_r;
+          r_hi          = 1'b1;
+          w_we          = (op_r != OP_SW);
+        end
       end
+
     endcase
 
     case (state)
       E_MEM_LO, E_MEM_HI: begin
-        dout = r;   // rs2_lo or rs2_hi from regfile (only meaningful for SW)
-        rwb  = (op_r != OP_SW);
+        dout = r;   // rs2_lo or rs2_hi from regfile (only meaningful for SW/SB)
+        rwb  = (op_r != OP_SW && op_r != OP_SB);
       end
     endcase
 
-    // Redirect priority: NMI > IRQ > instruction jump.
-    // Interrupts override jump target; instruction jumps only redirect
-    // when no interrupt is being taken.
-    redirect = (take_nmi || take_irq) || jump;
+    // Redirect priority: NMI > IRQ > BRK > instruction jump.
+    redirect = take_nmi || take_irq || take_brk || jump;
     if (take_nmi)       redirect_pc = 16'h0008;
     else if (take_irq)  redirect_pc = 16'h0004;
+    else if (take_brk)  redirect_pc = 16'h000C;
     else                redirect_pc = next_pc;
   end
 
@@ -227,39 +305,41 @@ module riscyv02_execute (
       state            <= E_IDLE;
       MAR              <= 16'h0000;
       op_r             <= OP_NOP;
-      base_sel_r       <= 3'b000;
+      base_sel_r       <= 4'b0000;
       off6_r           <= 6'b000000;
       rd_rs2_sel_r     <= 3'b000;
       pc               <= 16'h0000;
       epc              <= 16'h0000;
       i_bit            <= 1'b1;  // Interrupts disabled after reset
-      nmib_prev        <= 1'b1;  // Assume NMIB inactive
-      nmi_pending      <= 1'b0;
+      nmi_ack          <= 1'b0;
     end else begin
-      // NMI edge detection and pending latch.
-      // nmi_pending captures edges that arrive while FSM is busy;
-      // cleared when NMI is taken (take_nmi includes combinational nmi_edge).
-      nmib_prev <= nmib;
-      if (take_nmi)
-        nmi_pending <= 1'b0;
-      else if (nmi_edge)
-        nmi_pending <= 1'b1;
+      // NMI handshake: set nmi_ack when NMI is taken; hold until project.v
+      // clears nmi_pending, then release.
+      if (!nmi_pending) nmi_ack <= 1'b0;
+      else if (take_nmi) nmi_ack <= 1'b1;
+
+      // EPCW high byte: unconditional so it executes even when ir_accept
+      // dispatches the next instruction in E_EXEC_HI. Interrupt entry
+      // overwrites the full epc, so priority is correct.
+      if (state == E_EXEC_HI && op_r == OP_EPCW)
+        epc[15:8] <= r;
 
       // PC update: redirect_pc for jumps/interrupts, next_pc otherwise.
       // Interrupt entry also saves EPC and sets I=1.
-      pc <= redirect ? redirect_pc : next_pc;
+      pc <= redirect ? jump_pc : next_pc;
       if (take_nmi || take_irq) begin
         epc   <= next_pc | {15'b0, i_bit};  // Save return address with I flag
         i_bit <= 1'b1;                       // Disable further interrupts
+        op_r  <= OP_NOP;                     // Clear halt condition (WAI/STP)
         state <= E_IDLE;
       end else begin
         // ---------------------------------------------------------------------
         // Instruction dispatch (centralized)
         //
-        // ir_accept fires from E_IDLE or E_MEM_HI (not during jump since
+        // ir_accept fires from E_IDLE, E_MEM_LO (SB), or E_MEM_HI (not during jump since
         // that sets redirect). All dispatch actions happen here:
         //   - Latch decoded instruction fields
-        //   - Transition to E_EXEC (single-cycle) or E_ADDR_LO (multi-cycle)
+        //   - Transition to E_EXEC_LO (single-cycle) or E_ADDR_LO (multi-cycle)
         // ---------------------------------------------------------------------
         if (ir_accept) begin
           // Decode opcode from fetch_ir bit patterns
@@ -269,26 +349,52 @@ module riscyv02_execute (
           else if (fetch_ir == 16'b1111111010000001)  op_r <= OP_RETI;
           else if (fetch_ir == 16'b1111111010000010)  op_r <= OP_SEI;
           else if (fetch_ir == 16'b1111111010000011)  op_r <= OP_CLI;
+          else if (fetch_ir == 16'b1111111010000100)  op_r <= OP_BRK;
+          else if (fetch_ir == 16'b1111111010000101)  op_r <= OP_WAI;
+          else if (fetch_ir == 16'b1111111010000110)  op_r <= OP_STP;
+          else if (fetch_ir[15:3] == 13'b1111111001110)  op_r <= OP_EPCR;
+          else if (fetch_ir[15:3] == 13'b1111111001111)  op_r <= OP_EPCW;
+          else if (fetch_ir[15:13] == 3'b001)           op_r <= OP_AUIPC;
+          else if (fetch_ir[15:12] == 4'b0110)        op_r <= OP_LB;
+          else if (fetch_ir[15:12] == 4'b0111)        op_r <= OP_LBU;
+          else if (fetch_ir[15:12] == 4'b1001)        op_r <= OP_SB;
           else                                        op_r <= OP_NOP;
-          // JR uses rs field for base; LW/SW use rs1 field
-          base_sel_r   <= (fetch_ir[15:9] == 7'b1011100) ? fetch_ir[2:0] : fetch_ir[11:9];
+          // AUIPC captures imm10[9:6]; JR uses rs; others use rs1
+          if (fetch_ir[15:13] == 3'b001)
+            base_sel_r <= fetch_ir[12:9];
+          else if (fetch_ir[15:9] == 7'b1011100)
+            base_sel_r <= {1'b0, fetch_ir[2:0]};
+          else
+            base_sel_r <= {1'b0, fetch_ir[11:9]};
           off6_r       <= fetch_ir[8:3];
           rd_rs2_sel_r <= fetch_ir[2:0];
-          // LW, SW, JR are multi-cycle; others go to E_EXEC
-          state <= (fetch_ir[15:12] == 4'b1000 ||
+          // AUIPC, LB, LBU, LW, SB, SW, JR are multi-cycle; others go to E_EXEC_LO
+          state <= (fetch_ir[15:13] == 3'b001 ||
+                    fetch_ir[15:12] == 4'b0110 ||
+                    fetch_ir[15:12] == 4'b0111 ||
+                    fetch_ir[15:12] == 4'b1000 ||
+                    fetch_ir[15:12] == 4'b1001 ||
                     fetch_ir[15:12] == 4'b1010 ||
-                    fetch_ir[15:9]  == 7'b1011100) ? E_ADDR_LO : E_EXEC;
+                    fetch_ir[15:9]  == 7'b1011100) ? E_ADDR_LO : E_EXEC_LO;
         end else case (state)
           // ---------------------------------------------------------------------
           // Non-dispatch state transitions and instruction effects
           // ---------------------------------------------------------------------
           E_IDLE: ;  // Wait for ir_accept (handled above)
 
-          E_EXEC: begin
+          E_EXEC_LO: begin
             if (op_r == OP_SEI) i_bit <= 1'b1;
             if (op_r == OP_CLI) i_bit <= 1'b0;
             if (op_r == OP_RETI) i_bit <= epc[0];
-            state <= E_IDLE;
+            if (op_r == OP_BRK) begin
+              epc   <= next_pc | {15'b0, i_bit};
+              i_bit <= 1'b1;
+            end
+            if (op_r == OP_EPCW) epc[7:0] <= r;
+            if (op_r == OP_EPCR || op_r == OP_EPCW)
+              state <= E_EXEC_HI;
+            else
+              state <= E_IDLE;
           end
 
           E_ADDR_LO: begin
@@ -298,12 +404,14 @@ module riscyv02_execute (
 
           E_ADDR_HI: begin
             MAR[15:8] <= alu_result;
-            state     <= (op_r == OP_JR) ? E_IDLE : E_MEM_LO;
+            state     <= (op_r == OP_JR || op_r == OP_AUIPC) ? E_IDLE : E_MEM_LO;
           end
 
-          E_MEM_LO: state <= E_MEM_HI;
+          E_MEM_LO: state <= (op_r == OP_SB) ? E_IDLE : E_MEM_HI;
 
           E_MEM_HI: state <= E_IDLE;
+
+          E_EXEC_HI: state <= E_IDLE;
 
           default: state <= 3'bx;
         endcase

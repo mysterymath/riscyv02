@@ -381,6 +381,36 @@ def _encode_cli():
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
+def _encode_brk():
+    """Encode BRK -> 16-bit little-endian bytes."""
+    insn = 0b1111111010000100
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_wai():
+    """Encode WAI -> 16-bit little-endian bytes."""
+    insn = 0b1111111010000101
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_stp():
+    """Encode STP -> 16-bit little-endian bytes."""
+    insn = 0b1111111010000110
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_epcr(rd):
+    """Encode EPCR rd -> 16-bit little-endian bytes."""
+    insn = (0b1111111001110 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_epcw(rs):
+    """Encode EPCW rs -> 16-bit little-endian bytes."""
+    insn = (0b1111111001111 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
 # ---------------------------------------------------------------------------
 # Test 6: Reset I state (interrupts disabled after reset)
 # ---------------------------------------------------------------------------
@@ -1584,3 +1614,1562 @@ async def test_nmi_second_edge(dut):
     assert marker1 == 0xBBBB, f"First NMI didn't write! Got {marker1:#06x}"
     assert marker2 == 0xBBBB, f"Second NMI didn't run! Got {marker2:#06x}"
     dut._log.info("PASS [nmi_second_edge]")
+
+
+@cocotb.test()
+async def test_nmi_during_rdy_low(dut):
+    """NMI falling edge while RDY=0 is captured and serviced when RDY returns.
+
+    This tests that NMI edge detection runs on the ungated clock domain.
+    Without that fix, the gated cpu_clk stops during RDY=0 and the edge
+    would be lost.
+    """
+    dut._log.info("Test: NMI during RDY=0")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code at $0000: spin loop
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=0))  # spin at $0000
+
+    # IRQ vector at $0004: unused
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    # NMI handler at $0008: write marker and spin
+    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=16))  # R1 = MEM[$20] = 0xBEEF
+    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[$30] = 0xBEEF
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))           # spin at $000C
+
+    # Data
+    prog[0x0020] = 0xEF
+    prog[0x0021] = 0xBE
+
+    # Clear marker
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset with NMIB=1 (inactive), RDY=1
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Let CPU start spinning
+    await ClockCycles(dut.clk, 30)
+
+    # Pull RDY low — CPU halts
+    _set_ui(dut, rdy=False, irqb=True, nmib=True)
+    await ClockCycles(dut.clk, 10)
+
+    # While halted, pulse NMIB low (falling edge during RDY=0)
+    _set_ui(dut, rdy=False, irqb=True, nmib=False)
+    await ClockCycles(dut.clk, 10)
+    _set_ui(dut, rdy=False, irqb=True, nmib=True)  # Release NMIB
+    await ClockCycles(dut.clk, 10)
+
+    # Verify marker is still 0 (CPU was halted, handler hasn't run)
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    val = lo | (hi << 8)
+    assert val == 0x0000, f"NMI handler ran while halted! Got {val:#06x}"
+
+    # Return RDY high — CPU resumes, should service pending NMI
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+
+    # Let handler execute
+    await ClockCycles(dut.clk, 100)
+
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    val = lo | (hi << 8)
+    dut._log.info(f"Marker = {val:#06x} (expected 0xBEEF)")
+    assert val == 0xBEEF, f"NMI during RDY=0 was lost! Got {val:#06x}"
+    dut._log.info("PASS [nmi_during_rdy_low]")
+
+
+# ---------------------------------------------------------------------------
+# WAI and STP tests
+# ---------------------------------------------------------------------------
+
+@cocotb.test()
+async def test_wai_irq(dut):
+    """WAI halts until IRQ; CLI+WAI with IRQ asserted enters handler, RETI returns past WAI."""
+    dut._log.info("Test: WAI with IRQ")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code: jump past vectors, CLI, WAI, then write marker (proves RETI returned past WAI)
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
+
+    # IRQ handler at $0004: write marker, RETI
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0xAAAA
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xAAAA
+    _place(prog, 0x0008, _encode_reti())
+
+    # NMI vector at $0008 — conflicts with RETI above. That's fine since
+    # we're not triggering NMI in this test.
+
+    # Continue at $0020: CLI, WAI, then post-WAI marker
+    _place(prog, 0x0020, _encode_cli())
+    _place(prog, 0x0022, _encode_wai())
+    # After WAI + IRQ + RETI, execution resumes at $0024
+    _place(prog, 0x0024, _encode_lw(rd=3, rs1=0, off6=21))    # R3 = MEM[$2A] = 0xBBBB
+    _place(prog, 0x0026, _encode_sw(rs2=3, rs1=0, off6=25))   # MEM[$32] = 0xBBBB
+    _place(prog, 0x0028, _encode_jr(rs=0, off6=20))            # spin at $0028
+
+    # Data
+    prog[0x001E] = 0x20
+    prog[0x001F] = 0x00
+    prog[0x0028] = 0xAA
+    prog[0x0029] = 0xAA
+    prog[0x002A] = 0xBB
+    prog[0x002B] = 0xBB
+
+    # Clear markers
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+    prog[0x0032] = 0x00
+    prog[0x0033] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Wait for CLI + WAI to execute, then CPU should be halted in E_WAIT
+    await ClockCycles(dut.clk, 50)
+
+    # Assert IRQB to wake WAI
+    _set_ui(dut, rdy=True, irqb=False, nmib=True)
+    await ClockCycles(dut.clk, 200)
+
+    # De-assert IRQ
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    await ClockCycles(dut.clk, 100)
+
+    # Check IRQ handler marker
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    irq_marker = lo | (hi << 8)
+
+    # Check post-WAI marker (proves RETI returned past WAI)
+    lo = _read_ram(dut, 0x0032)
+    hi = _read_ram(dut, 0x0033)
+    post_wai_marker = lo | (hi << 8)
+
+    dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0xAAAA)")
+    dut._log.info(f"Post-WAI marker = {post_wai_marker:#06x} (expected 0xBBBB)")
+    assert irq_marker == 0xAAAA, f"IRQ handler didn't run! Got {irq_marker:#06x}"
+    assert post_wai_marker == 0xBBBB, f"RETI didn't return past WAI! Got {post_wai_marker:#06x}"
+    dut._log.info("PASS [wai_irq]")
+
+
+@cocotb.test()
+async def test_wai_nmi(dut):
+    """WAI with I=1 (from reset) halts until NMI; NMI handler runs, RETI returns past WAI."""
+    dut._log.info("Test: WAI with NMI")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code: jump past vectors, WAI (I=1 from reset), then post-WAI marker
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))    # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
+
+    # IRQ vector at $0004: unused
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    # NMI handler at $0008: write marker, RETI
+    _place(prog, 0x0008, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0xAAAA
+    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xAAAA
+    _place(prog, 0x000C, _encode_reti())
+
+    # Continue at $0020: WAI (I=1, only NMI or masked IRQ can wake)
+    _place(prog, 0x0020, _encode_wai())
+    # After WAI + NMI + RETI, execution resumes at $0022
+    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=21))    # R3 = MEM[$2A] = 0xBBBB
+    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=25))   # MEM[$32] = 0xBBBB
+    _place(prog, 0x0026, _encode_jr(rs=0, off6=19))            # spin at $0026
+
+    # Data
+    prog[0x001E] = 0x20
+    prog[0x001F] = 0x00
+    prog[0x0028] = 0xAA
+    prog[0x0029] = 0xAA
+    prog[0x002A] = 0xBB
+    prog[0x002B] = 0xBB
+
+    # Clear markers
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+    prog[0x0032] = 0x00
+    prog[0x0033] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Wait for WAI to execute, CPU halted in E_WAIT
+    await ClockCycles(dut.clk, 50)
+
+    # Pulse NMI to wake WAI
+    _set_ui(dut, rdy=True, irqb=True, nmib=False)
+    await ClockCycles(dut.clk, 10)
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+
+    # Let NMI handler run and RETI
+    await ClockCycles(dut.clk, 200)
+
+    # Check NMI handler marker
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    nmi_marker = lo | (hi << 8)
+
+    # Check post-WAI marker
+    lo = _read_ram(dut, 0x0032)
+    hi = _read_ram(dut, 0x0033)
+    post_wai_marker = lo | (hi << 8)
+
+    dut._log.info(f"NMI marker = {nmi_marker:#06x} (expected 0xAAAA)")
+    dut._log.info(f"Post-WAI marker = {post_wai_marker:#06x} (expected 0xBBBB)")
+    assert nmi_marker == 0xAAAA, f"NMI handler didn't run! Got {nmi_marker:#06x}"
+    assert post_wai_marker == 0xBBBB, f"RETI didn't return past WAI! Got {post_wai_marker:#06x}"
+    dut._log.info("PASS [wai_nmi]")
+
+
+@cocotb.test()
+async def test_wai_masked_irq_wakes(dut):
+    """WAI with I=1: masked IRQ wakes WAI and resumes past it WITHOUT vectoring.
+
+    65C02-style: WAI is a hint. If IRQ arrives but I=1, WAI wakes and
+    execution continues at the next instruction (no handler entry).
+    """
+    dut._log.info("Test: WAI with masked IRQ wakes without vectoring")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code: jump past vectors, WAI (I=1), then post-WAI marker
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))    # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
+
+    # IRQ handler at $0004: write IRQ marker (should NOT happen)
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0xDEAD
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xDEAD
+
+    # NMI vector at $0008: unused
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    # Continue at $0020: WAI (I=1 from reset)
+    _place(prog, 0x0020, _encode_wai())
+    # After WAI wakes (masked IRQ), resumes here at $0022
+    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=21))    # R3 = MEM[$2A] = 0xBBBB
+    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=25))   # MEM[$32] = 0xBBBB
+    _place(prog, 0x0026, _encode_jr(rs=0, off6=19))            # spin at $0026
+
+    # Data
+    prog[0x001E] = 0x20
+    prog[0x001F] = 0x00
+    prog[0x0028] = 0xAD
+    prog[0x0029] = 0xDE
+    prog[0x002A] = 0xBB
+    prog[0x002B] = 0xBB
+
+    # Clear markers
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+    prog[0x0032] = 0x00
+    prog[0x0033] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset (I=1 after reset)
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Wait for WAI to execute
+    await ClockCycles(dut.clk, 50)
+
+    # Assert IRQB (but I=1, so it's masked — should wake WAI without vectoring)
+    _set_ui(dut, rdy=True, irqb=False, nmib=True)
+    await ClockCycles(dut.clk, 200)
+
+    # Check that IRQ handler did NOT run
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    irq_marker = lo | (hi << 8)
+
+    # Check that post-WAI code DID run
+    lo = _read_ram(dut, 0x0032)
+    hi = _read_ram(dut, 0x0033)
+    post_wai_marker = lo | (hi << 8)
+
+    dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0x0000 — handler should NOT run)")
+    dut._log.info(f"Post-WAI marker = {post_wai_marker:#06x} (expected 0xBBBB)")
+    assert irq_marker == 0x0000, f"IRQ handler ran despite I=1! Got {irq_marker:#06x}"
+    assert post_wai_marker == 0xBBBB, f"WAI didn't resume past itself! Got {post_wai_marker:#06x}"
+    dut._log.info("PASS [wai_masked_irq_wakes]")
+
+
+@cocotb.test()
+async def test_stp(dut):
+    """STP halts permanently. IRQ and NMI cannot wake it. Only reset recovers."""
+    dut._log.info("Test: STP halts permanently")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code: jump past vectors, write pre-STP marker, STP
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))    # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
+
+    # IRQ handler at $0004: write IRQ marker (should NOT happen)
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0xDEAD
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xDEAD
+
+    # NMI handler at $0008: write NMI marker (should NOT happen)
+    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, off6=21))    # R3 = MEM[$2A] = 0xBEEF
+    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=25))   # MEM[$32] = 0xBEEF
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
+
+    # Continue at $0020: CLI (enable IRQ), write pre-STP marker, STP
+    _place(prog, 0x0020, _encode_cli())
+    _place(prog, 0x0022, _encode_lw(rd=4, rs1=0, off6=22))    # R4 = MEM[$2C] = 0x1111
+    _place(prog, 0x0024, _encode_sw(rs2=4, rs1=0, off6=26))   # MEM[$34] = 0x1111 (pre-STP marker)
+    _place(prog, 0x0026, _encode_stp())
+    # Post-STP: should never execute
+    _place(prog, 0x0028, _encode_lw(rd=5, rs1=0, off6=23))    # R5 = MEM[$2E] = 0x2222
+    _place(prog, 0x002A, _encode_sw(rs2=5, rs1=0, off6=27))   # MEM[$36] = 0x2222
+
+    # Data
+    prog[0x001E] = 0x20
+    prog[0x001F] = 0x00
+    prog[0x0028] = 0xAD
+    prog[0x0029] = 0xDE
+    prog[0x002A] = 0xEF
+    prog[0x002B] = 0xBE
+    prog[0x002C] = 0x11
+    prog[0x002D] = 0x11
+    prog[0x002E] = 0x22
+    prog[0x002F] = 0x22
+
+    # Clear markers
+    for addr in [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37]:
+        prog[addr] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Wait for STP to execute
+    await ClockCycles(dut.clk, 80)
+
+    # Verify pre-STP marker was written (proves code ran up to STP)
+    lo = _read_ram(dut, 0x0034)
+    hi = _read_ram(dut, 0x0035)
+    pre_stp = lo | (hi << 8)
+    assert pre_stp == 0x1111, f"Pre-STP marker not written! Got {pre_stp:#06x}"
+
+    # Verify CPU is halted: post-STP code should NOT have run
+    lo = _read_ram(dut, 0x0036)
+    hi = _read_ram(dut, 0x0037)
+    post_stp = lo | (hi << 8)
+    assert post_stp == 0x0000, f"Post-STP code ran! Got {post_stp:#06x}"
+
+    # Assert both IRQ and NMI — neither should wake STP
+    _set_ui(dut, rdy=True, irqb=False, nmib=False)
+    await ClockCycles(dut.clk, 200)
+
+    # Check that neither handler ran
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    irq_marker = lo | (hi << 8)
+    lo = _read_ram(dut, 0x0032)
+    hi = _read_ram(dut, 0x0033)
+    nmi_marker = lo | (hi << 8)
+
+    dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0x0000)")
+    dut._log.info(f"NMI marker = {nmi_marker:#06x} (expected 0x0000)")
+    assert irq_marker == 0x0000, f"IRQ woke STP! Got {irq_marker:#06x}"
+    assert nmi_marker == 0x0000, f"NMI woke STP! Got {nmi_marker:#06x}"
+
+    # Now reset — CPU should start running from $0000 again
+    # Clear the pre-STP marker so we can detect fresh execution
+    dut.ram[0x0034].value = 0x00
+    dut.ram[0x0035].value = 0x00
+
+    # Full reset with clean control signals
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 40)
+    # Reload program to ensure clean RAM state
+    _load_program(dut, prog)
+    dut.rst_n.value = 1
+
+    # Run and verify CPU works after reset
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0034)
+    hi = _read_ram(dut, 0x0035)
+    pre_stp = lo | (hi << 8)
+    dut._log.info(f"After reset, pre-STP marker = {pre_stp:#06x} (expected 0x1111)")
+    assert pre_stp == 0x1111, f"CPU didn't restart after reset from STP! Got {pre_stp:#06x}"
+    dut._log.info("PASS [stp]")
+
+
+@cocotb.test()
+async def test_cycle_count_wai(dut):
+    """WAI with pending masked IRQ: 2 cycles (same as NOP — no redirect needed)."""
+    dut._log.info("Test: WAI cycle count with pending masked IRQ")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # WAI at $0000 with IRQB=0 but I=1 (from reset): masked IRQ wakes immediately
+    _place(prog, 0x0000, _encode_wai())
+    # $0002: JR R0, 1 (spin) — WAI resumes here after masked IRQ wake
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    def get_sync():
+        return (int(dut.uo_out.value) >> 1) & 1
+
+    _load_program(dut, prog)
+
+    # Reset with IRQB=0 (pending, but masked by I=1)
+    dut.ena.value = 1
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Wait for first SYNC
+    for _ in range(100):
+        await FallingEdge(dut.clk)
+        if get_sync():
+            break
+
+    # Count cycles until next SYNC
+    cycles = 0
+    for _ in range(100):
+        await FallingEdge(dut.clk)
+        cycles += 1
+        if not get_sync():
+            break
+
+    for _ in range(100):
+        await FallingEdge(dut.clk)
+        cycles += 1
+        if get_sync():
+            break
+
+    # WAI with pending masked IRQ: E_EXEC sees fsm_ready=1, goes to E_IDLE.
+    # No redirect (I=1), so ir_accept fires immediately.
+    # WAI takes 2 cycles: 1 E_EXEC + 1 overlapped dispatch.
+    dut._log.info(f"WAI: measured {cycles} cycles (expected 2)")
+    assert cycles == 2, f"WAI: expected 2 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_wai]")
+
+
+@cocotb.test()
+async def test_cycle_count_stp(dut):
+    """STP takes 1 cycle to halt (dispatches directly to E_WAIT, no E_EXEC)."""
+    dut._log.info("Test: STP cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    _place(prog, 0x0000, _encode_stp())
+
+    def get_sync():
+        return (int(dut.uo_out.value) >> 1) & 1
+
+    _load_program(dut, prog)
+
+    # Reset
+    dut.ena.value = 1
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Wait for first SYNC (instruction boundary after reset)
+    for _ in range(100):
+        await FallingEdge(dut.clk)
+        if get_sync():
+            break
+
+    # STP dispatches directly to E_WAIT. SYNC should go low and never return.
+    # Count cycles until SYNC goes low (STP dispatched).
+    cycles = 0
+    for _ in range(100):
+        await FallingEdge(dut.clk)
+        cycles += 1
+        if not get_sync():
+            break
+
+    dut._log.info(f"STP: {cycles} cycle(s) to halt (expected 1)")
+    assert cycles == 1, f"STP: expected 1 cycle to halt, got {cycles}"
+
+    # Verify it stays halted — SYNC should remain 0
+    for _ in range(50):
+        await FallingEdge(dut.clk)
+        assert not get_sync(), "SYNC went high after STP — CPU is not halted!"
+
+    dut._log.info("PASS [cycle_count_stp]")
+
+
+# ---------------------------------------------------------------------------
+# Test 33: BRK basic — vectors to $000C, saves EPC, sets I=1
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_brk_basic(dut):
+    """BRK saves EPC = PC+2, sets I=1, and vectors to $000C."""
+    dut._log.info("Test 33: BRK basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020 (jump target)
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    # 0x0002: JR R1, 0        ; jump past vectors to 0x0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
+
+    # Data: jump target
+    prog[0x000A] = 0x20
+    prog[0x000B] = 0x00
+
+    # BRK handler at 0x000C: write marker, RETI
+    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
+    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA
+    _place(prog, 0x0010, _encode_reti())
+
+    # 0x0020: CLI, then BRK
+    _place(prog, 0x0020, _encode_cli())
+    _place(prog, 0x0022, _encode_brk())
+    # 0x0024: after BRK returns here, write return marker
+    _place(prog, 0x0024, _encode_lw(rd=3, rs1=0, off6=26))  # R3 = MEM[0x34] = 0xBBBB
+    _place(prog, 0x0026, _encode_sw(rs2=3, rs1=0, off6=30)) # MEM[0x3C] = 0xBBBB
+    _place(prog, 0x0028, _encode_jr(rs=0, off6=20))         # spin
+
+    # Data
+    prog[0x0030] = 0xAA
+    prog[0x0031] = 0xAA
+    prog[0x0034] = 0xBB
+    prog[0x0035] = 0xBB
+    prog[0x0038] = 0x00
+    prog[0x0039] = 0x00
+    prog[0x003C] = 0x00
+    prog[0x003D] = 0x00
+
+    _load_program(dut, prog)
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    await ClockCycles(dut.clk, 300)
+
+    # Check BRK handler marker
+    lo = _read_ram(dut, 0x0038)
+    hi = _read_ram(dut, 0x0039)
+    brk_marker = lo | (hi << 8)
+    dut._log.info(f"BRK marker = {brk_marker:#06x} (expected 0xAAAA)")
+
+    # Check return marker (RETI returned to instruction after BRK)
+    lo = _read_ram(dut, 0x003C)
+    hi = _read_ram(dut, 0x003D)
+    ret_marker = lo | (hi << 8)
+    dut._log.info(f"Return marker = {ret_marker:#06x} (expected 0xBBBB)")
+
+    assert brk_marker == 0xAAAA, f"BRK handler did not execute! Got {brk_marker:#06x}"
+    assert ret_marker == 0xBBBB, f"RETI from BRK did not return correctly! Got {ret_marker:#06x}"
+    dut._log.info("PASS [brk_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test 34: BRK sets I=1 — masks IRQ while in BRK handler
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_brk_masks_irq(dut):
+    """BRK sets I=1; IRQ held low during BRK handler should not fire."""
+    dut._log.info("Test 34: BRK masks IRQ")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    # 0x0002: JR R1, 0        ; jump to 0x0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
+
+    # IRQ handler at 0x0004: write IRQ marker
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=26))  # R2 = MEM[0x34] = 0xCCCC
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=30)) # MEM[0x3C] = 0xCCCC
+    _place(prog, 0x0008, _encode_reti())
+
+    prog[0x000A] = 0x20
+    prog[0x000B] = 0x00
+
+    # BRK handler at 0x000C: write BRK marker, RETI
+    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
+    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA
+    _place(prog, 0x0010, _encode_reti())
+
+    # 0x0020: CLI, then BRK (with IRQB held low)
+    _place(prog, 0x0020, _encode_cli())
+    _place(prog, 0x0022, _encode_brk())
+    # 0x0024: after RETI from BRK, I=0 and IRQB still low → IRQ fires
+    _place(prog, 0x0024, _encode_jr(rs=0, off6=18))  # spin
+
+    # Data
+    prog[0x0030] = 0xAA
+    prog[0x0031] = 0xAA
+    prog[0x0034] = 0xCC
+    prog[0x0035] = 0xCC
+    prog[0x0038] = 0x00
+    prog[0x0039] = 0x00
+    prog[0x003C] = 0x00
+    prog[0x003D] = 0x00
+
+    _load_program(dut, prog)
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Let the CPU reach CLI
+    await ClockCycles(dut.clk, 50)
+
+    # Assert IRQB low before BRK executes
+    dut.ui_in.value = 0x06  # IRQB=0
+
+    # Run enough for BRK + handler + RETI + IRQ entry
+    await ClockCycles(dut.clk, 300)
+
+    # BRK handler should have run
+    lo = _read_ram(dut, 0x0038)
+    hi = _read_ram(dut, 0x0039)
+    brk_marker = lo | (hi << 8)
+    dut._log.info(f"BRK marker = {brk_marker:#06x} (expected 0xAAAA)")
+    assert brk_marker == 0xAAAA, f"BRK handler did not run! Got {brk_marker:#06x}"
+
+    # After RETI from BRK, I=0 and IRQB=0, so IRQ should fire
+    lo = _read_ram(dut, 0x003C)
+    hi = _read_ram(dut, 0x003D)
+    irq_marker = lo | (hi << 8)
+    dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0xCCCC)")
+    assert irq_marker == 0xCCCC, f"IRQ did not fire after RETI from BRK! Got {irq_marker:#06x}"
+    dut._log.info("PASS [brk_masks_irq]")
+
+
+# ---------------------------------------------------------------------------
+# Test 35: BRK cycle count — 2 cycles (same as RETI: execute + redirect)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_cycle_count_brk(dut):
+    """BRK takes 3 cycles: 1 execute + 2 fetch after redirect."""
+    dut._log.info("Test 35: BRK cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # 0x0000: BRK (from reset, I=1, but BRK is unconditional)
+    _place(prog, 0x0000, _encode_brk())
+    # BRK handler at 0x000C: spin
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))  # JR R0, 6 → spin at 0x000C
+
+    _load_program(dut, prog)
+
+    def get_sync():
+        return (int(dut.uo_out.value) >> 1) & 1
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Wait for first SYNC (BRK dispatched from reset)
+    for _ in range(100):
+        await FallingEdge(dut.clk)
+        if get_sync():
+            break
+
+    # Count cycles until next SYNC (handler's first instruction)
+    cycles = 0
+    got_sync = False
+    for _ in range(20):
+        await FallingEdge(dut.clk)
+        cycles += 1
+        if get_sync():
+            got_sync = True
+            break
+
+    dut._log.info(f"BRK: {cycles} cycles to handler (expected 3)")
+    assert got_sync, "Never reached handler SYNC"
+    assert cycles == 3, f"BRK: expected 3 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_brk]")
+
+
+# ---------------------------------------------------------------------------
+# Test 36: BRK with I=1 — RETI restores I=1
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_brk_restores_i(dut):
+    """BRK from I=1 code: RETI restores I=1, IRQ stays masked after return."""
+    dut._log.info("Test 36: BRK restores I bit")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    # 0x0002: JR R1, 0        ; jump to 0x0020 (past vectors)
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
+
+    # IRQ handler at 0x0004: write IRQ marker (should NOT fire)
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=26))  # R2 = MEM[0x34] = 0xDEAD
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=30)) # MEM[0x3C] = 0xDEAD
+    _place(prog, 0x0008, _encode_reti())
+
+    prog[0x000A] = 0x20
+    prog[0x000B] = 0x00
+
+    # BRK handler at 0x000C: write BRK marker, RETI
+    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
+    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA
+    _place(prog, 0x0010, _encode_reti())
+
+    # 0x0020: BRK (I=1 from reset, never cleared)
+    _place(prog, 0x0020, _encode_brk())
+    # 0x0022: after RETI, I should still be 1; write return marker then spin
+    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=26))  # R3 = MEM[0x34] = 0xBBBB
+    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=30)) # MEM[0x3C] = 0xBBBB
+    _place(prog, 0x0026, _encode_jr(rs=0, off6=19))         # spin
+
+    # Data
+    prog[0x0030] = 0xAA
+    prog[0x0031] = 0xAA
+    prog[0x0034] = 0xBB
+    prog[0x0035] = 0xBB
+    prog[0x0038] = 0x00
+    prog[0x0039] = 0x00
+    prog[0x003C] = 0x00
+    prog[0x003D] = 0x00
+
+    _load_program(dut, prog)
+
+    # IRQB=0 from the start — if I ever becomes 0, IRQ will fire
+    dut.ena.value = 1
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    await ClockCycles(dut.clk, 300)
+
+    # BRK handler should have run
+    lo = _read_ram(dut, 0x0038)
+    hi = _read_ram(dut, 0x0039)
+    brk_marker = lo | (hi << 8)
+    dut._log.info(f"BRK marker = {brk_marker:#06x} (expected 0xAAAA)")
+    assert brk_marker == 0xAAAA, f"BRK handler did not run! Got {brk_marker:#06x}"
+
+    # Return marker should be 0xBBBB (post-RETI code ran)
+    lo = _read_ram(dut, 0x003C)
+    hi = _read_ram(dut, 0x003D)
+    ret_marker = lo | (hi << 8)
+    dut._log.info(f"Return marker = {ret_marker:#06x} (expected 0xBBBB)")
+    assert ret_marker == 0xBBBB, f"RETI did not return from BRK! Got {ret_marker:#06x}"
+
+    # Key check: ret_marker is 0xBBBB (not 0xDEAD), proving I=1 was
+    # restored by RETI and IRQ did NOT fire despite IRQB=0.
+    dut._log.info("PASS [brk_restores_i]")
+
+
+# ---------------------------------------------------------------------------
+# EPCR / EPCW tests
+# ---------------------------------------------------------------------------
+
+@cocotb.test()
+async def test_epcr_basic(dut):
+    """EPCR reads EPC (with I bit) into a GP register after IRQ entry."""
+    dut._log.info("Test: EPCR basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code: jump past vectors, CLI, then spin waiting for IRQ
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
+
+    # IRQ handler at $0004: EPCR R2, store R2 to memory, spin
+    _place(prog, 0x0004, _encode_epcr(rd=2))                  # R2 = EPC
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = R2
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))            # spin at $0008
+
+    # NMI vector at $0008 — shared with spin above (no NMI in this test)
+
+    # Continue at $0020: CLI, then spin (IRQ will fire immediately)
+    _place(prog, 0x0020, _encode_cli())
+    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))           # spin at $0022
+
+    # Data
+    prog[0x001E] = 0x20
+    prog[0x001F] = 0x00
+
+    # Clear marker
+    prog[0x0030] = 0x00
+    prog[0x0031] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset with IRQB=0 (pending, masked by I=1 until CLI)
+    dut.ena.value = 1
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    await ClockCycles(dut.clk, 200)
+
+    # EPC should be: return address ($0022) | I bit (0, since CLI cleared it)
+    # CLI at $0020 advances PC to $0022, then IRQ fires. EPC = $0022 | 0 = $0022
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    val = lo | (hi << 8)
+    dut._log.info(f"EPCR result = {val:#06x} (expected 0x0022)")
+    assert val == 0x0022, f"EPCR did not read correct EPC! Got {val:#06x}"
+    dut._log.info("PASS [epcr_basic]")
+
+
+@cocotb.test()
+async def test_epcw_basic(dut):
+    """EPCW writes a register to EPC; RETI jumps to that address."""
+    dut._log.info("Test: EPCW basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code: jump past vectors, CLI, BRK to enter handler
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
+
+    # IRQ at $0004: unused
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    # NMI at $0008: unused
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    # BRK handler at $000C: load target addr into R3, EPCW R3, RETI
+    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, off6=9))    # R3 = MEM[$12] = $0030
+    _place(prog, 0x000E, _encode_epcw(rs=3))                  # EPC = R3 = $0030
+    _place(prog, 0x0010, _encode_reti())                       # jump to $0030, I = EPC[0] = 0
+
+    # Data
+    prog[0x0012] = 0x30  # EPCW target address $0030
+    prog[0x0013] = 0x00
+    prog[0x0014] = 0xAD  # DEAD marker value
+    prog[0x0015] = 0xDE
+    prog[0x0018] = 0xAA  # AAAA marker value
+    prog[0x0019] = 0xAA
+    prog[0x001E] = 0x20  # initial jump target
+    prog[0x001F] = 0x00
+
+    # Continue at $0020: CLI, BRK
+    _place(prog, 0x0020, _encode_cli())
+    _place(prog, 0x0022, _encode_brk())
+    # $0024: should NOT reach here (EPCW redirected RETI)
+    _place(prog, 0x0024, _encode_lw(rd=4, rs1=0, off6=10))   # R4 = MEM[$14] = 0xDEAD
+    _place(prog, 0x0026, _encode_sw(rs2=4, rs1=0, off6=21))  # MEM[$2A] = 0xDEAD
+    _place(prog, 0x0028, _encode_jr(rs=0, off6=20))           # spin at $0028
+
+    # EPCW target at $0030: write AAAA marker, spin
+    _place(prog, 0x0030, _encode_lw(rd=5, rs1=0, off6=12))   # R5 = MEM[$18] = 0xAAAA
+    _place(prog, 0x0032, _encode_sw(rs2=5, rs1=0, off6=22))  # MEM[$2C] = 0xAAAA
+    _place(prog, 0x0034, _encode_jr(rs=0, off6=26))           # spin at $0034
+
+    # Clear markers
+    prog[0x002A] = 0x00
+    prog[0x002B] = 0x00
+    prog[0x002C] = 0x00
+    prog[0x002D] = 0x00
+
+    _load_program(dut, prog)
+
+    dut.ena.value = 1
+    dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    await ClockCycles(dut.clk, 300)
+
+    # Target marker should be written (RETI went to $0030)
+    lo = _read_ram(dut, 0x002C)
+    hi = _read_ram(dut, 0x002D)
+    target_marker = lo | (hi << 8)
+    dut._log.info(f"Target marker = {target_marker:#06x} (expected 0xAAAA)")
+
+    # Original return point should NOT have executed
+    lo = _read_ram(dut, 0x002A)
+    hi = _read_ram(dut, 0x002B)
+    orig_marker = lo | (hi << 8)
+    dut._log.info(f"Original return marker = {orig_marker:#06x} (expected 0x0000)")
+
+    assert target_marker == 0xAAAA, f"RETI did not jump to EPCW target! Got {target_marker:#06x}"
+    assert orig_marker == 0x0000, f"Original return point executed! Got {orig_marker:#06x}"
+    dut._log.info("PASS [epcw_basic]")
+
+
+@cocotb.test()
+async def test_epcw_restores_i(dut):
+    """EPCW with bit 0 = 0 clears I on RETI; IRQ fires after return."""
+    dut._log.info("Test: EPCW restores I bit")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+
+    # Main code: jump past vectors
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
+
+    # IRQ handler at $0004: write IRQ marker, spin
+    _place(prog, 0x0004, _encode_lw(rd=6, rs1=0, off6=10))   # R6 = MEM[$14] = 0xCCCC
+    _place(prog, 0x0006, _encode_sw(rs2=6, rs1=0, off6=20))  # MEM[$28] = 0xCCCC
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))            # spin at $0008
+
+    # BRK handler at $000C: EPCW with I=0 in bit 0, then RETI
+    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, off6=9))    # R3 = MEM[$12] = $0030
+    _place(prog, 0x000E, _encode_epcw(rs=3))                  # EPC = $0030 (bit 0 = 0 → I=0)
+    _place(prog, 0x0010, _encode_reti())                       # PC=$0030, I=0
+
+    # Data
+    prog[0x0012] = 0x30  # EPCW target: $0030, bit 0 = 0 (I=0)
+    prog[0x0013] = 0x00
+    prog[0x0014] = 0xCC  # IRQ marker value
+    prog[0x0015] = 0xCC
+    prog[0x001E] = 0x20  # initial jump target
+    prog[0x001F] = 0x00
+
+    # Continue at $0020: BRK (I=1 from reset, no CLI needed — BRK is unconditional)
+    _place(prog, 0x0020, _encode_brk())
+    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))           # spin (unreachable)
+
+    # EPCW target at $0030: spin — I=0, so if IRQB=0, IRQ should fire
+    _place(prog, 0x0030, _encode_jr(rs=0, off6=24))           # spin at $0030
+
+    # Clear marker
+    prog[0x0028] = 0x00
+    prog[0x0029] = 0x00
+
+    _load_program(dut, prog)
+
+    # Reset with IRQB=0 (pending, but masked by I=1)
+    dut.ena.value = 1
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    await ClockCycles(dut.clk, 300)
+
+    # After BRK handler → EPCW sets EPC=$0030 (I=0) → RETI sets I=0 and jumps to $0030
+    # With IRQB=0 and I=0, IRQ should fire → handler writes 0xCCCC to $0028
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    irq_marker = lo | (hi << 8)
+    dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0xCCCC)")
+    assert irq_marker == 0xCCCC, f"EPCW did not restore I=0! IRQ didn't fire. Got {irq_marker:#06x}"
+    dut._log.info("PASS [epcw_restores_i]")
+
+
+@cocotb.test()
+async def test_cycle_count_epcr(dut):
+    """EPCR takes 2 cycles throughput."""
+    dut._log.info("Test: EPCR cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: EPCR R0
+    _place(prog, 0x0000, _encode_epcr(rd=0))
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    cycles = await _measure_instruction_cycles(dut, prog, 2, "EPCR")
+    assert cycles == 2, f"EPCR: expected 2 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_epcr]")
+
+
+@cocotb.test()
+async def test_cycle_count_epcw(dut):
+    """EPCW takes 2 cycles throughput."""
+    dut._log.info("Test: EPCW cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: EPCW R0
+    _place(prog, 0x0000, _encode_epcw(rs=0))
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    cycles = await _measure_instruction_cycles(dut, prog, 2, "EPCW")
+    assert cycles == 2, f"EPCW: expected 2 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_epcw]")
+
+
+# ---------------------------------------------------------------------------
+# Helper encoders for byte load/store instructions
+# ---------------------------------------------------------------------------
+def _encode_lb(rs1, off6, rd):
+    """Encode LB rd, off6(rs1) -> 16-bit little-endian bytes."""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
+    assert 0 <= rd <= 7 and 0 <= rs1 <= 7
+    off6 &= 0x3F
+    insn = (0b0110 << 12) | (rs1 << 9) | (off6 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_lbu(rs1, off6, rd):
+    """Encode LBU rd, off6(rs1) -> 16-bit little-endian bytes."""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
+    assert 0 <= rd <= 7 and 0 <= rs1 <= 7
+    off6 &= 0x3F
+    insn = (0b0111 << 12) | (rs1 << 9) | (off6 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_sb(rs1, off6, rs2):
+    """Encode SB rs2, off6(rs1) -> 16-bit little-endian bytes."""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
+    assert 0 <= rs2 <= 7 and 0 <= rs1 <= 7
+    off6 &= 0x3F
+    insn = (0b1001 << 12) | (rs1 << 9) | (off6 << 3) | rs2
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+# ---------------------------------------------------------------------------
+# Test: LB basic (positive byte, high byte = 0x00)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lb_basic(dut):
+    """LB loads a positive byte and sign-extends to 0x00XX."""
+    dut._log.info("Test: LB basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Data: byte 0x42 at address 0x0020
+    prog[0x0020] = 0x42
+
+    # Load base address 0x0020 into R1 via LW
+    prog[0x0010] = 0x20
+    prog[0x0011] = 0x00
+
+    # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    # 0x0002: LB R2, 0(R1)    ; R2 = sext(MEM[0x0020]) = 0x0042
+    _place(prog, 0x0002, _encode_lb(rs1=1, off6=0, rd=2))
+    # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    # 0x0006: JR R0, 3        ; spin at 0x0006
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"R2 stored = {val:#06x}")
+    assert val == 0x0042, f"Expected 0x0042, got {val:#06x}"
+    dut._log.info("PASS [lb_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LB sign extension (negative byte)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lb_sign_extend(dut):
+    """LB loads a byte with bit 7 set and sign-extends to 0xFFXX."""
+    dut._log.info("Test: LB sign extend")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Data: byte 0xA5 at address 0x0020
+    prog[0x0020] = 0xA5
+
+    # Load base address 0x0020 into R1 via LW
+    prog[0x0010] = 0x20
+    prog[0x0011] = 0x00
+
+    # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    # 0x0002: LB R2, 0(R1)    ; R2 = sext(MEM[0x0020]) = 0xFFA5
+    _place(prog, 0x0002, _encode_lb(rs1=1, off6=0, rd=2))
+    # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    # 0x0006: JR R0, 3        ; spin at 0x0006
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"R2 stored = {val:#06x}")
+    assert val == 0xFFA5, f"Expected 0xFFA5, got {val:#06x}"
+    dut._log.info("PASS [lb_sign_extend]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LBU basic (zero-extends regardless of bit 7)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lbu_basic(dut):
+    """LBU loads a byte with bit 7 set and zero-extends to 0x00XX."""
+    dut._log.info("Test: LBU basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Data: byte 0xA5 at address 0x0020
+    prog[0x0020] = 0xA5
+
+    # Load base address 0x0020 into R1 via LW
+    prog[0x0010] = 0x20
+    prog[0x0011] = 0x00
+
+    # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    # 0x0002: LBU R2, 0(R1)   ; R2 = zext(MEM[0x0020]) = 0x00A5
+    _place(prog, 0x0002, _encode_lbu(rs1=1, off6=0, rd=2))
+    # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    # 0x0006: JR R0, 3        ; spin at 0x0006
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"R2 stored = {val:#06x}")
+    assert val == 0x00A5, f"Expected 0x00A5, got {val:#06x}"
+    dut._log.info("PASS [lbu_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SB basic (stores only low byte)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sb_basic(dut):
+    """SB stores only the low byte of a register, leaving adjacent byte unchanged."""
+    dut._log.info("Test: SB basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Data: word 0xBEEF at 0x0010
+    prog[0x0010] = 0xEF
+    prog[0x0011] = 0xBE
+
+    # Pre-fill target with 0xFF so we can verify the high byte is untouched
+    prog[0x0030] = 0xFF
+    prog[0x0031] = 0xFF
+
+    # Load base address 0x0030 into R2 via LW
+    prog[0x0012] = 0x30
+    prog[0x0013] = 0x00
+
+    # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0xBEEF
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    # 0x0002: LW R2, 9(R0)    ; R2 = MEM[0x12] = 0x0030
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=9))
+    # 0x0004: SB R1, 0(R2)    ; MEM[0x0030] = R1[7:0] = 0xEF
+    _place(prog, 0x0004, _encode_sb(rs1=2, off6=0, rs2=1))
+    # 0x0006: JR R0, 3        ; spin at 0x0006
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0030)
+    hi = _read_ram(dut, 0x0031)
+    dut._log.info(f"ram[0x30]={lo:#04x}, ram[0x31]={hi:#04x}")
+    assert lo == 0xEF, f"Expected low byte 0xEF, got {lo:#04x}"
+    assert hi == 0xFF, f"Expected high byte 0xFF unchanged, got {hi:#04x}"
+    dut._log.info("PASS [sb_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LB with negative offset
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_byte_negative_offset(dut):
+    """LB with negative offset computes correct address."""
+    dut._log.info("Test: byte negative offset")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Data: byte 0x7F at address 0x001F (0x0020 - 1)
+    prog[0x001F] = 0x7F
+
+    # Load base address 0x0020 into R1 via LW
+    prog[0x0010] = 0x20
+    prog[0x0011] = 0x00
+
+    # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    # 0x0002: LB R2, -1(R1)   ; R2 = sext(MEM[0x001F]) = 0x007F
+    _place(prog, 0x0002, _encode_lb(rs1=1, off6=-1, rd=2))
+    # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    # 0x0006: JR R0, 3        ; spin at 0x0006
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"R2 stored = {val:#06x}")
+    assert val == 0x007F, f"Expected 0x007F, got {val:#06x}"
+    dut._log.info("PASS [byte_negative_offset]")
+
+
+# ---------------------------------------------------------------------------
+# Cycle count tests: LB, LBU, SB
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_cycle_count_lb(dut):
+    """LB takes 4 cycles throughput."""
+    dut._log.info("Test: LB cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: LB R0, 0(R0)    ; load byte from address 0
+    _place(prog, 0x0000, _encode_lb(rs1=0, off6=0, rd=0))
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    cycles = await _measure_instruction_cycles(dut, prog, 4, "LB")
+    assert cycles == 4, f"LB: expected 4 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_lb]")
+
+
+@cocotb.test()
+async def test_cycle_count_lbu(dut):
+    """LBU takes 4 cycles throughput."""
+    dut._log.info("Test: LBU cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: LBU R0, 0(R0)   ; load byte unsigned from address 0
+    _place(prog, 0x0000, _encode_lbu(rs1=0, off6=0, rd=0))
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    cycles = await _measure_instruction_cycles(dut, prog, 4, "LBU")
+    assert cycles == 4, f"LBU: expected 4 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_lbu]")
+
+
+@cocotb.test()
+async def test_cycle_count_sb(dut):
+    """SB takes 3 cycles throughput."""
+    dut._log.info("Test: SB cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: SB R0, 8(R0)    ; store byte to address 8
+    _place(prog, 0x0000, _encode_sb(rs1=0, off6=8, rs2=0))
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    cycles = await _measure_instruction_cycles(dut, prog, 3, "SB")
+    assert cycles == 3, f"SB: expected 3 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_sb]")
+
+
+def _encode_auipc(rd, imm10):
+    """Encode AUIPC rd, imm10 -> 16-bit little-endian bytes."""
+    assert -512 <= imm10 <= 511, f"imm10 out of range: {imm10}"
+    assert 0 <= rd <= 7
+    imm10 &= 0x3FF
+    insn = (0b001 << 13) | (imm10 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+# ---------------------------------------------------------------------------
+# Test: AUIPC basic (imm10=0, rd = PC of AUIPC instruction)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_auipc_basic(dut):
+    """AUIPC with imm10=0 puts the PC of the instruction into rd."""
+    dut._log.info("Test: AUIPC basic (imm10=0)")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: NOP (advance PC to 0x0002)
+    _place(prog, 0x0000, _encode_nop())
+    # 0x0002: AUIPC R1, 0  ; R1 = PC + 0 = 0x0002
+    _place(prog, 0x0002, _encode_auipc(rd=1, imm10=0))
+    # 0x0004: SW R1, 20(R0) ; MEM[0 + 20*2] = MEM[0x28] = R1
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    # 0x0006: JR R0, 3      ; spin at 0x0006
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0002)")
+    assert val == 0x0002, f"Expected 0x0002, got {val:#06x}"
+    dut._log.info("PASS [auipc_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: AUIPC positive offset
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_auipc_positive_offset(dut):
+    """AUIPC with positive imm10 adds (imm10 << 6) to PC."""
+    dut._log.info("Test: AUIPC positive offset")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: AUIPC R1, 1  ; R1 = 0x0000 + (1 << 6) = 0x0040
+    _place(prog, 0x0000, _encode_auipc(rd=1, imm10=1))
+    # 0x0002: SW R1, 20(R0) ; MEM[0x28] = R1
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    # 0x0004: JR R0, 2      ; spin at 0x0004
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0040)")
+    assert val == 0x0040, f"Expected 0x0040, got {val:#06x}"
+    dut._log.info("PASS [auipc_positive_offset]")
+
+
+# ---------------------------------------------------------------------------
+# Test: AUIPC negative offset
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_auipc_negative_offset(dut):
+    """AUIPC with negative imm10 subtracts from PC."""
+    dut._log.info("Test: AUIPC negative offset")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Place AUIPC at 0x0080: AUIPC R1, -1  ; R1 = 0x0080 + (-1 << 6) = 0x0080 + 0xFFC0 = 0x0040
+    # First: bootstrap to 0x0080 using LW + JR
+    # Data at 0x0020: LE word 0x0080 (jump target)
+    prog[0x0020] = 0x80
+    prog[0x0021] = 0x00
+    # 0x0000: LW R2, 16(R0)  ; R2 = MEM[0x20] = 0x0080
+    _place(prog, 0x0000, _encode_lw(rd=2, rs1=0, off6=16))
+    # 0x0002: JR R2, 0       ; jump to 0x0080
+    _place(prog, 0x0002, _encode_jr(rs=2, off6=0))
+
+    # At 0x0080: AUIPC R1, -1 ; R1 = 0x0080 + 0xFFC0 = 0x0040
+    _place(prog, 0x0080, _encode_auipc(rd=1, imm10=-1))
+    # 0x0082: SW R1, 20(R0)  ; MEM[0x28] = R1
+    _place(prog, 0x0082, _encode_sw(rs2=1, rs1=0, off6=20))
+    # 0x0084: JR R2, 2       ; spin at 0x0084 (R2=0x0080, off6=2 → 0x0080+4=0x0084)
+    _place(prog, 0x0084, _encode_jr(rs=2, off6=2))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 400)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0040)")
+    assert val == 0x0040, f"Expected 0x0040, got {val:#06x}"
+    dut._log.info("PASS [auipc_negative_offset]")
+
+
+# ---------------------------------------------------------------------------
+# Test: AUIPC + LW for full PC-relative load
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_auipc_with_lw(dut):
+    """AUIPC + LW reaches a PC-relative address (the primary use case)."""
+    dut._log.info("Test: AUIPC + LW PC-relative load")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    # Place data at 0x0050: LE word 0xBEEF
+    prog = {}
+    prog[0x0050] = 0xEF
+    prog[0x0051] = 0xBE
+
+    # Target address is 0x0050. AUIPC at PC=0x0000 with imm10=1 → R1 = 0x0040
+    # Then LW R2, 8(R1) → MEM[0x0040 + 8*2] = MEM[0x0050] = 0xBEEF
+    # 0x0000: AUIPC R1, 1    ; R1 = 0x0000 + 0x0040 = 0x0040
+    _place(prog, 0x0000, _encode_auipc(rd=1, imm10=1))
+    # 0x0002: LW R2, 8(R1)   ; R2 = MEM[0x0040 + 16] = MEM[0x0050] = 0xBEEF
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=1, off6=8))
+    # 0x0004: SW R2, 20(R0)  ; MEM[0x28] = R2
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    # 0x0006: JR R0, 3       ; spin at 0x0006
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"LW via AUIPC result: {val:#06x} (expected 0xBEEF)")
+    assert val == 0xBEEF, f"Expected 0xBEEF, got {val:#06x}"
+    dut._log.info("PASS [auipc_with_lw]")
+
+
+# ---------------------------------------------------------------------------
+# Test: AUIPC large imm10 (upper address bits)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_auipc_large_imm10(dut):
+    """AUIPC with large imm10 sets upper bits correctly."""
+    dut._log.info("Test: AUIPC large imm10")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: AUIPC R1, 0x100 (256) ; R1 = 0x0000 + (256 << 6) = 0x0000 + 0x4000 = 0x4000
+    _place(prog, 0x0000, _encode_auipc(rd=1, imm10=256))
+    # 0x0002: SW R1, 20(R0) ; MEM[0x28] = R1
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    # 0x0004: JR R0, 2      ; spin at 0x0004
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x4000)")
+    assert val == 0x4000, f"Expected 0x4000, got {val:#06x}"
+    dut._log.info("PASS [auipc_large_imm10]")
+
+
+# ---------------------------------------------------------------------------
+# Test: AUIPC cycle count (2 cycles)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_cycle_count_auipc(dut):
+    """AUIPC takes 2 cycles throughput."""
+    dut._log.info("Test: AUIPC cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: AUIPC R1, 0
+    _place(prog, 0x0000, _encode_auipc(rd=1, imm10=0))
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    cycles = await _measure_instruction_cycles(dut, prog, 2, "AUIPC")
+    assert cycles == 2, f"AUIPC: expected 2 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_auipc]")

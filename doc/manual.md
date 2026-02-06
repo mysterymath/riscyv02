@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor currently implements: **LW**, **SW**, **JR**, **RETI**, **SEI**, and **CLI**. IRQ and NMI interrupt handling is supported. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **AUIPC**, **RETI**, **SEI**, **CLI**, **BRK**, **WAI**, **STP**, **EPCR**, and **EPCW**. IRQ and NMI interrupt handling is supported. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -14,10 +14,10 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 17 ns | 16 ns |
 | fMax (slow corner) | 58.8 MHz | 62.5 MHz |
-| Utilization | 42.6% | 48.4% |
-| Transistor count (synth) | 11,102 | 13,082 |
+| Utilization | 46.3% | 48.4% |
+| Transistor count (synth) | 12,180 | 13,082 |
 
-RISCY-V02 uses ~15% fewer transistors with room to grow as more instructions are added.
+RISCY-V02 is now below the 6502 in transistor count, with room to grow as more instructions are added.
 
 ## Bus Protocol
 
@@ -66,6 +66,7 @@ RISCY-V02 supports maskable IRQ and non-maskable NMI interrupts.
 | RESET | $0000 | RESB rising edge |
 | IRQ | $0004 | IRQB low, level-sensitive, masked by I=1 |
 | NMI | $0008 | NMIB falling edge, non-maskable |
+| BRK | $000C | BRK instruction, unconditional |
 
 Each vector has room for a two-instruction trampoline (LW + JR) to reach the actual handler.
 
@@ -80,6 +81,11 @@ Each vector has room for a two-instruction trampoline (LW + JR) to reach the act
 2. Save EPC = (next_PC | I) — overwrites any previous EPC
 3. Set I = 1 — disable IRQs
 4. Jump to $0008
+
+**BRK entry (unconditional, regardless of I):**
+1. Save EPC = (PC+2 | I) — return address with I bit in bit 0
+2. Set I = 1 — disable IRQs
+3. Jump to $000C
 
 NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low does not re-trigger. NMIB must return high and fall again for a new NMI. NMI has priority over IRQ; if both are pending simultaneously, NMI is taken first, and the subsequent I=1 masks the IRQ.
 
@@ -132,6 +138,42 @@ Stores a 16-bit word to memory. The offset encoding is identical to LW. The low 
 
 **Cycle count:** 5 (2 base + 1 address + 2 bytes written)
 
+### LB — Load Byte (Sign-Extend)
+
+```
+[0110][rs1:3][off6:6][rd:3]
+```
+
+`rd = sext(MEM[rs1 + sext(off6)])`
+
+Loads a single byte from memory and sign-extends it to 16 bits. The 6-bit signed offset is unscaled (range ±32 bytes from the base register). If bit 7 of the loaded byte is set, the high byte of rd is filled with 0xFF; otherwise 0x00.
+
+**Cycle count:** 4 (2 address + 1 byte read + 1 extension)
+
+### LBU — Load Byte (Zero-Extend)
+
+```
+[0111][rs1:3][off6:6][rd:3]
+```
+
+`rd = zext(MEM[rs1 + sext(off6)])`
+
+Loads a single byte from memory and zero-extends it to 16 bits. The high byte of rd is always 0x00. Encoding and offset handling are identical to LB.
+
+**Cycle count:** 4 (2 address + 1 byte read + 1 extension)
+
+### SB — Store Byte
+
+```
+[1001][rs1:3][off6:6][rs2:3]
+```
+
+`MEM[rs1 + sext(off6)] = rs2[7:0]`
+
+Stores the low byte of rs2 to memory. Only one byte is written; adjacent bytes are unaffected. The 6-bit signed offset is unscaled (range ±32 bytes).
+
+**Cycle count:** 3 (2 address + 1 byte written)
+
 ### JR — Jump Register
 
 ```
@@ -143,6 +185,18 @@ Stores a 16-bit word to memory. The offset encoding is identical to LW. The low 
 Unconditional jump to the address computed from a register plus a scaled signed offset. The 6-bit offset is scaled by 2, giving a range of ±64 bytes from the register value.
 
 **Cycle count:** 4 (2 fetch + 2 address computation in execute)
+
+### AUIPC — Add Upper Immediate to PC
+
+```
+[001][imm10:10][rd:3]
+```
+
+`rd = PC + (sext(imm10) << 6)`
+
+Adds a sign-extended 10-bit immediate, shifted left by 6, to the program counter of the AUIPC instruction. The result is written to rd. This provides a PC-relative base address that pairs with LW/SW/JR's 6-bit offset for full 16-bit PC-relative addressing: AUIPC provides the upper 10 bits (shifted left by 6), and the subsequent load/store/jump provides the lower 6 bits.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
 
 ### RETI — Return from Interrupt
 
@@ -180,6 +234,70 @@ Enables interrupts by clearing the I bit. After CLI, a pending IRQ (IRQB=0) will
 
 **Cycle count:** 2
 
+### BRK — Software Interrupt
+
+```
+[1111111010000100]
+```
+
+`EPC = (PC+2 | I); I = 1; PC = $000C`
+
+Triggers a software interrupt. Saves the return address with I bit to EPC, disables interrupts, and vectors to the BRK handler at $000C. Useful for system calls. BRK is unconditional — it fires regardless of the I bit. RETI restores the previous I state.
+
+**Warning:** BRK overwrites EPC like any interrupt entry. If an NMI interrupts a BRK handler before it saves EPC, the return address is lost.
+
+**Cycle count:** 3 (1 execute + 2 fetch after redirect)
+
+### WAI — Wait for Interrupt
+
+```
+[1111111010000101]
+```
+
+Halts execution until an interrupt signal arrives. The PC is advanced past WAI before halting, so the return address always points to the next instruction.
+
+- **NMI:** Taken immediately (vectors to $0008). RETI returns past WAI.
+- **IRQ with I=0:** Taken (vectors to $0004). RETI returns past WAI.
+- **IRQ with I=1:** WAI wakes and resumes at the next instruction without entering a handler (65C02-style hint behavior).
+
+If an interrupt is already pending when WAI executes, it is serviced immediately without entering the wait state.
+
+**Cycle count:** 2 (if interrupt already pending, same as NOP); otherwise halted until wake
+
+### STP — Stop
+
+```
+[1111111010000110]
+```
+
+Halts the processor permanently. No interrupt (IRQ or NMI) can wake it. Only a hardware reset recovers execution. Both WAI and STP halt via internal clock gating — the CPU clock stops entirely, reducing dynamic power to zero.
+
+**Cycle count:** 1 (execute then halt)
+
+### EPCR — Read EPC
+
+```
+[1111111001110][rd:3]
+```
+
+`rd = EPC`
+
+Reads the Exception Program Counter (including the I bit in bit 0) into a general-purpose register. Used in interrupt handlers to save EPC before re-enabling interrupts for nested interrupt support.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### EPCW — Write EPC
+
+```
+[1111111001111][rs:3]
+```
+
+`EPC = rs`
+
+Writes a general-purpose register to the Exception Program Counter. Bit 0 of the source register sets the I bit that will be restored by the next RETI. Used to restore EPC after handling a nested interrupt.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
 ### All Other Opcodes
 
 Any instruction not matching the above is executed as a NOP: the PC advances past the instruction in 2 cycles with no other effect.
@@ -187,20 +305,35 @@ Any instruction not matching the above is executed as a NOP: the PC advances pas
 ## Instruction Encoding Reference
 
 ```
+Bits 15..13  Instruction   Format
+──────────────────────────────────────────────
+001          AUIPC         [imm10:10][rd:3]
+
 Bits 15..12  Instruction   Format
 ──────────────────────────────────────────────
+0110         LB            [rs1:3][off6:6][rd:3]
+0111         LBU           [rs1:3][off6:6][rd:3]
 1000         LW            [rs1:3][off6:6][rd:3]
+1001         SB            [rs1:3][off6:6][rs2:3]
 1010         SW            [rs1:3][off6:6][rs2:3]
 
 Bits 15..9   Instruction   Format
 ──────────────────────────────────────────────
 1011100      JR            [off6:6][rs:3]
 
+Bits 15..3   Instruction   Format
+──────────────────────────────────────────────
+1111111001110    EPCR          [rd:3]
+1111111001111    EPCW          [rs:3]
+
 Full 16-bit  Instruction
 ──────────────────────────────────────────────
 1111111010000001  RETI
 1111111010000010  SEI
 1111111010000011  CLI
+1111111010000100  BRK
+1111111010000101  WAI
+1111111010000110  STP
 
 All other    NOP           (ignored)
 ```
@@ -215,10 +348,16 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| NOP/SEI/CLI | 2 | 1 execute + 1 overlapped fetch |
+| NOP/SEI/CLI/AUIPC/EPCR/EPCW | 2 | 1 execute + 1 overlapped fetch |
+| LB/LBU | 4 | 2 address + 1 byte read + 1 extension |
+| SB | 3 | 2 address + 1 byte written (overlapped fetch) |
 | LW/SW | 4 | 4 execute (address computation overlaps with fetch) |
 | JR | 4 | 2 execute + 2 fetch after redirect |
 | RETI | 3 | 1 execute + 2 fetch after redirect |
+| BRK | 3 | 1 execute + 2 fetch after redirect |
+| WAI (wake) | 2 | 1 execute + 1 overlapped fetch (if interrupt pending) |
+| WAI (halt) | — | Halted until interrupt arrives |
+| STP | 1 | Dispatch directly to halt (no execute cycle) |
 | IRQ entry | 2 | Redirect at instruction boundary |
 | NMI entry | 2 | Redirect at instruction boundary |
 

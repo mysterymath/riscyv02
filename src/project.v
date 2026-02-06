@@ -50,13 +50,36 @@ module tt_um_riscyv02 (
   // -----------------------------------------------------------------------
   wire rdy = ui_in[2];
 
-  // Gated clock for CPU logic — freezes when RDY=0
+  // Gated clock for CPU logic — freezes when RDY=0, waiting (WAI), or stopped (STP)
+  wire exec_waiting, exec_stopped;
+  wire wake = nmi_pending || nmi_edge || !irqb;
+  wire cpu_rdy = rdy && !exec_stopped && (!exec_waiting || wake);
   wire cpu_clk;
   sg13g2_lgcp_1 u_cpu_icg (
     .CLK  (clk),
-    .GATE (rdy),
+    .GATE (cpu_rdy),
     .GCLK (cpu_clk)
   );
+
+  // -----------------------------------------------------------------------
+  // NMI edge detection — ungated clock so edges during RDY=0 are captured
+  // -----------------------------------------------------------------------
+  wire nmib = ui_in[1];  // Active-low non-maskable interrupt (edge-triggered)
+
+  reg nmib_prev;
+  always @(negedge clk or negedge rst_n)
+    if (!rst_n) nmib_prev <= 1'b1;
+    else        nmib_prev <= nmib;
+
+  wire nmi_edge = nmib_prev && !nmib;
+
+  wire exec_nmi_ack;
+
+  reg nmi_pending;
+  always @(negedge clk or negedge rst_n)
+    if (!rst_n)            nmi_pending <= 1'b0;
+    else if (exec_nmi_ack) nmi_pending <= 1'b0;
+    else if (nmi_edge)     nmi_pending <= 1'b1;
 
   // -----------------------------------------------------------------------
   // Mux select: dual-edge register (identical to 6502 wrapper).
@@ -99,7 +122,7 @@ module tt_um_riscyv02 (
   wire [7:0]  exec_dout;
   wire        exec_rwb;
   wire        redirect;
-  wire [15:0] redirect_pc;
+  wire [15:0] fetch_pc;
 
   // -----------------------------------------------------------------------
   // Submodule instances
@@ -111,7 +134,7 @@ module tt_um_riscyv02 (
     .bus_free   (!exec_bus_active),
     .ir_accept  (exec_ir_accept),
     .redirect   (redirect),
-    .redirect_pc(redirect_pc),
+    .fetch_pc   (fetch_pc),
     .ir_valid   (ir_valid),
     .ir         (fetch_ir),
     .ab         (fetch_ab)
@@ -119,23 +142,26 @@ module tt_um_riscyv02 (
 
   // Interrupt inputs
   wire irqb = ui_in[0];  // Active-low interrupt request (level-sensitive)
-  wire nmib = ui_in[1];  // Active-low non-maskable interrupt (edge-triggered)
 
   riscyv02_execute u_execute (
-    .clk        (cpu_clk),
-    .rst_n      (rst_n),
-    .uio_in     (uio_in),
-    .irqb       (irqb),
-    .nmib       (nmib),
-    .ir_valid   (ir_valid),
-    .fetch_ir   (fetch_ir),
-    .bus_active (exec_bus_active),
-    .ab         (exec_ab),
-    .dout       (exec_dout),
-    .rwb        (exec_rwb),
-    .ir_accept  (exec_ir_accept),
-    .redirect   (redirect),
-    .redirect_pc(redirect_pc)
+    .clk           (cpu_clk),
+    .rst_n         (rst_n),
+    .uio_in        (uio_in),
+    .irqb          (irqb),
+    .nmi_pending   (nmi_pending),
+    .nmi_edge      (nmi_edge),
+    .ir_valid      (ir_valid),
+    .fetch_ir      (fetch_ir),
+    .bus_active    (exec_bus_active),
+    .ab            (exec_ab),
+    .dout          (exec_dout),
+    .rwb           (exec_rwb),
+    .ir_accept     (exec_ir_accept),
+    .nmi_ack       (exec_nmi_ack),
+    .waiting       (exec_waiting),
+    .stopped       (exec_stopped),
+    .redirect      (redirect),
+    .fetch_pc      (fetch_pc)
   );
 
   // -----------------------------------------------------------------------
