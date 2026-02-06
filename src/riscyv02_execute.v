@@ -139,7 +139,6 @@ module riscyv02_execute (
   wire fsm_ready = state == E_IDLE || insn_completing;
   wire take_nmi = fsm_ready && (nmi_pending || nmi_edge) && !nmi_ack;
   wire take_irq = fsm_ready && !irqb && !i_bit && !take_nmi;
-  wire take_brk = (state == E_EXEC_LO) && (op_r == OP_BRK);
   assign ir_accept      = fsm_ready && ir_valid && !fetch_flush;
   assign waiting = (state == E_IDLE) && (op_r == OP_WAI);
   assign stopped = (state == E_IDLE) && (op_r == OP_STP);
@@ -180,22 +179,22 @@ module riscyv02_execute (
           insn_completing = 1'b1;
           jump      = 1'b1;
           next_pc   = {epc[15:1], 1'b0};
+        end else if (op_r == OP_EPCR) begin
+          w_data = epc[7:0];
+          w_hi   = 1'b0;
+          w_we   = 1'b1;
+        end else if (op_r == OP_EPCW) begin
+          r_sel = rd_rs2_sel_r;
+          r_hi  = 1'b0;
         end else begin
           next_pc += 16'd2;
-          if (op_r == OP_EPCR) begin
-            w_data = epc[7:0];
-            w_hi   = 1'b0;
-            w_we   = 1'b1;
-          end else if (op_r == OP_EPCW) begin
-            r_sel = rd_rs2_sel_r;
-            r_hi  = 1'b0;
-          end
+          if (op_r == OP_BRK) jump = 1'b1;
         end
       end
 
       E_EXEC_HI: begin
         insn_completing = 1'b1;
-        fetch_pc  = pc;
+        next_pc        += 16'd2;
         if (op_r == OP_EPCR) begin
           w_data = epc[15:8];
           w_hi   = 1'b1;
@@ -286,8 +285,8 @@ module riscyv02_execute (
       end
     endcase
 
-    // Flush priority: NMI > IRQ > BRK > instruction jump.
-    fetch_flush = take_nmi || take_irq || take_brk || jump;
+    // Flush: interrupts or instruction jump (JR, RETI, BRK).
+    fetch_flush = take_nmi || take_irq || jump;
   end
 
   // ==========================================================================
@@ -318,13 +317,11 @@ module riscyv02_execute (
       if (state == E_EXEC_HI && op_r == OP_EPCW)
         epc[15:8] <= r;
 
-      // PC update
+      // PC update (BRK overrides below in E_EXEC_LO)
       if (take_nmi)
         pc <= 16'h0008;
       else if (take_irq)
         pc <= 16'h0004;
-      else if (take_brk)
-        pc <= 16'h000C;
       else
         pc <= next_pc;
       // Interrupt entry also saves EPC and sets I=1.
@@ -390,6 +387,7 @@ module riscyv02_execute (
             if (op_r == OP_BRK) begin
               epc   <= next_pc | {15'b0, i_bit};
               i_bit <= 1'b1;
+              pc    <= 16'h000C;
             end
             if (op_r == OP_EPCW) epc[7:0] <= r;
             if (op_r == OP_EPCR || op_r == OP_EPCW)
