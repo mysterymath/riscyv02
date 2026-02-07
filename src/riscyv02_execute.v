@@ -56,7 +56,7 @@ module riscyv02_execute (
   localparam E_EXEC_HI = 3'd6;  // Execute high byte (two-cycle instructions)
 
   reg [2:0]  state;
-  reg [15:0] MAR;       // Memory Address Register
+  reg [15:0] tmp;       // Cycle-to-cycle temporary (mem addr, branch target, shift carry)
 
   // Interrupt and PC state
   reg [15:0] pc;        // Program counter (next instruction to fetch; advanced at dispatch)
@@ -117,7 +117,6 @@ module riscyv02_execute (
   reg [2:0]  rd_rs2_sel_r;    // Destination (LW) or source (SW)
   reg [2:0]  r_sel_r;         // Registered regfile read select (set at state transitions)
   reg        r_hi_r;          // Registered regfile read hi/lo (set at state transitions)
-  reg [7:0]  shift_prev;      // Latched first-cycle register read for shifts
 
   // ==========================================================================
   // Shared Infrastructure
@@ -396,27 +395,27 @@ module riscyv02_execute (
         end else if (is_shift) begin
           // Cycle 2: left shifts process hi, right shifts process lo.
           if (shamt[3]) begin
-            // Cross-byte: use shift_prev as data (it has the other byte).
+            // Cross-byte: use tmp[7:0] as data (it has the other byte).
             if (is_right_shift) begin
-              shifter_din = {is_arith_shift ? {7{shift_prev[7]}} : 7'b0, shift_prev};
+              shifter_din = {is_arith_shift ? {7{tmp[7]}} : 7'b0, tmp[7:0]};
               w_data = shifter_result;
               w_hi   = 1'b0;
               w_we   = 1'b1;
             end else begin
-              shifter_din = {7'b0, rev8(shift_prev)};
+              shifter_din = {7'b0, rev8(tmp[7:0])};
               w_data = rev8(shifter_result);
               w_hi   = 1'b1;
               w_we   = 1'b1;
             end
           end else if (is_right_shift) begin
-            // Right shift lo byte: fill from shift_prev low bits
-            shifter_din = {shift_prev[6:0], r};
+            // Right shift lo byte: fill from tmp low bits
+            shifter_din = {tmp[6:0], r};
             w_data = shifter_result;
             w_hi   = 1'b0;
             w_we   = 1'b1;
           end else begin
-            // Left shift hi byte: reverse, right-shift with reversed shift_prev fill, reverse
-            shifter_din = {rev7(shift_prev[7:1]), rev8(r)};
+            // Left shift hi byte: reverse, right-shift with reversed tmp fill, reverse
+            shifter_din = {rev7(tmp[7:1]), rev8(r)};
             w_data = rev8(shifter_result);
             w_hi   = 1'b1;
             w_we   = 1'b1;
@@ -435,18 +434,18 @@ module riscyv02_execute (
           alu_new_op = 1'b0;
           if (op_r == OP_BZ && !nz_lo_r && r == 8'h00) begin
             jump    = 1'b1;
-            next_pc = {alu_result, MAR[7:0]};
+            next_pc = {alu_result, tmp[7:0]};
           end
           if (op_r == OP_BNZ && (nz_lo_r || r != 8'h00)) begin
             jump    = 1'b1;
-            next_pc = {alu_result, MAR[7:0]};
+            next_pc = {alu_result, tmp[7:0]};
           end
         end else if (is_jump_imm) begin
           alu_a      = pc[15:8];
           alu_b      = {{3{base_sel_r[2]}}, base_sel_r[2:0], off6_r[5:4]};
           alu_new_op = 1'b0;
           jump       = 1'b1;
-          next_pc    = {alu_result, MAR[7:0]};
+          next_pc    = {alu_result, tmp[7:0]};
           if (op_r == OP_JAL) begin
             w_data = pc[15:8];
             w_hi   = 1'b1;
@@ -490,7 +489,7 @@ module riscyv02_execute (
           if (op_r == OP_JR || op_r == OP_JALR) begin
             insn_completing = 1'b1;
             jump    = 1'b1;
-            next_pc = {alu_result, MAR[7:0]};
+            next_pc = {alu_result, tmp[7:0]};
           end
           if (op_r == OP_JALR) begin
             w_data = pc[15:8];
@@ -502,7 +501,7 @@ module riscyv02_execute (
 
       E_MEM_LO: begin
         bus_active   = 1'b1;
-        ab           = MAR;
+        ab           = tmp;
         w_hi         = 1'b0;
         w_we         = (op_r != OP_SW && op_r != OP_SB);
         if (op_r == OP_SB)
@@ -517,7 +516,7 @@ module riscyv02_execute (
           w_we          = 1'b1;
         end else begin
           bus_active    = 1'b1;
-          ab            = {MAR[15:1], 1'b1};
+          ab            = {tmp[15:1], 1'b1};
           w_we          = (op_r != OP_SW);
         end
       end
@@ -542,7 +541,7 @@ module riscyv02_execute (
   always @(negedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state            <= E_IDLE;
-      MAR              <= 16'h0000;
+      tmp              <= 16'h0000;
       op_r             <= OP_NOP;
       base_sel_r       <= 4'b0000;
       off6_r           <= 6'b000000;
@@ -550,7 +549,6 @@ module riscyv02_execute (
       r_sel_r          <= 3'b000;
       r_hi_r           <= 1'b0;
       nz_lo_r          <= 1'b0;
-      shift_prev       <= 8'h00;
       pc               <= 16'h0000;
       epc              <= 16'h0000;
       i_bit            <= 1'b1;  // Interrupts disabled after reset
@@ -583,10 +581,10 @@ module riscyv02_execute (
             pc    <= 16'h000C;
           end
           if (is_branch || is_jump_imm) begin
-            MAR[7:0] <= alu_result;
+            tmp[7:0] <= alu_result;
           end
           if (is_branch) nz_lo_r <= |r;
-          if (is_shift) shift_prev <= r;
+          if (is_shift) tmp[7:0] <= r;
           if (op_r == OP_EPCR || op_r == OP_EPCW ||
               is_alu_rr || is_alu_imm || is_slt_imm ||
               op_r == OP_LI || op_r == OP_LUI ||
@@ -598,13 +596,13 @@ module riscyv02_execute (
         end
 
         E_ADDR_LO: begin
-          MAR[7:0] <= alu_result;
+          tmp[7:0] <= alu_result;
           r_hi_r   <= 1'b1;
           state    <= E_ADDR_HI;
         end
 
         E_ADDR_HI: begin
-          MAR[15:8] <= alu_result;
+          tmp[15:8] <= alu_result;
           if (op_r == OP_JR || op_r == OP_JALR) pc <= next_pc;
           r_sel_r   <= rd_rs2_sel_r;
           r_hi_r    <= 1'b0;
