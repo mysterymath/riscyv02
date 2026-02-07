@@ -4395,3 +4395,1282 @@ async def test_jalr_ret(dut):
     dut._log.info("PASS [jalr_ret]")
 
 
+# ===========================================================================
+# Immediate ALU instructions (I-type and IF-type)
+# ===========================================================================
+
+def _encode_imm_op(op7, rd_rs, imm6):
+    """Encode an immediate ALU instruction: [op7:7][imm6:6][rd/rs:3]."""
+    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+    assert 0 <= rd_rs <= 7
+    imm6 &= 0x3F
+    insn = (op7 << 9) | (imm6 << 3) | rd_rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_addi(rd, imm6):
+    return _encode_imm_op(0b1101110, rd, imm6)
+
+
+def _encode_andi(rd, imm6):
+    return _encode_imm_op(0b1101111, rd, imm6)
+
+
+def _encode_ori(rd, imm6):
+    return _encode_imm_op(0b1110000, rd, imm6)
+
+
+def _encode_xori(rd, imm6):
+    return _encode_imm_op(0b1110001, rd, imm6)
+
+
+def _encode_sltif(rs, imm6):
+    return _encode_imm_op(0b1110011, rs, imm6)
+
+
+def _encode_sltiuf(rs, imm6):
+    return _encode_imm_op(0b1110100, rs, imm6)
+
+
+def _encode_xorif(rs, imm6):
+    return _encode_imm_op(0b1110101, rs, imm6)
+
+
+# ---------------------------------------------------------------------------
+# Test: ADDI positive
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_addi_positive(dut):
+    """ADDI R1, 10: R1 = 0x0005 + 10 = 0x000F."""
+    dut._log.info("Test: ADDI positive")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x05
+    prog[0x0021] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_addi(rd=1, imm6=10))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"ADDI result = {val:#06x} (expected 0x000F)")
+    assert val == 0x000F, f"Expected 0x000F, got {val:#06x}"
+    dut._log.info("PASS [addi_positive]")
+
+
+# ---------------------------------------------------------------------------
+# Test: ADDI negative (subtract)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_addi_negative(dut):
+    """ADDI R1, -4: R1 = 0x0010 + (-4) = 0x000C."""
+    dut._log.info("Test: ADDI negative")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x10
+    prog[0x0021] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_addi(rd=1, imm6=-4))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"ADDI result = {val:#06x} (expected 0x000C)")
+    assert val == 0x000C, f"Expected 0x000C, got {val:#06x}"
+    dut._log.info("PASS [addi_negative]")
+
+
+# ---------------------------------------------------------------------------
+# Test: ADDI overflow wrapping
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_addi_overflow(dut):
+    """ADDI R1, 1: R1 = 0xFFFF + 1 = 0x0000 (wraps)."""
+    dut._log.info("Test: ADDI overflow")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xFF
+    prog[0x0021] = 0xFF
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_addi(rd=1, imm6=1))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"ADDI result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [addi_overflow]")
+
+
+# ---------------------------------------------------------------------------
+# Test: ANDI mask low bits
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_andi_mask(dut):
+    """ANDI R1, 0x1F: R1 = 0x12FF & 0x001F = 0x001F."""
+    dut._log.info("Test: ANDI mask")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xFF
+    prog[0x0021] = 0x12
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_andi(rd=1, imm6=31))   # 0x1F = 31
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"ANDI result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [andi_mask]")
+
+
+# ---------------------------------------------------------------------------
+# Test: ANDI with -1 (nop: all bits pass)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_andi_neg1(dut):
+    """ANDI R1, -1: R1 = 0xABCD & 0xFFFF = 0xABCD."""
+    dut._log.info("Test: ANDI -1")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xCD
+    prog[0x0021] = 0xAB
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_andi(rd=1, imm6=-1))   # sext(-1) = 0xFFFF
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"ANDI result = {val:#06x} (expected 0xABCD)")
+    assert val == 0xABCD, f"Expected 0xABCD, got {val:#06x}"
+    dut._log.info("PASS [andi_neg1]")
+
+
+# ---------------------------------------------------------------------------
+# Test: ORI set bits
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_ori_set_bits(dut):
+    """ORI R1, 0x0F: R1 = 0x1200 | 0x000F = 0x120F."""
+    dut._log.info("Test: ORI set bits")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x00
+    prog[0x0021] = 0x12
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_ori(rd=1, imm6=15))    # 0x0F = 15
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"ORI result = {val:#06x} (expected 0x120F)")
+    assert val == 0x120F, f"Expected 0x120F, got {val:#06x}"
+    dut._log.info("PASS [ori_set_bits]")
+
+
+# ---------------------------------------------------------------------------
+# Test: ORI with -1 (sets all bits)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_ori_neg1(dut):
+    """ORI R1, -1: R1 = 0x1234 | 0xFFFF = 0xFFFF."""
+    dut._log.info("Test: ORI -1")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0x12
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_ori(rd=1, imm6=-1))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"ORI result = {val:#06x} (expected 0xFFFF)")
+    assert val == 0xFFFF, f"Expected 0xFFFF, got {val:#06x}"
+    dut._log.info("PASS [ori_neg1]")
+
+
+# ---------------------------------------------------------------------------
+# Test: XORI toggle bits
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_xori_toggle(dut):
+    """XORI R1, 0x1F: R1 = 0x00FF ^ 0x001F = 0x00E0."""
+    dut._log.info("Test: XORI toggle")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xFF
+    prog[0x0021] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_xori(rd=1, imm6=31))   # 0x1F
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"XORI result = {val:#06x} (expected 0x00E0)")
+    assert val == 0x00E0, f"Expected 0x00E0, got {val:#06x}"
+    dut._log.info("PASS [xori_toggle]")
+
+
+# ---------------------------------------------------------------------------
+# Test: XORI with -1 (NOT)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_xori_not(dut):
+    """XORI R1, -1: R1 = 0x1234 ^ 0xFFFF = 0xEDCB."""
+    dut._log.info("Test: XORI NOT")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0x12
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_xori(rd=1, imm6=-1))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"XORI result = {val:#06x} (expected 0xEDCB)")
+    assert val == 0xEDCB, f"Expected 0xEDCB, got {val:#06x}"
+    dut._log.info("PASS [xori_not]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLTIF true (signed less than)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sltif_true(dut):
+    """SLTIF R1, 10: R1=5, 5 < 10 -> R2(t0) = 1."""
+    dut._log.info("Test: SLTIF true")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x05
+    prog[0x0021] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_sltif(rs=1, imm6=10))
+    # Store R2 (t0, the result)
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLTIF result = {val:#06x} (expected 0x0001)")
+    assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
+    dut._log.info("PASS [sltif_true]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLTIF false (not less than)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sltif_false(dut):
+    """SLTIF R1, 3: R1=10, 10 < 3 -> R2(t0) = 0."""
+    dut._log.info("Test: SLTIF false")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x0A
+    prog[0x0021] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_sltif(rs=1, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLTIF result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [sltif_false]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLTIF negative comparison
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sltif_negative(dut):
+    """SLTIF R1, -1: R1=0xFFFE (-2), -2 < -1 -> R2(t0) = 1."""
+    dut._log.info("Test: SLTIF negative")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xFE
+    prog[0x0021] = 0xFF
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_sltif(rs=1, imm6=-1))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLTIF result = {val:#06x} (expected 0x0001)")
+    assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
+    dut._log.info("PASS [sltif_negative]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLTIF equal (not less than)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sltif_equal(dut):
+    """SLTIF R1, 5: R1=5, 5 < 5 -> R2(t0) = 0."""
+    dut._log.info("Test: SLTIF equal")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x05
+    prog[0x0021] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_sltif(rs=1, imm6=5))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLTIF result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [sltif_equal]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLTIUF true (unsigned less than)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sltiuf_true(dut):
+    """SLTIUF R1, 10: R1=5, 5 <u 10 -> R2(t0) = 1."""
+    dut._log.info("Test: SLTIUF true")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x05
+    prog[0x0021] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_sltiuf(rs=1, imm6=10))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLTIUF result = {val:#06x} (expected 0x0001)")
+    assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
+    dut._log.info("PASS [sltiuf_true]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLTIUF false (not less than unsigned)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sltiuf_false(dut):
+    """SLTIUF R1, 3: R1=0xFFFF (65535), 65535 <u sext(3)=3 -> R2(t0) = 0."""
+    dut._log.info("Test: SLTIUF false")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xFF
+    prog[0x0021] = 0xFF
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_sltiuf(rs=1, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLTIUF result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [sltiuf_false]")
+
+
+# ---------------------------------------------------------------------------
+# Test: XORIF basic (XOR to t0)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_xorif_basic(dut):
+    """XORIF R1, 0x1F: R1=0x00FF, t0 = 0x00FF ^ 0x001F = 0x00E0."""
+    dut._log.info("Test: XORIF basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xFF
+    prog[0x0021] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_xorif(rs=1, imm6=31))
+    # Store R2 (t0, the result)
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    # Also store R1 to verify it's preserved
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=22))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"XORIF result = {val:#06x} (expected 0x00E0)")
+    assert val == 0x00E0, f"Expected 0x00E0, got {val:#06x}"
+
+    # Verify source R1 is preserved
+    lo1 = _read_ram(dut, 0x002C)
+    hi1 = _read_ram(dut, 0x002D)
+    val1 = lo1 | (hi1 << 8)
+    dut._log.info(f"R1 preserved = {val1:#06x} (expected 0x00FF)")
+    assert val1 == 0x00FF, f"Expected 0x00FF, got {val1:#06x}"
+    dut._log.info("PASS [xorif_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: XORIF equality test (rs == imm -> t0 == 0)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_xorif_equality(dut):
+    """XORIF R1, 5: R1=5, t0 = 5 ^ 5 = 0 (equality pattern)."""
+    dut._log.info("Test: XORIF equality")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x05
+    prog[0x0021] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_xorif(rs=1, imm6=5))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"XORIF result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [xorif_equality]")
+
+
+# ===========================================================================
+# Shift instructions (SLL, SRL, SRA, SLLI, SRLI, SRAI)
+# ===========================================================================
+
+def _encode_sll(rd, rs1, rs2):
+    return _encode_alu(0b1100111, rd, rs1, rs2)
+
+
+def _encode_srl(rd, rs1, rs2):
+    return _encode_alu(0b1101000, rd, rs1, rs2)
+
+
+def _encode_sra(rd, rs1, rs2):
+    return _encode_alu(0b1101001, rd, rs1, rs2)
+
+
+def _encode_shift_imm(op9, rd, imm4):
+    """Encode a 9-bit opcode shift immediate: [op9:9][imm4:4][rd:3]."""
+    assert 0 <= imm4 <= 15, f"imm4 out of range: {imm4}"
+    assert 0 <= rd <= 7
+    insn = (op9 << 7) | (imm4 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_slli(rd, imm4):
+    return _encode_shift_imm(0b111101100, rd, imm4)
+
+
+def _encode_srli(rd, imm4):
+    return _encode_shift_imm(0b111101101, rd, imm4)
+
+
+def _encode_srai(rd, imm4):
+    return _encode_shift_imm(0b111101110, rd, imm4)
+
+
+# ---------------------------------------------------------------------------
+# Test: SLL basic (shift left by 4)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sll_basic(dut):
+    """SLL R3, R1, R2: 0x1234 << 4 = 0x2340."""
+    dut._log.info("Test: SLL basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0x12
+    prog[0x0022] = 0x04
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLL result = {val:#06x} (expected 0x2340)")
+    assert val == 0x2340, f"Expected 0x2340, got {val:#06x}"
+    dut._log.info("PASS [sll_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLL by 0
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sll_by_zero(dut):
+    """SLL R3, R1, R2: 0xABCD << 0 = 0xABCD."""
+    dut._log.info("Test: SLL by 0")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xCD
+    prog[0x0021] = 0xAB
+    prog[0x0022] = 0x00
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLL result = {val:#06x} (expected 0xABCD)")
+    assert val == 0xABCD, f"Expected 0xABCD, got {val:#06x}"
+    dut._log.info("PASS [sll_by_zero]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLL by 8 (cross-byte)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sll_by_8(dut):
+    """SLL R3, R1, R2: 0x00FF << 8 = 0xFF00."""
+    dut._log.info("Test: SLL by 8")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xFF
+    prog[0x0021] = 0x00
+    prog[0x0022] = 0x08
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLL result = {val:#06x} (expected 0xFF00)")
+    assert val == 0xFF00, f"Expected 0xFF00, got {val:#06x}"
+    dut._log.info("PASS [sll_by_8]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLL by 15
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sll_by_15(dut):
+    """SLL R3, R1, R2: 0x0001 << 15 = 0x8000."""
+    dut._log.info("Test: SLL by 15")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x01
+    prog[0x0021] = 0x00
+    prog[0x0022] = 0x0F
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLL result = {val:#06x} (expected 0x8000)")
+    assert val == 0x8000, f"Expected 0x8000, got {val:#06x}"
+    dut._log.info("PASS [sll_by_15]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLL cross-byte (shift by 9)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sll_cross_byte(dut):
+    """SLL R3, R1, R2: 0x0037 << 9 = 0x6E00."""
+    dut._log.info("Test: SLL cross-byte (shift by 9)")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x37
+    prog[0x0021] = 0x00
+    prog[0x0022] = 0x09
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLL result = {val:#06x} (expected 0x6E00)")
+    assert val == 0x6E00, f"Expected 0x6E00, got {val:#06x}"
+    dut._log.info("PASS [sll_cross_byte]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRL basic (logical right shift by 4)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_srl_basic(dut):
+    """SRL R3, R1, R2: 0x1234 >>u 4 = 0x0123."""
+    dut._log.info("Test: SRL basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0x12
+    prog[0x0022] = 0x04
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRL result = {val:#06x} (expected 0x0123)")
+    assert val == 0x0123, f"Expected 0x0123, got {val:#06x}"
+    dut._log.info("PASS [srl_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRL by 0
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_srl_by_zero(dut):
+    """SRL R3, R1, R2: 0xABCD >>u 0 = 0xABCD."""
+    dut._log.info("Test: SRL by 0")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xCD
+    prog[0x0021] = 0xAB
+    prog[0x0022] = 0x00
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRL result = {val:#06x} (expected 0xABCD)")
+    assert val == 0xABCD, f"Expected 0xABCD, got {val:#06x}"
+    dut._log.info("PASS [srl_by_zero]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRL by 8 (cross-byte)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_srl_by_8(dut):
+    """SRL R3, R1, R2: 0xAB00 >>u 8 = 0x00AB."""
+    dut._log.info("Test: SRL by 8")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x00
+    prog[0x0021] = 0xAB
+    prog[0x0022] = 0x08
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRL result = {val:#06x} (expected 0x00AB)")
+    assert val == 0x00AB, f"Expected 0x00AB, got {val:#06x}"
+    dut._log.info("PASS [srl_by_8]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRL by 15
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_srl_by_15(dut):
+    """SRL R3, R1, R2: 0x8000 >>u 15 = 0x0001."""
+    dut._log.info("Test: SRL by 15")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x00
+    prog[0x0021] = 0x80
+    prog[0x0022] = 0x0F
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRL result = {val:#06x} (expected 0x0001)")
+    assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
+    dut._log.info("PASS [srl_by_15]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRA positive (arithmetic right shift, positive value)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sra_positive(dut):
+    """SRA R3, R1, R2: 0x1234 >>s 4 = 0x0123."""
+    dut._log.info("Test: SRA positive")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0x12
+    prog[0x0022] = 0x04
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRA result = {val:#06x} (expected 0x0123)")
+    assert val == 0x0123, f"Expected 0x0123, got {val:#06x}"
+    dut._log.info("PASS [sra_positive]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRA negative (arithmetic right shift, negative value)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sra_negative(dut):
+    """SRA R3, R1, R2: 0xF234 >>s 4 = 0xFF23."""
+    dut._log.info("Test: SRA negative")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0xF2
+    prog[0x0022] = 0x04
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRA result = {val:#06x} (expected 0xFF23)")
+    assert val == 0xFF23, f"Expected 0xFF23, got {val:#06x}"
+    dut._log.info("PASS [sra_negative]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRA by 8 negative (cross-byte, sign fills)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sra_by_8_negative(dut):
+    """SRA R3, R1, R2: 0x8000 >>s 8 = 0xFF80."""
+    dut._log.info("Test: SRA by 8 negative")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x00
+    prog[0x0021] = 0x80
+    prog[0x0022] = 0x08
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRA result = {val:#06x} (expected 0xFF80)")
+    assert val == 0xFF80, f"Expected 0xFF80, got {val:#06x}"
+    dut._log.info("PASS [sra_by_8_negative]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRA by 15 negative
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sra_by_15_negative(dut):
+    """SRA R3, R1, R2: 0x8000 >>s 15 = 0xFFFF."""
+    dut._log.info("Test: SRA by 15 negative")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x00
+    prog[0x0021] = 0x80
+    prog[0x0022] = 0x0F
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRA result = {val:#06x} (expected 0xFFFF)")
+    assert val == 0xFFFF, f"Expected 0xFFFF, got {val:#06x}"
+    dut._log.info("PASS [sra_by_15_negative]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLLI basic (shift left by 4)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_slli_basic(dut):
+    """SLLI R1, 4: R1=0x1234, R1 = 0x1234 << 4 = 0x2340."""
+    dut._log.info("Test: SLLI basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0x12
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_slli(rd=1, imm4=4))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLLI result = {val:#06x} (expected 0x2340)")
+    assert val == 0x2340, f"Expected 0x2340, got {val:#06x}"
+    dut._log.info("PASS [slli_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLLI by 8 (cross-byte)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_slli_by_8(dut):
+    """SLLI R1, 8: R1=0x00AB, R1 = 0x00AB << 8 = 0xAB00."""
+    dut._log.info("Test: SLLI by 8")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xAB
+    prog[0x0021] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_slli(rd=1, imm4=8))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLLI result = {val:#06x} (expected 0xAB00)")
+    assert val == 0xAB00, f"Expected 0xAB00, got {val:#06x}"
+    dut._log.info("PASS [slli_by_8]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRLI basic (logical right shift by 4)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_srli_basic(dut):
+    """SRLI R1, 4: R1=0x1234, R1 = 0x1234 >>u 4 = 0x0123."""
+    dut._log.info("Test: SRLI basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0x12
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_srli(rd=1, imm4=4))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRLI result = {val:#06x} (expected 0x0123)")
+    assert val == 0x0123, f"Expected 0x0123, got {val:#06x}"
+    dut._log.info("PASS [srli_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRLI by 8 (cross-byte)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_srli_by_8(dut):
+    """SRLI R1, 8: R1=0xAB00, R1 = 0xAB00 >>u 8 = 0x00AB."""
+    dut._log.info("Test: SRLI by 8")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x00
+    prog[0x0021] = 0xAB
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_srli(rd=1, imm4=8))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRLI result = {val:#06x} (expected 0x00AB)")
+    assert val == 0x00AB, f"Expected 0x00AB, got {val:#06x}"
+    dut._log.info("PASS [srli_by_8]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRAI negative (arithmetic right shift by 4)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_srai_negative(dut):
+    """SRAI R1, 4: R1=0xF234, R1 = 0xF234 >>s 4 = 0xFF23."""
+    dut._log.info("Test: SRAI negative")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0xF2
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_srai(rd=1, imm4=4))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRAI result = {val:#06x} (expected 0xFF23)")
+    assert val == 0xFF23, f"Expected 0xFF23, got {val:#06x}"
+    dut._log.info("PASS [srai_negative]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SRAI by 15 negative (full sign extension)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_srai_by_15_negative(dut):
+    """SRAI R1, 15: R1=0x8000, R1 = 0x8000 >>s 15 = 0xFFFF."""
+    dut._log.info("Test: SRAI by 15 negative")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x00
+    prog[0x0021] = 0x80
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_srai(rd=1, imm4=15))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SRAI result = {val:#06x} (expected 0xFFFF)")
+    assert val == 0xFFFF, f"Expected 0xFFFF, got {val:#06x}"
+    dut._log.info("PASS [srai_by_15_negative]")
+
+

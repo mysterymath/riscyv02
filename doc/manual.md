@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **RETI**, **SEI**, **CLI**, **BRK**, **WAI**, **STP**, **EPCR**, and **EPCW**. IRQ and NMI interrupt handling is supported. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTIF**, **SLTIUF**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **SEI**, **CLI**, **BRK**, **WAI**, **STP**, **EPCR**, and **EPCW**. IRQ and NMI interrupt handling is supported. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -14,10 +14,10 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 16 ns | 16 ns |
 | fMax (slow corner) | 62.5 MHz | 62.5 MHz |
-| Utilization | 61.7% | 48.4% |
-| Transistor count (synth) | 16,330 | 13,082 |
+| Utilization | 60.4% | 48.4% |
+| Transistor count (synth) | 16,374 | 13,082 |
 
-RISCY-V02 now supports full subroutine call/return (JAL/JALR + JR R6) and PC-relative jumps (J). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. Making the link register a GPR recovered timing to match the 6502's 62.5 MHz. The total is ~25% above the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return).
+RISCY-V02 now supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. Making the link register a GPR recovered timing to match the 6502's 62.5 MHz. The total is ~25% above the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -370,6 +370,162 @@ Compares rs1 and rs2 as unsigned 16-bit integers. If rs1 is less than rs2, rd is
 
 **Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
 
+### SLL — Shift Left Logical
+
+```
+[1100111][rs2:3][rs1:3][rd:3]
+```
+
+`rd = rs1 << rs2[3:0]`
+
+Shifts rs1 left by the amount in rs2 (low 4 bits, range 0–15). Vacated bits are filled with zeros. The 16-bit shift is performed in two cycles using an 8-bit barrel shifter: cycle 1 processes the low byte, cycle 2 processes the high byte using bits that shifted across the byte boundary.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### SRL — Shift Right Logical
+
+```
+[1101000][rs2:3][rs1:3][rd:3]
+```
+
+`rd = rs1 >>u rs2[3:0]`
+
+Shifts rs1 right by the amount in rs2 (low 4 bits, range 0–15). Vacated bits are filled with zeros. Right shifts process the high byte first (reversed order from left shifts) so that bits crossing the byte boundary flow correctly.
+
+**Cycle count:** 2 (1 high byte + 1 low byte, overlapped fetch)
+
+### SRA — Shift Right Arithmetic
+
+```
+[1101001][rs2:3][rs1:3][rd:3]
+```
+
+`rd = rs1 >>s rs2[3:0]`
+
+Shifts rs1 right by the amount in rs2 (low 4 bits, range 0–15). Vacated bits are filled with copies of the sign bit (rs1[15]). Useful for dividing signed values by powers of two.
+
+**Cycle count:** 2 (1 high byte + 1 low byte, overlapped fetch)
+
+### ADDI — Add Immediate
+
+```
+[1101110][imm6:6][rd:3]
+```
+
+`rd = rd + sext(imm6)`
+
+Adds a sign-extended 6-bit immediate (-32 to +31) to the destination register. The result overwrites rd. Useful for stack pointer adjustments (`ADDI sp, -4`), loop counter increments, and small constant additions without needing a separate register. Pairs with LUI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### ANDI — And Immediate
+
+```
+[1101111][imm6:6][rd:3]
+```
+
+`rd = rd & sext(imm6)`
+
+Bitwise AND of the destination register with a sign-extended 6-bit immediate. Useful for masking low bits (`ANDI rd, 0x1F` to keep bits [4:0]).
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### ORI — Or Immediate
+
+```
+[1110000][imm6:6][rd:3]
+```
+
+`rd = rd | sext(imm6)`
+
+Bitwise OR of the destination register with a sign-extended 6-bit immediate. Sets specific bits without affecting others.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### XORI — Xor Immediate
+
+```
+[1110001][imm6:6][rd:3]
+```
+
+`rd = rd ^ sext(imm6)`
+
+Bitwise XOR of the destination register with a sign-extended 6-bit immediate. `XORI rd, -1` acts as bitwise NOT.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### SLTIF — Set Less Than Immediate (Signed, Fixed-Destination)
+
+```
+[1110011][imm6:6][rs:3]
+```
+
+`t0 = (rs < sext(imm6)) ? 1 : 0` (signed comparison)
+
+Compares the source register against a sign-extended 6-bit immediate as signed 16-bit integers. The result (0 or 1) is written to R2 (t0), preserving the source register. Pairs with BNZ/BZ for compare-and-branch: `SLTIF a0, 10; BNZ t0, target`.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### SLTIUF — Set Less Than Immediate (Unsigned, Fixed-Destination)
+
+```
+[1110100][imm6:6][rs:3]
+```
+
+`t0 = (rs <u sext(imm6)) ? 1 : 0` (unsigned comparison)
+
+Compares the source register against a sign-extended 6-bit immediate as unsigned 16-bit integers. The immediate is sign-extended then treated as unsigned for the comparison. The result is written to R2 (t0).
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### XORIF — Xor Immediate (Fixed-Destination)
+
+```
+[1110101][imm6:6][rs:3]
+```
+
+`t0 = rs ^ sext(imm6)`
+
+Bitwise XOR of the source register with a sign-extended 6-bit immediate, writing the result to R2 (t0) while preserving the source register. Useful for equality testing: if rs equals sext(imm6), t0 will be zero. Pattern: `XORIF a0, val; BZ t0, equal_label`.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### SLLI — Shift Left Logical Immediate
+
+```
+[111101100][imm4:4][rd:3]
+```
+
+`rd = rd << imm4`
+
+Shifts rd left by a 4-bit immediate (0–15). Vacated bits are filled with zeros. This is the first 9-bit opcode format in the ISA, using 4 fewer payload bits than 7-bit opcodes to accommodate the longer opcode. The shift amount is extracted from `imm4` (bits [6:3] of the instruction).
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### SRLI — Shift Right Logical Immediate
+
+```
+[111101101][imm4:4][rd:3]
+```
+
+`rd = rd >>u imm4`
+
+Shifts rd right by a 4-bit immediate (0–15). Vacated bits are filled with zeros.
+
+**Cycle count:** 2 (1 high byte + 1 low byte, overlapped fetch)
+
+### SRAI — Shift Right Arithmetic Immediate
+
+```
+[111101110][imm4:4][rd:3]
+```
+
+`rd = rd >>s imm4`
+
+Shifts rd right by a 4-bit immediate (0–15). Vacated bits are filled with copies of the sign bit (rd[15]). Useful for dividing signed values by powers of two: `SRAI rd, 1` divides by 2 (with rounding toward negative infinity).
+
+**Cycle count:** 2 (1 high byte + 1 low byte, overlapped fetch)
+
 ### RETI — Return from Interrupt
 
 ```
@@ -505,7 +661,23 @@ Bits 15..9   Instruction   Format
 1100100      XOR           [rs2:3][rs1:3][rd:3]
 1100101      SLT           [rs2:3][rs1:3][rd:3]
 1100110      SLTU          [rs2:3][rs1:3][rd:3]
+1100111      SLL           [rs2:3][rs1:3][rd:3]
+1101000      SRL           [rs2:3][rs1:3][rd:3]
+1101001      SRA           [rs2:3][rs1:3][rd:3]
+1101110      ADDI          [imm6:6][rd:3]
+1101111      ANDI          [imm6:6][rd:3]
+1110000      ORI           [imm6:6][rd:3]
+1110001      XORI          [imm6:6][rd:3]
 1110010      LI            [imm6:6][rd:3]
+1110011      SLTIF         [imm6:6][rs:3]
+1110100      SLTIUF        [imm6:6][rs:3]
+1110101      XORIF         [imm6:6][rs:3]
+
+Bits 15..7   Instruction   Format
+──────────────────────────────────────────────
+111101100    SLLI          [imm4:4][rd:3]
+111101101    SRLI          [imm4:4][rd:3]
+111101110    SRAI          [imm4:4][rd:3]
 
 Bits 15..3   Instruction   Format
 ──────────────────────────────────────────────
@@ -534,7 +706,7 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| NOP/SEI/CLI/AUIPC/LUI/LI/EPCR/EPCW/ADD/SUB/AND/OR/XOR/SLT/SLTU | 2 | 1 execute + 1 overlapped fetch |
+| NOP/SEI/CLI/AUIPC/LUI/LI/EPCR/EPCW/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTIF/SLTIUF/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (taken) | 4 | 2 execute + 2 fetch after redirect |
 | LB/LBU | 4 | 2 address + 1 byte read + 1 extension |

@@ -9,7 +9,9 @@
 // Execute unit: FSM + ALU + register file.
 //
 // Handles LW, SW, LB, LBU, SB, JR, JALR, J, JAL, AUIPC, LUI, LI, BZ, BNZ,
-// RETI, SEI, CLI, BRK, EPCR, EPCW, ADD, SUB, AND, OR, XOR, SLT, SLTU
+// RETI, SEI, CLI, BRK, EPCR, EPCW, ADD, SUB, AND, OR, XOR, SLT, SLTU,
+// SLL, SRL, SRA, ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF,
+// SLLI, SRLI, SRAI
 // instructions. JAL/JALR write the return address to R6 (link register).
 // The register file lives
 // here since only execute needs register access.
@@ -62,45 +64,60 @@ module riscyv02_execute (
   reg        i_bit;     // Interrupt disable flag (0=enabled, 1=disabled)
 
   // Decoded instruction state (latched at ir_accept)
-  localparam OP_NOP   = 5'd0;
-  localparam OP_SEI   = 5'd1;
-  localparam OP_CLI   = 5'd2;
-  localparam OP_RETI  = 5'd3;
-  localparam OP_LW    = 5'd4;
-  localparam OP_SW    = 5'd5;
-  localparam OP_JR    = 5'd6;
-  localparam OP_WAI   = 5'd7;
-  localparam OP_STP   = 5'd8;
-  localparam OP_BRK   = 5'd9;
-  localparam OP_EPCR  = 5'd10;
-  localparam OP_EPCW  = 5'd11;
-  localparam OP_LB    = 5'd12;
-  localparam OP_LBU   = 5'd13;
-  localparam OP_SB    = 5'd14;
-  localparam OP_AUIPC = 5'd15;
-  localparam OP_ADD   = 5'd16;
-  localparam OP_SUB   = 5'd17;
-  localparam OP_AND   = 5'd18;
-  localparam OP_OR    = 5'd19;
-  localparam OP_XOR   = 5'd20;
-  localparam OP_SLT   = 5'd21;
-  localparam OP_SLTU  = 5'd22;
-  localparam OP_LI    = 5'd23;
-  localparam OP_LUI   = 5'd24;
-  localparam OP_BZ    = 5'd25;
-  localparam OP_BNZ   = 5'd26;
-  localparam OP_J     = 5'd27;
-  localparam OP_JAL   = 5'd28;
-  localparam OP_JALR  = 5'd29;
+  localparam OP_NOP    = 6'd0;
+  localparam OP_SEI    = 6'd1;
+  localparam OP_CLI    = 6'd2;
+  localparam OP_RETI   = 6'd3;
+  localparam OP_LW     = 6'd4;
+  localparam OP_SW     = 6'd5;
+  localparam OP_JR     = 6'd6;
+  localparam OP_WAI    = 6'd7;
+  localparam OP_STP    = 6'd8;
+  localparam OP_BRK    = 6'd9;
+  localparam OP_EPCR   = 6'd10;
+  localparam OP_EPCW   = 6'd11;
+  localparam OP_LB     = 6'd12;
+  localparam OP_LBU    = 6'd13;
+  localparam OP_SB     = 6'd14;
+  localparam OP_AUIPC  = 6'd15;
+  localparam OP_ADD    = 6'd16;
+  localparam OP_SUB    = 6'd17;
+  localparam OP_AND    = 6'd18;
+  localparam OP_OR     = 6'd19;
+  localparam OP_XOR    = 6'd20;
+  localparam OP_SLT    = 6'd21;
+  localparam OP_SLTU   = 6'd22;
+  localparam OP_LI     = 6'd23;
+  localparam OP_LUI    = 6'd24;
+  localparam OP_BZ     = 6'd25;
+  localparam OP_BNZ    = 6'd26;
+  localparam OP_J      = 6'd27;
+  localparam OP_JAL    = 6'd28;
+  localparam OP_JALR   = 6'd29;
+  localparam OP_ADDI   = 6'd30;
+  localparam OP_ANDI   = 6'd31;
+  localparam OP_ORI    = 6'd32;
+  localparam OP_XORI   = 6'd33;
+  localparam OP_SLTIF  = 6'd34;
+  localparam OP_SLTIUF = 6'd35;
+  localparam OP_XORIF  = 6'd36;
+  localparam OP_SLL    = 6'd37;
+  localparam OP_SRL    = 6'd38;
+  localparam OP_SRA    = 6'd39;
+  localparam OP_SLLI   = 6'd40;
+  localparam OP_SRLI   = 6'd41;
+  localparam OP_SRAI   = 6'd42;
 
   localparam LINK_REG = 3'd6;  // R6 is the link register for JAL/JALR
+  localparam T0_REG   = 3'd2;  // R2 is t0 for fixed-destination IF-type ops
 
-  reg [4:0]  op_r;            // Instruction opcode
+  reg [5:0]  op_r;            // Instruction opcode
   reg [3:0]  base_sel_r;      // Base register (or imm10[9:6] for AUIPC)
   reg [5:0]  off6_r;          // 6-bit offset
   reg [2:0]  rd_rs2_sel_r;    // Destination (LW) or source (SW)
   reg [2:0]  r_sel_r;         // Registered regfile read select (set at state transitions)
   reg        r_hi_r;          // Registered regfile read hi/lo (set at state transitions)
+  reg [7:0]  shift_prev;      // Latched first-cycle register read for shifts
 
   // ==========================================================================
   // Shared Infrastructure
@@ -117,7 +134,10 @@ module riscyv02_execute (
   reg        w_we;
   reg  [7:0] w_data;
 
-  wire [2:0] w_sel_mux = (op_r == OP_JAL || op_r == OP_JALR) ? LINK_REG : rd_rs2_sel_r;
+  wire [2:0] w_sel_mux = (op_r == OP_JAL || op_r == OP_JALR) ? LINK_REG :
+                         is_fixed_dest ? T0_REG : rd_rs2_sel_r;
+
+  wire r2_hi_mux = is_shift ? 1'b0 : r_hi;
 
   riscyv02_regfile u_regfile (
     .clk    (clk),
@@ -130,7 +150,7 @@ module riscyv02_execute (
     .r_hi   (r_hi),
     .r      (r),
     .r2_sel (off6_r[5:3]),
-    .r2_hi  (r_hi),
+    .r2_hi  (r2_hi_mux),
     .r2     (r2)
   );
 
@@ -155,10 +175,42 @@ module riscyv02_execute (
     .result (alu_result)
   );
 
+  // -------------------------------------------------------------------------
+  // Barrel shifter
+  // -------------------------------------------------------------------------
+  wire [3:0] shamt = is_shift_rr ? r2[3:0] : off6_r[3:0];
+
+  reg  [14:0] shifter_din;
+  wire [7:0]  shifter_result;
+
+  riscyv02_shifter u_shifter (
+    .din    (shifter_din),
+    .shamt  (shamt[2:0]),
+    .result (shifter_result)
+  );
+
+  function [7:0] rev8(input [7:0] v);
+    rev8 = {v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]};
+  endfunction
+
+  function [6:0] rev7(input [6:0] v);
+    rev7 = {v[0], v[1], v[2], v[3], v[4], v[5], v[6]};
+  endfunction
+
   wire is_alu_rr = (op_r == OP_ADD || op_r == OP_SUB ||
                     op_r == OP_AND || op_r == OP_OR || op_r == OP_XOR ||
                     op_r == OP_SLT || op_r == OP_SLTU);
   wire is_slt = (op_r == OP_SLT || op_r == OP_SLTU);
+  wire is_alu_imm = (op_r == OP_ADDI || op_r == OP_ANDI || op_r == OP_ORI ||
+                     op_r == OP_XORI || op_r == OP_XORIF);
+  wire is_slt_imm = (op_r == OP_SLTIF || op_r == OP_SLTIUF);
+  wire is_fixed_dest = (op_r == OP_SLTIF || op_r == OP_SLTIUF || op_r == OP_XORIF);
+  wire is_shift_rr  = (op_r == OP_SLL || op_r == OP_SRL || op_r == OP_SRA);
+  wire is_shift_imm = (op_r == OP_SLLI || op_r == OP_SRLI || op_r == OP_SRAI);
+  wire is_shift     = is_shift_rr || is_shift_imm;
+  wire is_right_shift = (op_r == OP_SRL || op_r == OP_SRA ||
+                         op_r == OP_SRLI || op_r == OP_SRAI);
+  wire is_arith_shift = (op_r == OP_SRA || op_r == OP_SRAI);
   wire is_branch = (op_r == OP_BZ || op_r == OP_BNZ);
   wire is_jump_imm = (op_r == OP_J || op_r == OP_JAL);
   reg  nz_lo_r;  // Latched |rs_lo| for branch zero check
@@ -209,13 +261,14 @@ module riscyv02_execute (
     insn_completing = 1'b0;
     next_pc         = pc;
     jump            = 1'b0;
+    shifter_din     = 15'b0;
 
     // ALU operation select (derived from op_r)
     case (op_r)
-      OP_SUB, OP_SLT, OP_SLTU: alu_op = 3'd1;
-      OP_AND: alu_op = 3'd2;
-      OP_OR:  alu_op = 3'd3;
-      OP_XOR: alu_op = 3'd4;
+      OP_SUB, OP_SLT, OP_SLTU, OP_SLTIF, OP_SLTIUF: alu_op = 3'd1;
+      OP_AND, OP_ANDI: alu_op = 3'd2;
+      OP_OR, OP_ORI:   alu_op = 3'd3;
+      OP_XOR, OP_XORI, OP_XORIF: alu_op = 3'd4;
       default: ;  // alu_op stays 3'd0 (ADD)
     endcase
 
@@ -241,6 +294,41 @@ module riscyv02_execute (
           if (is_slt) begin
             w_data = 8'h00;
             w_hi   = 1'b1;
+          end
+        end else if (is_alu_imm) begin
+          alu_b      = {{2{off6_r[5]}}, off6_r};
+          alu_new_op = 1'b1;
+          w_data     = alu_result;
+          w_hi       = 1'b0;
+          w_we       = 1'b1;
+        end else if (is_slt_imm) begin
+          alu_b      = {{2{off6_r[5]}}, off6_r};
+          alu_new_op = 1'b1;
+          w_data     = 8'h00;
+          w_hi       = 1'b1;
+          w_we       = 1'b1;
+        end else if (is_shift) begin
+          // Cycle 1: left shifts process lo normally, right shifts process hi
+          // (r_hi_r=1 from dispatch for right shifts, so r = hi byte).
+          if (shamt[3]) begin
+            // Cross-byte: entire result comes from the other byte.
+            // Write zero (or sign for SRA) for the evacuated byte.
+            w_data = is_right_shift ?
+                     (is_arith_shift ? {8{r[7]}} : 8'h00) : 8'h00;
+            w_hi   = is_right_shift ? 1'b1 : 1'b0;
+            w_we   = 1'b1;
+          end else if (is_right_shift) begin
+            // Right shift hi byte: fill from sign/zero
+            shifter_din = {is_arith_shift ? {7{r[7]}} : 7'b0, r};
+            w_data = shifter_result;
+            w_hi   = 1'b1;
+            w_we   = 1'b1;
+          end else begin
+            // Left shift lo byte: reverse, right-shift, reverse
+            shifter_din = {7'b0, rev8(r)};
+            w_data = rev8(shifter_result);
+            w_hi   = 1'b0;
+            w_we   = 1'b1;
           end
         end else if (op_r == OP_LI) begin
           w_data = {{2{off6_r[5]}}, off6_r};
@@ -289,6 +377,49 @@ module riscyv02_execute (
               w_data = {7'b0, ~alu_co};
             else
               w_data = {7'b0, (r[7] ^ r2[7]) ? r[7] : alu_result[7]};
+          end
+        end else if (is_alu_imm) begin
+          alu_b      = {8{off6_r[5]}};
+          alu_new_op = 1'b0;
+          w_data     = alu_result;
+          w_hi       = 1'b1;
+          w_we       = 1'b1;
+        end else if (is_slt_imm) begin
+          alu_b      = {8{off6_r[5]}};
+          alu_new_op = 1'b0;
+          w_hi       = 1'b0;
+          w_we       = 1'b1;
+          if (op_r == OP_SLTIUF)
+            w_data = {7'b0, ~alu_co};
+          else
+            w_data = {7'b0, (r[7] ^ off6_r[5]) ? r[7] : alu_result[7]};
+        end else if (is_shift) begin
+          // Cycle 2: left shifts process hi, right shifts process lo.
+          if (shamt[3]) begin
+            // Cross-byte: use shift_prev as data (it has the other byte).
+            if (is_right_shift) begin
+              shifter_din = {is_arith_shift ? {7{shift_prev[7]}} : 7'b0, shift_prev};
+              w_data = shifter_result;
+              w_hi   = 1'b0;
+              w_we   = 1'b1;
+            end else begin
+              shifter_din = {7'b0, rev8(shift_prev)};
+              w_data = rev8(shifter_result);
+              w_hi   = 1'b1;
+              w_we   = 1'b1;
+            end
+          end else if (is_right_shift) begin
+            // Right shift lo byte: fill from shift_prev low bits
+            shifter_din = {shift_prev[6:0], r};
+            w_data = shifter_result;
+            w_hi   = 1'b0;
+            w_we   = 1'b1;
+          end else begin
+            // Left shift hi byte: reverse, right-shift with reversed shift_prev fill, reverse
+            shifter_din = {rev7(shift_prev[7:1]), rev8(r)};
+            w_data = rev8(shifter_result);
+            w_hi   = 1'b1;
+            w_we   = 1'b1;
           end
         end else if (op_r == OP_LI) begin
           w_data = {8{off6_r[5]}};
@@ -419,6 +550,7 @@ module riscyv02_execute (
       r_sel_r          <= 3'b000;
       r_hi_r           <= 1'b0;
       nz_lo_r          <= 1'b0;
+      shift_prev       <= 8'h00;
       pc               <= 16'h0000;
       epc              <= 16'h0000;
       i_bit            <= 1'b1;  // Interrupts disabled after reset
@@ -454,11 +586,13 @@ module riscyv02_execute (
             MAR[7:0] <= alu_result;
           end
           if (is_branch) nz_lo_r <= |r;
+          if (is_shift) shift_prev <= r;
           if (op_r == OP_EPCR || op_r == OP_EPCW ||
-              is_alu_rr || op_r == OP_LI || op_r == OP_LUI ||
-              is_branch || is_jump_imm) begin
+              is_alu_rr || is_alu_imm || is_slt_imm ||
+              op_r == OP_LI || op_r == OP_LUI ||
+              is_branch || is_jump_imm || is_shift) begin
             state  <= E_EXEC_HI;
-            r_hi_r <= 1'b1;
+            r_hi_r <= is_right_shift ? 1'b0 : 1'b1;
           end else
             state <= E_IDLE;
         end
@@ -532,7 +666,20 @@ module riscyv02_execute (
         else if (fetch_ir[15:9] == 7'b1100100)         op_r <= OP_XOR;
         else if (fetch_ir[15:9] == 7'b1100101)         op_r <= OP_SLT;
         else if (fetch_ir[15:9] == 7'b1100110)         op_r <= OP_SLTU;
+        else if (fetch_ir[15:9] == 7'b1100111)         op_r <= OP_SLL;
+        else if (fetch_ir[15:9] == 7'b1101000)         op_r <= OP_SRL;
+        else if (fetch_ir[15:9] == 7'b1101001)         op_r <= OP_SRA;
+        else if (fetch_ir[15:7] == 9'b111101100)       op_r <= OP_SLLI;
+        else if (fetch_ir[15:7] == 9'b111101101)       op_r <= OP_SRLI;
+        else if (fetch_ir[15:7] == 9'b111101110)       op_r <= OP_SRAI;
+        else if (fetch_ir[15:9] == 7'b1101110)         op_r <= OP_ADDI;
+        else if (fetch_ir[15:9] == 7'b1101111)         op_r <= OP_ANDI;
+        else if (fetch_ir[15:9] == 7'b1110000)         op_r <= OP_ORI;
+        else if (fetch_ir[15:9] == 7'b1110001)         op_r <= OP_XORI;
         else if (fetch_ir[15:9] == 7'b1110010)         op_r <= OP_LI;
+        else if (fetch_ir[15:9] == 7'b1110011)         op_r <= OP_SLTIF;
+        else if (fetch_ir[15:9] == 7'b1110100)         op_r <= OP_SLTIUF;
+        else if (fetch_ir[15:9] == 7'b1110101)         op_r <= OP_XORIF;
         else if (fetch_ir[15:9] == 7'b1011000)        op_r <= OP_BZ;
         else if (fetch_ir[15:9] == 7'b1011001)        op_r <= OP_BNZ;
         else if (fetch_ir[15:12] == 4'b0100)          op_r <= OP_J;
@@ -553,8 +700,10 @@ module riscyv02_execute (
         off6_r       <= fetch_ir[8:3];
         rd_rs2_sel_r <= fetch_ir[2:0];
         // Pre-register regfile read select for first cycle of execution
-        if (fetch_ir[15:12] == 4'b1100)
-          r_sel_r <= fetch_ir[5:3];          // ALU rs1
+        if (fetch_ir[15:12] == 4'b1100 ||
+            fetch_ir[15:9] == 7'b1101000 ||
+            fetch_ir[15:9] == 7'b1101001)
+          r_sel_r <= fetch_ir[5:3];          // ALU/shift rs1
         else if (fetch_ir[15:12] == 4'b0110 ||    // LB
                  fetch_ir[15:12] == 4'b0111 ||    // LBU
                  fetch_ir[15:12] == 4'b1000 ||    // LW
@@ -563,7 +712,12 @@ module riscyv02_execute (
           r_sel_r <= fetch_ir[11:9];         // rs1 (base register)
         else
           r_sel_r <= fetch_ir[2:0];          // rd/rs2/rs
-        r_hi_r <= 1'b0;
+        // Right shifts read hi byte first; everything else starts with lo.
+        r_hi_r <= (fetch_ir[15:9] == 7'b1101000 ||    // SRL
+                   fetch_ir[15:9] == 7'b1101001 ||    // SRA
+                   fetch_ir[15:7] == 9'b111101101 ||  // SRLI
+                   fetch_ir[15:7] == 9'b111101110)    // SRAI
+                  ? 1'b1 : 1'b0;
         // AUIPC, LB, LBU, LW, SB, SW, JR, JALR are multi-cycle; others go to E_EXEC_LO
         state <= (fetch_ir[15:13] == 3'b001 ||
                   fetch_ir[15:12] == 4'b0110 ||

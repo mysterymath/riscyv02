@@ -16,6 +16,7 @@ project:
     - "riscyv02_regfile.v"
     - "riscyv02_fetch.v"
     - "riscyv02_alu.v"
+    - "riscyv02_shifter.v"
     - "riscyv02_execute.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
