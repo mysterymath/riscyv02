@@ -165,13 +165,14 @@ module riscyv02_execute (
     w_data          = uio_in;
     w_we            = 1'b0;
     insn_completing = 1'b0;
-    next_pc         = pc;
+    next_pc         = pc + 16'd2;
     fetch_pc        = pc + 16'd2;
     jump            = 1'b0;
 
     case (state)
       E_IDLE: begin
-        fetch_pc  = pc;
+        next_pc  = pc;
+        fetch_pc = pc;
       end
 
       E_EXEC_LO: begin
@@ -187,7 +188,6 @@ module riscyv02_execute (
           r_sel = rd_rs2_sel_r;
           r_hi  = 1'b0;
         end else begin
-          next_pc += 16'd2;
           if (op_r == OP_BRK)
             jump = 1'b1;
           else if (op_r != OP_WAI && op_r != OP_STP)
@@ -197,7 +197,6 @@ module riscyv02_execute (
 
       E_EXEC_HI: begin
         insn_completing = 1'b1;
-        next_pc        += 16'd2;
         if (op_r == OP_EPCR) begin
           w_data = epc[15:8];
           w_hi   = 1'b1;
@@ -235,7 +234,6 @@ module riscyv02_execute (
           w_hi      = 1'b1;
           w_we      = 1'b1;
           insn_completing = 1'b1;
-          next_pc  += 16'd2;
         end else begin
           alu_b     = {8{off6_r[5]}};  // sign extension
           r_sel     = base_sel_r[2:0];
@@ -255,15 +253,12 @@ module riscyv02_execute (
         r_hi         = 1'b0;
         w_hi         = 1'b0;
         w_we         = (op_r != OP_SW && op_r != OP_SB);
-        if (op_r == OP_SB) begin
+        if (op_r == OP_SB)
           insn_completing = 1'b1;
-          next_pc        += 16'd2;
-        end
       end
 
       E_MEM_HI: begin
         insn_completing = 1'b1;
-        next_pc        += 16'd2;
         w_hi            = 1'b1;
         if (op_r == OP_LB || op_r == OP_LBU) begin
           r_sel         = rd_rs2_sel_r;
@@ -314,12 +309,12 @@ module riscyv02_execute (
       if (!nmi_pending) nmi_ack <= 1'b0;
       else if (take_nmi) nmi_ack <= 1'b1;
 
-      // PC update
+      // PC update: advance only when completing an instruction (or interrupt)
       if (take_nmi)
         pc <= 16'h0008;
       else if (take_irq)
         pc <= 16'h0004;
-      else
+      else if (insn_completing)
         pc <= next_pc;
 
       // ---------------------------------------------------------------------
@@ -335,6 +330,8 @@ module riscyv02_execute (
           if (op_r == OP_CLI) i_bit <= 1'b0;
           if (op_r == OP_RETI) i_bit <= epc[0];
           if (op_r == OP_EPCW) epc[7:0] <= r;
+          if (op_r == OP_WAI || op_r == OP_STP)
+            pc <= next_pc;
           if (op_r == OP_BRK) begin
             epc   <= next_pc | {15'b0, i_bit};
             i_bit <= 1'b1;
