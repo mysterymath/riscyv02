@@ -10,13 +10,31 @@ module riscyv02_alu (
     input  wire       rst_n,
     input  wire [7:0] a,
     input  wire [7:0] b,
-    input  wire       new_op,  // 1 = new operation (ci=0), 0 = continue (ci=latched carry)
-    output wire [7:0] result
+    input  wire [2:0] op,      // Operation select
+    input  wire       new_op,  // 1 = new operation (ci=0/1), 0 = continue (ci=latched carry)
+    output wire       co,
+    output reg  [7:0] result
 );
+  localparam OP_ADD = 3'd0;
+  localparam OP_SUB = 3'd1;
+  localparam OP_AND = 3'd2;
+  localparam OP_OR  = 3'd3;
+  localparam OP_XOR = 3'd4;
+
+  wire sub = (op == OP_SUB);
+  wire [7:0] b_eff = b ^ {8{sub}};   // invert b for subtraction
   reg carry;
-  wire ci = new_op ? 1'b0 : carry;
-  wire co;
-  assign {co, result} = a + b + ci;
+  wire ci = new_op ? sub : carry;     // SUB: ci=1 for new_op (two's complement)
+  wire [7:0] sum;
+  assign {co, sum} = a + b_eff + ci;
+
+  always @(*)
+    case (op)
+      OP_AND:  result = a & b;
+      OP_OR:   result = a | b;
+      OP_XOR:  result = a ^ b;
+      default: result = sum;    // OP_ADD, OP_SUB
+    endcase
 
   always @(negedge clk or negedge rst_n)
     if (!rst_n) carry <= 1'b0;

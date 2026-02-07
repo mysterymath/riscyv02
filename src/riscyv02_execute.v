@@ -8,7 +8,10 @@
 // ============================================================================
 // Execute unit: FSM + ALU + register file.
 //
-// Handles LW, SW, LB, LBU, SB, JR, AUIPC, RETI, SEI, CLI, BRK, EPCR, EPCW instructions. The register file lives
+// Handles LW, SW, LB, LBU, SB, JR, JALR, J, JAL, AUIPC, LUI, LI, BZ, BNZ,
+// RETI, SEI, CLI, BRK, EPCR, EPCW, ADD, SUB, AND, OR, XOR, SLT, SLTU
+// instructions. JAL/JALR write the return address to R6 (link register).
+// The register file lives
 // here since only execute needs register access.
 //
 // Code is organized by state: combinational signals are computed in a single
@@ -34,7 +37,7 @@ module riscyv02_execute (
     output wire        stopped,      // STP: halted permanently, only reset recovers
     // Fetch pipeline flush and next-instruction address
     output reg         fetch_flush,
-    output reg  [15:0] fetch_pc
+    output wire [15:0] fetch_pc
 );
 
   // ==========================================================================
@@ -54,32 +57,50 @@ module riscyv02_execute (
   reg [15:0] MAR;       // Memory Address Register
 
   // Interrupt and PC state
-  reg [15:0] pc;        // Program counter (current instruction address)
+  reg [15:0] pc;        // Program counter (next instruction to fetch; advanced at dispatch)
   reg [15:0] epc;       // Exception PC (bit 0 used for I flag on save)
   reg        i_bit;     // Interrupt disable flag (0=enabled, 1=disabled)
 
   // Decoded instruction state (latched at ir_accept)
-  localparam OP_NOP  = 4'd0;
-  localparam OP_SEI  = 4'd1;
-  localparam OP_CLI  = 4'd2;
-  localparam OP_RETI = 4'd3;
-  localparam OP_LW   = 4'd4;
-  localparam OP_SW   = 4'd5;
-  localparam OP_JR   = 4'd6;
-  localparam OP_WAI  = 4'd7;
-  localparam OP_STP  = 4'd8;
-  localparam OP_BRK  = 4'd9;
-  localparam OP_EPCR = 4'd10;
-  localparam OP_EPCW = 4'd11;
-  localparam OP_LB   = 4'd12;
-  localparam OP_LBU  = 4'd13;
-  localparam OP_SB    = 4'd14;
-  localparam OP_AUIPC = 4'd15;
+  localparam OP_NOP   = 5'd0;
+  localparam OP_SEI   = 5'd1;
+  localparam OP_CLI   = 5'd2;
+  localparam OP_RETI  = 5'd3;
+  localparam OP_LW    = 5'd4;
+  localparam OP_SW    = 5'd5;
+  localparam OP_JR    = 5'd6;
+  localparam OP_WAI   = 5'd7;
+  localparam OP_STP   = 5'd8;
+  localparam OP_BRK   = 5'd9;
+  localparam OP_EPCR  = 5'd10;
+  localparam OP_EPCW  = 5'd11;
+  localparam OP_LB    = 5'd12;
+  localparam OP_LBU   = 5'd13;
+  localparam OP_SB    = 5'd14;
+  localparam OP_AUIPC = 5'd15;
+  localparam OP_ADD   = 5'd16;
+  localparam OP_SUB   = 5'd17;
+  localparam OP_AND   = 5'd18;
+  localparam OP_OR    = 5'd19;
+  localparam OP_XOR   = 5'd20;
+  localparam OP_SLT   = 5'd21;
+  localparam OP_SLTU  = 5'd22;
+  localparam OP_LI    = 5'd23;
+  localparam OP_LUI   = 5'd24;
+  localparam OP_BZ    = 5'd25;
+  localparam OP_BNZ   = 5'd26;
+  localparam OP_J     = 5'd27;
+  localparam OP_JAL   = 5'd28;
+  localparam OP_JALR  = 5'd29;
 
-  reg [3:0]  op_r;            // Instruction opcode
+  localparam LINK_REG = 3'd6;  // R6 is the link register for JAL/JALR
+
+  reg [4:0]  op_r;            // Instruction opcode
   reg [3:0]  base_sel_r;      // Base register (or imm10[9:6] for AUIPC)
   reg [5:0]  off6_r;          // 6-bit offset
   reg [2:0]  rd_rs2_sel_r;    // Destination (LW) or source (SW)
+  reg [2:0]  r_sel_r;         // Registered regfile read select (set at state transitions)
+  reg        r_hi_r;          // Registered regfile read hi/lo (set at state transitions)
 
   // ==========================================================================
   // Shared Infrastructure
@@ -91,20 +112,26 @@ module riscyv02_execute (
   reg  [2:0] r_sel;
   reg        r_hi;
   wire [7:0] r;
+  wire [7:0] r2;
   reg        w_hi;
   reg        w_we;
   reg  [7:0] w_data;
 
+  wire [2:0] w_sel_mux = (op_r == OP_JAL || op_r == OP_JALR) ? LINK_REG : rd_rs2_sel_r;
+
   riscyv02_regfile u_regfile (
     .clk    (clk),
     .rst_n  (rst_n),
-    .w_sel  (rd_rs2_sel_r),
+    .w_sel  (w_sel_mux),
     .w_hi   (w_hi),
     .w_data (w_data),
     .w_we   (w_we),
     .r_sel  (r_sel),
     .r_hi   (r_hi),
-    .r      (r)
+    .r      (r),
+    .r2_sel (off6_r[5:3]),
+    .r2_hi  (r_hi),
+    .r2     (r2)
   );
 
   // -------------------------------------------------------------------------
@@ -112,23 +139,35 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   reg  [7:0] alu_a;
   reg  [7:0] alu_b;
+  reg  [2:0] alu_op;
   reg        alu_new_op;
   wire [7:0] alu_result;
+  wire       alu_co;
 
   riscyv02_alu u_alu (
     .clk    (clk),
     .rst_n  (rst_n),
     .a      (alu_a),
     .b      (alu_b),
+    .op     (alu_op),
     .new_op (alu_new_op),
+    .co     (alu_co),
     .result (alu_result)
   );
+
+  wire is_alu_rr = (op_r == OP_ADD || op_r == OP_SUB ||
+                    op_r == OP_AND || op_r == OP_OR || op_r == OP_XOR ||
+                    op_r == OP_SLT || op_r == OP_SLTU);
+  wire is_slt = (op_r == OP_SLT || op_r == OP_SLTU);
+  wire is_branch = (op_r == OP_BZ || op_r == OP_BNZ);
+  wire is_jump_imm = (op_r == OP_J || op_r == OP_JAL);
+  reg  nz_lo_r;  // Latched |rs_lo| for branch zero check
 
   // -------------------------------------------------------------------------
   // State-driven signals (computed in state-property block below)
   // -------------------------------------------------------------------------
   reg        insn_completing;
-  reg [15:0] next_pc;   // The next instruction in non-interrupted control flow
+  reg [15:0] next_pc;   // Return address / resume point (pc for sequential, jump target for jumps)
   reg        jump;      // Whether next_pc isn't the sequential next instruction
 
   // Interrupt control: NMI has priority over IRQ.
@@ -150,6 +189,8 @@ module riscyv02_execute (
   // Each state's properties are visible together.
   // ==========================================================================
 
+  assign fetch_pc = pc;
+
   always @(*) begin
     // Defaults
     bus_active      = 1'b0;
@@ -159,21 +200,27 @@ module riscyv02_execute (
     alu_a           = r;
     alu_new_op      = 1'bx;
     alu_b           = 8'bx;
-    r_sel           = 3'bx;
-    r_hi            = 1'bx;
+    alu_op          = 3'd0;    // ADD (safe default for address computation)
+    r_sel           = r_sel_r;
+    r_hi            = r_hi_r;
     w_hi            = 1'bx;
     w_data          = uio_in;
     w_we            = 1'b0;
     insn_completing = 1'b0;
-    next_pc         = pc + 16'd2;
-    fetch_pc        = pc + 16'd2;
+    next_pc         = pc;
     jump            = 1'b0;
 
+    // ALU operation select (derived from op_r)
+    case (op_r)
+      OP_SUB, OP_SLT, OP_SLTU: alu_op = 3'd1;
+      OP_AND: alu_op = 3'd2;
+      OP_OR:  alu_op = 3'd3;
+      OP_XOR: alu_op = 3'd4;
+      default: ;  // alu_op stays 3'd0 (ADD)
+    endcase
+
     case (state)
-      E_IDLE: begin
-        next_pc  = pc;
-        fetch_pc = pc;
-      end
+      E_IDLE: ;
 
       E_EXEC_LO: begin
         if (op_r == OP_RETI) begin
@@ -185,8 +232,37 @@ module riscyv02_execute (
           w_hi   = 1'b0;
           w_we   = 1'b1;
         end else if (op_r == OP_EPCW) begin
-          r_sel = rd_rs2_sel_r;
-          r_hi  = 1'b0;
+        end else if (is_alu_rr) begin
+          alu_b      = r2;
+          alu_new_op = 1'b1;
+          w_data     = alu_result;
+          w_hi       = 1'b0;
+          w_we       = 1'b1;
+          if (is_slt) begin
+            w_data = 8'h00;
+            w_hi   = 1'b1;
+          end
+        end else if (op_r == OP_LI) begin
+          w_data = {{2{off6_r[5]}}, off6_r};
+          w_hi   = 1'b0;
+          w_we   = 1'b1;
+        end else if (op_r == OP_LUI) begin
+          w_data = {off6_r[1:0], 6'b0};
+          w_hi   = 1'b0;
+          w_we   = 1'b1;
+        end else if (is_branch) begin
+          alu_a      = pc[7:0];
+          alu_b      = {off6_r[5], off6_r, 1'b0};
+          alu_new_op = 1'b1;
+        end else if (is_jump_imm) begin
+          alu_a      = pc[7:0];
+          alu_b      = {off6_r[3:0], rd_rs2_sel_r, 1'b0};
+          alu_new_op = 1'b1;
+          if (op_r == OP_JAL) begin
+            w_data = pc[7:0];
+            w_hi   = 1'b0;
+            w_we   = 1'b1;
+          end
         end else begin
           if (op_r == OP_BRK)
             jump = 1'b1;
@@ -201,9 +277,50 @@ module riscyv02_execute (
           w_data = epc[15:8];
           w_hi   = 1'b1;
           w_we   = 1'b1;
-        end else begin
-          r_sel = rd_rs2_sel_r;
-          r_hi  = 1'b1;
+        end else if (is_alu_rr) begin
+          alu_b      = r2;
+          alu_new_op = 1'b0;
+          w_data     = alu_result;
+          w_hi       = 1'b1;
+          w_we       = 1'b1;
+          if (is_slt) begin
+            w_hi = 1'b0;
+            if (op_r == OP_SLTU)
+              w_data = {7'b0, ~alu_co};
+            else
+              w_data = {7'b0, (r[7] ^ r2[7]) ? r[7] : alu_result[7]};
+          end
+        end else if (op_r == OP_LI) begin
+          w_data = {8{off6_r[5]}};
+          w_hi   = 1'b1;
+          w_we   = 1'b1;
+        end else if (op_r == OP_LUI) begin
+          w_data = {base_sel_r, off6_r[5:2]};
+          w_hi   = 1'b1;
+          w_we   = 1'b1;
+        end else if (is_branch) begin
+          alu_a      = pc[15:8];
+          alu_b      = {8{off6_r[5]}};
+          alu_new_op = 1'b0;
+          if (op_r == OP_BZ && !nz_lo_r && r == 8'h00) begin
+            jump    = 1'b1;
+            next_pc = {alu_result, MAR[7:0]};
+          end
+          if (op_r == OP_BNZ && (nz_lo_r || r != 8'h00)) begin
+            jump    = 1'b1;
+            next_pc = {alu_result, MAR[7:0]};
+          end
+        end else if (is_jump_imm) begin
+          alu_a      = pc[15:8];
+          alu_b      = {{3{base_sel_r[2]}}, base_sel_r[2:0], off6_r[5:4]};
+          alu_new_op = 1'b0;
+          jump       = 1'b1;
+          next_pc    = {alu_result, MAR[7:0]};
+          if (op_r == OP_JAL) begin
+            w_data = pc[15:8];
+            w_hi   = 1'b1;
+            w_we   = 1'b1;
+          end
         end
       end
 
@@ -220,8 +337,11 @@ module riscyv02_execute (
             alu_b = {{2{off6_r[5]}}, off6_r};      // unscaled
           else
             alu_b = {off6_r[5], off6_r, 1'b0};     // offset * 2
-          r_sel  = base_sel_r[2:0];
-          r_hi   = 1'b0;
+          if (op_r == OP_JALR) begin
+            w_data = pc[7:0];
+            w_hi   = 1'b0;
+            w_we   = 1'b1;
+          end
         end
       end
 
@@ -236,12 +356,15 @@ module riscyv02_execute (
           insn_completing = 1'b1;
         end else begin
           alu_b     = {8{off6_r[5]}};  // sign extension
-          r_sel     = base_sel_r[2:0];
-          r_hi      = 1'b1;
-          if (op_r == OP_JR) begin
+          if (op_r == OP_JR || op_r == OP_JALR) begin
             insn_completing = 1'b1;
-            jump      = 1'b1;
-            next_pc   = {alu_result, MAR[7:0]};
+            jump    = 1'b1;
+            next_pc = {alu_result, MAR[7:0]};
+          end
+          if (op_r == OP_JALR) begin
+            w_data = pc[15:8];
+            w_hi   = 1'b1;
+            w_we   = 1'b1;
           end
         end
       end
@@ -249,8 +372,6 @@ module riscyv02_execute (
       E_MEM_LO: begin
         bus_active   = 1'b1;
         ab           = MAR;
-        r_sel        = rd_rs2_sel_r;
-        r_hi         = 1'b0;
         w_hi         = 1'b0;
         w_we         = (op_r != OP_SW && op_r != OP_SB);
         if (op_r == OP_SB)
@@ -261,15 +382,11 @@ module riscyv02_execute (
         insn_completing = 1'b1;
         w_hi            = 1'b1;
         if (op_r == OP_LB || op_r == OP_LBU) begin
-          r_sel         = rd_rs2_sel_r;
-          r_hi          = 1'b0;
           w_data        = (op_r == OP_LB) ? {8{r[7]}} : 8'h00;
           w_we          = 1'b1;
         end else begin
           bus_active    = 1'b1;
           ab            = {MAR[15:1], 1'b1};
-          r_sel         = rd_rs2_sel_r;
-          r_hi          = 1'b1;
           w_we          = (op_r != OP_SW);
         end
       end
@@ -299,6 +416,9 @@ module riscyv02_execute (
       base_sel_r       <= 4'b0000;
       off6_r           <= 6'b000000;
       rd_rs2_sel_r     <= 3'b000;
+      r_sel_r          <= 3'b000;
+      r_hi_r           <= 1'b0;
+      nz_lo_r          <= 1'b0;
       pc               <= 16'h0000;
       epc              <= 16'h0000;
       i_bit            <= 1'b1;  // Interrupts disabled after reset
@@ -308,14 +428,6 @@ module riscyv02_execute (
       // clears nmi_pending, then release.
       if (!nmi_pending) nmi_ack <= 1'b0;
       else if (take_nmi) nmi_ack <= 1'b1;
-
-      // PC update: advance only when completing an instruction (or interrupt)
-      if (take_nmi)
-        pc <= 16'h0008;
-      else if (take_irq)
-        pc <= 16'h0004;
-      else if (insn_completing)
-        pc <= next_pc;
 
       // ---------------------------------------------------------------------
       // State machine: transitions and per-state effects.
@@ -328,37 +440,53 @@ module riscyv02_execute (
         E_EXEC_LO: begin
           if (op_r == OP_SEI) i_bit <= 1'b1;
           if (op_r == OP_CLI) i_bit <= 1'b0;
-          if (op_r == OP_RETI) i_bit <= epc[0];
+          if (op_r == OP_RETI) begin
+            i_bit <= epc[0];
+            pc    <= next_pc;
+          end
           if (op_r == OP_EPCW) epc[7:0] <= r;
-          if (op_r == OP_WAI || op_r == OP_STP)
-            pc <= next_pc;
           if (op_r == OP_BRK) begin
             epc   <= next_pc | {15'b0, i_bit};
             i_bit <= 1'b1;
             pc    <= 16'h000C;
           end
-          if (op_r == OP_EPCR || op_r == OP_EPCW)
-            state <= E_EXEC_HI;
-          else
+          if (is_branch || is_jump_imm) begin
+            MAR[7:0] <= alu_result;
+          end
+          if (is_branch) nz_lo_r <= |r;
+          if (op_r == OP_EPCR || op_r == OP_EPCW ||
+              is_alu_rr || op_r == OP_LI || op_r == OP_LUI ||
+              is_branch || is_jump_imm) begin
+            state  <= E_EXEC_HI;
+            r_hi_r <= 1'b1;
+          end else
             state <= E_IDLE;
         end
 
         E_ADDR_LO: begin
           MAR[7:0] <= alu_result;
+          r_hi_r   <= 1'b1;
           state    <= E_ADDR_HI;
         end
 
         E_ADDR_HI: begin
           MAR[15:8] <= alu_result;
-          state     <= (op_r == OP_JR || op_r == OP_AUIPC) ? E_IDLE : E_MEM_LO;
+          if (op_r == OP_JR || op_r == OP_JALR) pc <= next_pc;
+          r_sel_r   <= rd_rs2_sel_r;
+          r_hi_r    <= 1'b0;
+          state     <= (op_r == OP_JR || op_r == OP_JALR || op_r == OP_AUIPC) ? E_IDLE : E_MEM_LO;
         end
 
-        E_MEM_LO: state <= (op_r == OP_SB) ? E_IDLE : E_MEM_HI;
+        E_MEM_LO: begin
+          r_hi_r <= (op_r == OP_LB || op_r == OP_LBU) ? 1'b0 : 1'b1;
+          state  <= (op_r == OP_SB) ? E_IDLE : E_MEM_HI;
+        end
 
         E_MEM_HI: state <= E_IDLE;
 
         E_EXEC_HI: begin
           if (op_r == OP_EPCW) epc[15:8] <= r;
+          if (jump) pc <= next_pc;
           state <= E_IDLE;
         end
 
@@ -373,6 +501,8 @@ module riscyv02_execute (
         i_bit <= 1'b1;
         op_r  <= OP_NOP;
         state <= E_IDLE;
+        if (take_nmi) pc <= 16'h0008;
+        else          pc <= 16'h0004;
       end
 
       // ---------------------------------------------------------------------
@@ -381,10 +511,12 @@ module riscyv02_execute (
       // E_IDLE, as long as ir_valid && !fetch_flush.
       // ---------------------------------------------------------------------
       if (ir_accept) begin
+        pc <= pc + 16'd2;
         // Decode opcode from fetch_ir bit patterns
         if      (fetch_ir[15:12] == 4'b1010)        op_r <= OP_SW;
         else if (fetch_ir[15:12] == 4'b1000)        op_r <= OP_LW;
         else if (fetch_ir[15:9]  == 7'b1011100)     op_r <= OP_JR;
+        else if (fetch_ir[15:9]  == 7'b1011101)     op_r <= OP_JALR;
         else if (fetch_ir == 16'b1111111010000001)  op_r <= OP_RETI;
         else if (fetch_ir == 16'b1111111010000010)  op_r <= OP_SEI;
         else if (fetch_ir == 16'b1111111010000011)  op_r <= OP_CLI;
@@ -393,28 +525,54 @@ module riscyv02_execute (
         else if (fetch_ir == 16'b1111111010000110)  op_r <= OP_STP;
         else if (fetch_ir[15:3] == 13'b1111111001110)  op_r <= OP_EPCR;
         else if (fetch_ir[15:3] == 13'b1111111001111)  op_r <= OP_EPCW;
+        else if (fetch_ir[15:9] == 7'b1100000)         op_r <= OP_ADD;
+        else if (fetch_ir[15:9] == 7'b1100001)         op_r <= OP_SUB;
+        else if (fetch_ir[15:9] == 7'b1100010)         op_r <= OP_AND;
+        else if (fetch_ir[15:9] == 7'b1100011)         op_r <= OP_OR;
+        else if (fetch_ir[15:9] == 7'b1100100)         op_r <= OP_XOR;
+        else if (fetch_ir[15:9] == 7'b1100101)         op_r <= OP_SLT;
+        else if (fetch_ir[15:9] == 7'b1100110)         op_r <= OP_SLTU;
+        else if (fetch_ir[15:9] == 7'b1110010)         op_r <= OP_LI;
+        else if (fetch_ir[15:9] == 7'b1011000)        op_r <= OP_BZ;
+        else if (fetch_ir[15:9] == 7'b1011001)        op_r <= OP_BNZ;
+        else if (fetch_ir[15:12] == 4'b0100)          op_r <= OP_J;
+        else if (fetch_ir[15:12] == 4'b0101)          op_r <= OP_JAL;
+        else if (fetch_ir[15:13] == 3'b000)           op_r <= OP_LUI;
         else if (fetch_ir[15:13] == 3'b001)           op_r <= OP_AUIPC;
         else if (fetch_ir[15:12] == 4'b0110)        op_r <= OP_LB;
         else if (fetch_ir[15:12] == 4'b0111)        op_r <= OP_LBU;
         else if (fetch_ir[15:12] == 4'b1001)        op_r <= OP_SB;
         else                                        op_r <= OP_NOP;
-        // AUIPC captures imm10[9:6]; JR uses rs; others use rs1
-        if (fetch_ir[15:13] == 3'b001)
+        // LUI/AUIPC capture imm10[9:6]; JR/JALR uses rs; others use rs1
+        if (fetch_ir[15:14] == 2'b00)
           base_sel_r <= fetch_ir[12:9];
-        else if (fetch_ir[15:9] == 7'b1011100)
+        else if (fetch_ir[15:9] == 7'b1011100 || fetch_ir[15:9] == 7'b1011101)
           base_sel_r <= {1'b0, fetch_ir[2:0]};
         else
           base_sel_r <= {1'b0, fetch_ir[11:9]};
         off6_r       <= fetch_ir[8:3];
         rd_rs2_sel_r <= fetch_ir[2:0];
-        // AUIPC, LB, LBU, LW, SB, SW, JR are multi-cycle; others go to E_EXEC_LO
+        // Pre-register regfile read select for first cycle of execution
+        if (fetch_ir[15:12] == 4'b1100)
+          r_sel_r <= fetch_ir[5:3];          // ALU rs1
+        else if (fetch_ir[15:12] == 4'b0110 ||    // LB
+                 fetch_ir[15:12] == 4'b0111 ||    // LBU
+                 fetch_ir[15:12] == 4'b1000 ||    // LW
+                 fetch_ir[15:12] == 4'b1001 ||    // SB
+                 fetch_ir[15:12] == 4'b1010)      // SW
+          r_sel_r <= fetch_ir[11:9];         // rs1 (base register)
+        else
+          r_sel_r <= fetch_ir[2:0];          // rd/rs2/rs
+        r_hi_r <= 1'b0;
+        // AUIPC, LB, LBU, LW, SB, SW, JR, JALR are multi-cycle; others go to E_EXEC_LO
         state <= (fetch_ir[15:13] == 3'b001 ||
                   fetch_ir[15:12] == 4'b0110 ||
                   fetch_ir[15:12] == 4'b0111 ||
                   fetch_ir[15:12] == 4'b1000 ||
                   fetch_ir[15:12] == 4'b1001 ||
                   fetch_ir[15:12] == 4'b1010 ||
-                  fetch_ir[15:9]  == 7'b1011100) ? E_ADDR_LO : E_EXEC_LO;
+                  fetch_ir[15:9]  == 7'b1011100 ||
+                  fetch_ir[15:9]  == 7'b1011101) ? E_ADDR_LO : E_EXEC_LO;
       end
     end
   end

@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **AUIPC**, **RETI**, **SEI**, **CLI**, **BRK**, **WAI**, **STP**, **EPCR**, and **EPCW**. IRQ and NMI interrupt handling is supported. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **RETI**, **SEI**, **CLI**, **BRK**, **WAI**, **STP**, **EPCR**, and **EPCW**. IRQ and NMI interrupt handling is supported. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -12,12 +12,12 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 
 | Metric | RISCY-V02 | Arlet 6502 |
 |---|---|---|
-| Clock period | 18 ns | 16 ns |
-| fMax (slow corner) | 55.6 MHz | 62.5 MHz |
-| Utilization | 45.9% | 48.4% |
-| Transistor count (synth) | 12,172 | 13,082 |
+| Clock period | 16 ns | 16 ns |
+| fMax (slow corner) | 62.5 MHz | 62.5 MHz |
+| Utilization | 61.7% | 48.4% |
+| Transistor count (synth) | 16,330 | 13,082 |
 
-RISCY-V02 is now below the 6502 in transistor count, with room to grow as more instructions are added.
+RISCY-V02 now supports full subroutine call/return (JAL/JALR + JR R6) and PC-relative jumps (J). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. Making the link register a GPR recovered timing to match the 6502's 62.5 MHz. The total is ~25% above the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return).
 
 ## Bus Protocol
 
@@ -107,8 +107,12 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | R3 | t1 | Temporary 1 |
 | R4 | s0 | Saved register 0 |
 | R5 | s1 | Saved register 1 |
-| R6 | fp | Frame pointer (or s2) |
+| R6 | ra | Return address (link register) |
 | R7 | sp | Stack pointer |
+
+### Link Register (R6)
+
+R6 serves as the link register. JAL and JALR write the return address (PC+2) to R6. Subroutine return is `JR R6, 0`. Since R6 is a regular GPR, it can be saved/restored with normal load/store instructions — no special LRR/LRW instructions needed. R6 is callee-saved: any function that makes calls must save R6 on entry and restore it before returning.
 
 ## Instruction Set
 
@@ -186,15 +190,183 @@ Unconditional jump to the address computed from a register plus a scaled signed 
 
 **Cycle count:** 4 (2 fetch + 2 address computation in execute)
 
+### BZ — Branch if Zero
+
+```
+[1011000][off6:6][rs:3]
+```
+
+`if rs == 0: PC = PC + sext(off6) * 2`
+
+Branches to a PC-relative target if the source register is zero. The 6-bit signed offset is scaled by 2, giving a range of ±64 bytes from the next instruction address. The zero check spans two cycles (one byte per cycle) while the ALU speculatively computes the branch target in parallel. Pairs with SLT/SLTU for compare-and-branch patterns: `SLT t, a, b; BZ t, target` (branch if NOT less than).
+
+**Cycle count:** 2 (not taken, overlapped fetch) / 4 (taken: 2 execute + 2 fetch after redirect)
+
+### BNZ — Branch if Non-Zero
+
+```
+[1011001][off6:6][rs:3]
+```
+
+`if rs != 0: PC = PC + sext(off6) * 2`
+
+Branches to a PC-relative target if the source register is non-zero. Encoding and offset handling are identical to BZ. Pairs with SLT/SLTU for compare-and-branch patterns: `SLT t, a, b; BNZ t, target` (branch if less than).
+
+**Cycle count:** 2 (not taken, overlapped fetch) / 4 (taken: 2 execute + 2 fetch after redirect)
+
+### J — Jump
+
+```
+[0100][off12:12]
+```
+
+`PC = PC + sext(off12) * 2`
+
+Unconditional PC-relative jump. The 12-bit signed offset is scaled by 2, giving a range of ±4096 bytes from the next instruction address. Uses the ALU to compute the target in two cycles (low byte, then high byte with carry).
+
+**Cycle count:** 4 (2 execute + 2 fetch after redirect)
+
+### JAL — Jump and Link
+
+```
+[0101][off12:12]
+```
+
+`R6 = PC+2; PC = PC + sext(off12) * 2`
+
+Unconditional PC-relative jump that saves the return address in R6 (link register). The offset encoding is identical to J. JAL writes R6 = PC+2 (the address of the next instruction after JAL), then jumps to the target. Used for subroutine calls; return with `JR R6, 0`.
+
+**Cycle count:** 4 (2 execute + 2 fetch after redirect)
+
+### JALR — Jump and Link Register
+
+```
+[1011101][off6:6][rs:3]
+```
+
+`R6 = PC+2; PC = rs + sext(off6) * 2`
+
+Register-indirect jump that saves the return address in R6 (link register). The offset encoding is identical to JR. Pairs with AUIPC for full 16-bit PC-relative function calls: `AUIPC t0, upper; JALR t0, lower`.
+
+**Cycle count:** 4 (2 address computation + 2 fetch after redirect)
+
 ### AUIPC — Add Upper Immediate to PC
 
 ```
 [001][imm10:10][rd:3]
 ```
 
-`rd = PC + (sext(imm10) << 6)`
+`rd = (PC+2) + (sext(imm10) << 6)`
 
-Adds a sign-extended 10-bit immediate, shifted left by 6, to the program counter of the AUIPC instruction. The result is written to rd. This provides a PC-relative base address that pairs with LW/SW/JR's 6-bit offset for full 16-bit PC-relative addressing: AUIPC provides the upper 10 bits (shifted left by 6), and the subsequent load/store/jump provides the lower 6 bits.
+Adds a sign-extended 10-bit immediate, shifted left by 6, to the address of the next instruction (PC+2). The result is written to rd. This provides a PC-relative base address that pairs with LW/SW/JR's 6-bit offset for full 16-bit PC-relative addressing: AUIPC provides the upper 10 bits (shifted left by 6), and the subsequent load/store/jump provides the lower 6 bits. The use of PC+2 (rather than the AUIPC instruction's own address) is an implementation detail of the pipeline; the linker/assembler must account for this when computing immediates.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### LUI — Load Upper Immediate
+
+```
+[000][imm10:10][rd:3]
+```
+
+`rd = sext(imm10) << 6`
+
+Loads a sign-extended 10-bit immediate, shifted left by 6, into a register. The result sets bits [15:6] of rd, with bits [5:0] cleared. Pairs with ADDI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`. The immediate range is -512 to +511, covering the full 16-bit address space when shifted.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### LI — Load Immediate
+
+```
+[1110010][imm6:6][rd:3]
+```
+
+`rd = sext(imm6)`
+
+Loads a sign-extended 6-bit immediate into a register. The immediate range is -32 to +31. No memory access or register read is needed; the value is encoded directly in the instruction. Useful for loading small constants, loop counters, and flag values.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### ADD — Add
+
+```
+[1100000][rs2:3][rs1:3][rd:3]
+```
+
+`rd = rs1 + rs2`
+
+Adds two registers and writes the result to rd. The 16-bit addition is performed in two cycles (low byte then high byte) with carry propagation between bytes.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### SUB — Subtract
+
+```
+[1100001][rs2:3][rs1:3][rd:3]
+```
+
+`rd = rs1 - rs2`
+
+Subtracts rs2 from rs1 and writes the result to rd. Implemented as two's complement addition (invert rs2, carry-in = 1) with borrow propagation between bytes.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### AND — Bitwise And
+
+```
+[1100010][rs2:3][rs1:3][rd:3]
+```
+
+`rd = rs1 & rs2`
+
+Bitwise AND of two registers. Each byte is computed independently (no carry chain).
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### OR — Bitwise Or
+
+```
+[1100011][rs2:3][rs1:3][rd:3]
+```
+
+`rd = rs1 | rs2`
+
+Bitwise OR of two registers. Each byte is computed independently.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### XOR — Bitwise Exclusive Or
+
+```
+[1100100][rs2:3][rs1:3][rd:3]
+```
+
+`rd = rs1 ^ rs2`
+
+Bitwise XOR of two registers. Each byte is computed independently.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### SLT — Set Less Than (Signed)
+
+```
+[1100101][rs2:3][rs1:3][rd:3]
+```
+
+`rd = (rs1 < rs2) ? 1 : 0` (signed comparison)
+
+Compares rs1 and rs2 as signed 16-bit integers. If rs1 is less than rs2, rd is set to 1; otherwise rd is set to 0. Implemented by subtracting rs1 - rs2 and interpreting the carry/sign result. Pairs with BZ/BNZ for compare-and-branch patterns: `SLT t, a, b; BNZ t, target`.
+
+**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
+
+### SLTU — Set Less Than (Unsigned)
+
+```
+[1100110][rs2:3][rs1:3][rd:3]
+```
+
+`rd = (rs1 < rs2) ? 1 : 0` (unsigned comparison)
+
+Compares rs1 and rs2 as unsigned 16-bit integers. If rs1 is less than rs2, rd is set to 1; otherwise rd is set to 0. Implemented by subtracting and checking the borrow (carry out of the unsigned subtraction).
 
 **Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
 
@@ -307,10 +479,13 @@ Any instruction not matching the above is executed as a NOP: the PC advances pas
 ```
 Bits 15..13  Instruction   Format
 ──────────────────────────────────────────────
+000          LUI           [imm10:10][rd:3]
 001          AUIPC         [imm10:10][rd:3]
 
 Bits 15..12  Instruction   Format
 ──────────────────────────────────────────────
+0100         J             [off12:12]
+0101         JAL           [off12:12]
 0110         LB            [rs1:3][off6:6][rd:3]
 0111         LBU           [rs1:3][off6:6][rd:3]
 1000         LW            [rs1:3][off6:6][rd:3]
@@ -319,7 +494,18 @@ Bits 15..12  Instruction   Format
 
 Bits 15..9   Instruction   Format
 ──────────────────────────────────────────────
+1011000      BZ            [off6:6][rs:3]
+1011001      BNZ           [off6:6][rs:3]
 1011100      JR            [off6:6][rs:3]
+1011101      JALR          [off6:6][rs:3]
+1100000      ADD           [rs2:3][rs1:3][rd:3]
+1100001      SUB           [rs2:3][rs1:3][rd:3]
+1100010      AND           [rs2:3][rs1:3][rd:3]
+1100011      OR            [rs2:3][rs1:3][rd:3]
+1100100      XOR           [rs2:3][rs1:3][rd:3]
+1100101      SLT           [rs2:3][rs1:3][rd:3]
+1100110      SLTU          [rs2:3][rs1:3][rd:3]
+1110010      LI            [imm6:6][rd:3]
 
 Bits 15..3   Instruction   Format
 ──────────────────────────────────────────────
@@ -348,11 +534,14 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| NOP/SEI/CLI/AUIPC/EPCR/EPCW | 2 | 1 execute + 1 overlapped fetch |
+| NOP/SEI/CLI/AUIPC/LUI/LI/EPCR/EPCW/ADD/SUB/AND/OR/XOR/SLT/SLTU | 2 | 1 execute + 1 overlapped fetch |
+| BZ/BNZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
+| BZ/BNZ (taken) | 4 | 2 execute + 2 fetch after redirect |
 | LB/LBU | 4 | 2 address + 1 byte read + 1 extension |
 | SB | 3 | 2 address + 1 byte written (overlapped fetch) |
 | LW/SW | 4 | 4 execute (address computation overlaps with fetch) |
-| JR | 4 | 2 execute + 2 fetch after redirect |
+| JR/JALR | 4 | 2 execute + 2 fetch after redirect |
+| J/JAL | 4 | 2 execute + 2 fetch after redirect |
 | RETI | 3 | 1 execute + 2 fetch after redirect |
 | BRK | 3 | 1 execute + 2 fetch after redirect |
 | WAI (wake) | 2 | 1 execute + 1 overlapped fetch (if interrupt pending) |
@@ -361,11 +550,11 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | IRQ entry | 2 | Redirect at instruction boundary |
 | NMI entry | 2 | Redirect at instruction boundary |
 
-Instructions that redirect (JR, RETI) flush the speculative fetch and must wait for new instruction bytes. Non-redirecting instructions benefit from fetch/execute overlap.
+Instructions that redirect (JR, JALR, J, JAL, RETI) flush the speculative fetch and must wait for new instruction bytes. Non-redirecting instructions benefit from fetch/execute overlap.
 
 ### Control Flow Handling
 
-JR is processed by the execute stage, which computes the target address using the ALU. While execute computes the target, fetch speculatively continues from the sequential PC. When execute completes the JR, it redirects fetch to the correct address, discarding the speculative fetch. This simplifies the architecture by keeping all register access in execute.
+JR/JALR and J/JAL are processed by the execute stage, which computes the target address using the ALU. While execute computes the target, fetch speculatively continues from the sequential PC. When execute completes the jump, it redirects fetch to the correct address, discarding the speculative fetch. JALR and JAL also write R6 (R6 = PC+2) to save the return address for subroutine calls. Subroutine return is `JR R6, 0`, which is a regular register-indirect jump through R6.
 
 ## RDY and SYNC Signals
 

@@ -2983,7 +2983,7 @@ def _encode_auipc(rd, imm10):
 # ---------------------------------------------------------------------------
 @cocotb.test()
 async def test_auipc_basic(dut):
-    """AUIPC with imm10=0 puts the PC of the instruction into rd."""
+    """AUIPC with imm10=0 puts PC+2 (next instruction address) into rd."""
     dut._log.info("Test: AUIPC basic (imm10=0)")
 
     clock = Clock(dut.clk, 10, unit="us")
@@ -2992,7 +2992,7 @@ async def test_auipc_basic(dut):
     prog = {}
     # 0x0000: NOP (advance PC to 0x0002)
     _place(prog, 0x0000, _encode_nop())
-    # 0x0002: AUIPC R1, 0  ; R1 = PC + 0 = 0x0002
+    # 0x0002: AUIPC R1, 0  ; R1 = (PC+2) + 0 = 0x0004
     _place(prog, 0x0002, _encode_auipc(rd=1, imm10=0))
     # 0x0004: SW R1, 20(R0) ; MEM[0 + 20*2] = MEM[0x28] = R1
     _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
@@ -3006,8 +3006,8 @@ async def test_auipc_basic(dut):
     lo = _read_ram(dut, 0x0028)
     hi = _read_ram(dut, 0x0029)
     val = lo | (hi << 8)
-    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0002)")
-    assert val == 0x0002, f"Expected 0x0002, got {val:#06x}"
+    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0004)")
+    assert val == 0x0004, f"Expected 0x0004, got {val:#06x}"
     dut._log.info("PASS [auipc_basic]")
 
 
@@ -3016,14 +3016,14 @@ async def test_auipc_basic(dut):
 # ---------------------------------------------------------------------------
 @cocotb.test()
 async def test_auipc_positive_offset(dut):
-    """AUIPC with positive imm10 adds (imm10 << 6) to PC."""
+    """AUIPC with positive imm10 adds (imm10 << 6) to PC+2."""
     dut._log.info("Test: AUIPC positive offset")
 
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     prog = {}
-    # 0x0000: AUIPC R1, 1  ; R1 = 0x0000 + (1 << 6) = 0x0040
+    # 0x0000: AUIPC R1, 1  ; R1 = 0x0002 + (1 << 6) = 0x0042
     _place(prog, 0x0000, _encode_auipc(rd=1, imm10=1))
     # 0x0002: SW R1, 20(R0) ; MEM[0x28] = R1
     _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
@@ -3037,8 +3037,8 @@ async def test_auipc_positive_offset(dut):
     lo = _read_ram(dut, 0x0028)
     hi = _read_ram(dut, 0x0029)
     val = lo | (hi << 8)
-    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0040)")
-    assert val == 0x0040, f"Expected 0x0040, got {val:#06x}"
+    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0042)")
+    assert val == 0x0042, f"Expected 0x0042, got {val:#06x}"
     dut._log.info("PASS [auipc_positive_offset]")
 
 
@@ -3047,14 +3047,14 @@ async def test_auipc_positive_offset(dut):
 # ---------------------------------------------------------------------------
 @cocotb.test()
 async def test_auipc_negative_offset(dut):
-    """AUIPC with negative imm10 subtracts from PC."""
+    """AUIPC with negative imm10 subtracts from PC+2."""
     dut._log.info("Test: AUIPC negative offset")
 
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     prog = {}
-    # Place AUIPC at 0x0080: AUIPC R1, -1  ; R1 = 0x0080 + (-1 << 6) = 0x0080 + 0xFFC0 = 0x0040
+    # Place AUIPC at 0x0080: AUIPC R1, -1  ; R1 = 0x0082 + (-1 << 6) = 0x0082 + 0xFFC0 = 0x0042
     # First: bootstrap to 0x0080 using LW + JR
     # Data at 0x0020: LE word 0x0080 (jump target)
     prog[0x0020] = 0x80
@@ -3064,7 +3064,7 @@ async def test_auipc_negative_offset(dut):
     # 0x0002: JR R2, 0       ; jump to 0x0080
     _place(prog, 0x0002, _encode_jr(rs=2, off6=0))
 
-    # At 0x0080: AUIPC R1, -1 ; R1 = 0x0080 + 0xFFC0 = 0x0040
+    # At 0x0080: AUIPC R1, -1 ; R1 = 0x0082 + 0xFFC0 = 0x0042
     _place(prog, 0x0080, _encode_auipc(rd=1, imm10=-1))
     # 0x0082: SW R1, 20(R0)  ; MEM[0x28] = R1
     _place(prog, 0x0082, _encode_sw(rs2=1, rs1=0, off6=20))
@@ -3078,8 +3078,8 @@ async def test_auipc_negative_offset(dut):
     lo = _read_ram(dut, 0x0028)
     hi = _read_ram(dut, 0x0029)
     val = lo | (hi << 8)
-    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0040)")
-    assert val == 0x0040, f"Expected 0x0040, got {val:#06x}"
+    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0042)")
+    assert val == 0x0042, f"Expected 0x0042, got {val:#06x}"
     dut._log.info("PASS [auipc_negative_offset]")
 
 
@@ -3094,16 +3094,16 @@ async def test_auipc_with_lw(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    # Place data at 0x0050: LE word 0xBEEF
+    # Place data at 0x0052: LE word 0xBEEF
     prog = {}
-    prog[0x0050] = 0xEF
-    prog[0x0051] = 0xBE
+    prog[0x0052] = 0xEF
+    prog[0x0053] = 0xBE
 
-    # Target address is 0x0050. AUIPC at PC=0x0000 with imm10=1 → R1 = 0x0040
-    # Then LW R2, 8(R1) → MEM[0x0040 + 8*2] = MEM[0x0050] = 0xBEEF
-    # 0x0000: AUIPC R1, 1    ; R1 = 0x0000 + 0x0040 = 0x0040
+    # Target address is 0x0052. AUIPC at PC=0x0000 with imm10=1 → R1 = 0x0002 + 0x0040 = 0x0042
+    # Then LW R2, 8(R1) → MEM[0x0042 + 8*2] = MEM[0x0052] = 0xBEEF
+    # 0x0000: AUIPC R1, 1    ; R1 = 0x0002 + 0x0040 = 0x0042
     _place(prog, 0x0000, _encode_auipc(rd=1, imm10=1))
-    # 0x0002: LW R2, 8(R1)   ; R2 = MEM[0x0040 + 16] = MEM[0x0050] = 0xBEEF
+    # 0x0002: LW R2, 8(R1)   ; R2 = MEM[0x0042 + 16] = MEM[0x0052] = 0xBEEF
     _place(prog, 0x0002, _encode_lw(rd=2, rs1=1, off6=8))
     # 0x0004: SW R2, 20(R0)  ; MEM[0x28] = R2
     _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
@@ -3134,7 +3134,7 @@ async def test_auipc_large_imm10(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    # 0x0000: AUIPC R1, 0x100 (256) ; R1 = 0x0000 + (256 << 6) = 0x0000 + 0x4000 = 0x4000
+    # 0x0000: AUIPC R1, 0x100 (256) ; R1 = 0x0002 + (256 << 6) = 0x0002 + 0x4000 = 0x4002
     _place(prog, 0x0000, _encode_auipc(rd=1, imm10=256))
     # 0x0002: SW R1, 20(R0) ; MEM[0x28] = R1
     _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
@@ -3148,8 +3148,8 @@ async def test_auipc_large_imm10(dut):
     lo = _read_ram(dut, 0x0028)
     hi = _read_ram(dut, 0x0029)
     val = lo | (hi << 8)
-    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x4000)")
-    assert val == 0x4000, f"Expected 0x4000, got {val:#06x}"
+    dut._log.info(f"AUIPC result: {val:#06x} (expected 0x4002)")
+    assert val == 0x4002, f"Expected 0x4002, got {val:#06x}"
     dut._log.info("PASS [auipc_large_imm10]")
 
 
@@ -3173,3 +3173,1225 @@ async def test_cycle_count_auipc(dut):
     cycles = await _measure_instruction_cycles(dut, prog, 2, "AUIPC")
     assert cycles == 2, f"AUIPC: expected 2 cycles, got {cycles}"
     dut._log.info("PASS [cycle_count_auipc]")
+
+
+# ---------------------------------------------------------------------------
+# Helper encoders for reg-reg ALU instructions
+# ---------------------------------------------------------------------------
+def _encode_alu(op_bits, rd, rs1, rs2):
+    """Encode a reg-reg ALU instruction: [op7:7][rs2:3][rs1:3][rd:3]."""
+    assert 0 <= rd <= 7 and 0 <= rs1 <= 7 and 0 <= rs2 <= 7
+    insn = (op_bits << 9) | (rs2 << 6) | (rs1 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_add(rd, rs1, rs2):
+    return _encode_alu(0b1100000, rd, rs1, rs2)
+
+
+def _encode_sub(rd, rs1, rs2):
+    return _encode_alu(0b1100001, rd, rs1, rs2)
+
+
+def _encode_and(rd, rs1, rs2):
+    return _encode_alu(0b1100010, rd, rs1, rs2)
+
+
+def _encode_or(rd, rs1, rs2):
+    return _encode_alu(0b1100011, rd, rs1, rs2)
+
+
+def _encode_xor(rd, rs1, rs2):
+    return _encode_alu(0b1100100, rd, rs1, rs2)
+
+
+# ---------------------------------------------------------------------------
+# Test: ADD basic (carry propagation lo→hi)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_add_basic(dut):
+    """ADD R3, R1, R2: 0x1234 + 0x5678 = 0x68AC."""
+    dut._log.info("Test: ADD basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Data: 0x1234 at 0x0020, 0x5678 at 0x0022
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0x12
+    prog[0x0022] = 0x78
+    prog[0x0023] = 0x56
+
+    # 0x0000: LW R1, 16(R0)  ; R1 = 0x1234
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    # 0x0002: LW R2, 17(R0)  ; R2 = 0x5678
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    # 0x0004: ADD R3, R1, R2 ; R3 = R1 + R2 = 0x68AC
+    _place(prog, 0x0004, _encode_add(rd=3, rs1=1, rs2=2))
+    # 0x0006: SW R3, 20(R0)  ; MEM[0x28] = R3
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    # 0x0008: JR R0, 4       ; spin at 0x0008
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"ADD result = {val:#06x} (expected 0x68AC)")
+    assert val == 0x68AC, f"Expected 0x68AC, got {val:#06x}"
+    dut._log.info("PASS [add_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SUB basic
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sub_basic(dut):
+    """SUB R3, R1, R2: 0x5678 - 0x1234 = 0x4444."""
+    dut._log.info("Test: SUB basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x78
+    prog[0x0021] = 0x56
+    prog[0x0022] = 0x34
+    prog[0x0023] = 0x12
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sub(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SUB result = {val:#06x} (expected 0x4444)")
+    assert val == 0x4444, f"Expected 0x4444, got {val:#06x}"
+    dut._log.info("PASS [sub_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SUB borrow (borrow from high byte)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sub_borrow(dut):
+    """SUB R3, R1, R2: 0x0100 - 0x0001 = 0x00FF (borrow from high byte)."""
+    dut._log.info("Test: SUB borrow")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x00
+    prog[0x0021] = 0x01
+    prog[0x0022] = 0x01
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sub(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SUB borrow result = {val:#06x} (expected 0x00FF)")
+    assert val == 0x00FF, f"Expected 0x00FF, got {val:#06x}"
+    dut._log.info("PASS [sub_borrow]")
+
+
+# ---------------------------------------------------------------------------
+# Test: AND basic
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_and_basic(dut):
+    """AND R3, R1, R2: 0xFF0F & 0x0FFF = 0x0F0F."""
+    dut._log.info("Test: AND basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x0F
+    prog[0x0021] = 0xFF
+    prog[0x0022] = 0xFF
+    prog[0x0023] = 0x0F
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_and(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"AND result = {val:#06x} (expected 0x0F0F)")
+    assert val == 0x0F0F, f"Expected 0x0F0F, got {val:#06x}"
+    dut._log.info("PASS [and_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: OR basic
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_or_basic(dut):
+    """OR R3, R1, R2: 0xF000 | 0x00F0 = 0xF0F0."""
+    dut._log.info("Test: OR basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x00
+    prog[0x0021] = 0xF0
+    prog[0x0022] = 0xF0
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_or(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"OR result = {val:#06x} (expected 0xF0F0)")
+    assert val == 0xF0F0, f"Expected 0xF0F0, got {val:#06x}"
+    dut._log.info("PASS [or_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: XOR basic
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_xor_basic(dut):
+    """XOR R3, R1, R2: 0xFFFF ^ 0xAAAA = 0x5555."""
+    dut._log.info("Test: XOR basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xFF
+    prog[0x0021] = 0xFF
+    prog[0x0022] = 0xAA
+    prog[0x0023] = 0xAA
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_xor(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"XOR result = {val:#06x} (expected 0x5555)")
+    assert val == 0x5555, f"Expected 0x5555, got {val:#06x}"
+    dut._log.info("PASS [xor_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: ALU same register (ADD R1, R1, R1)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_alu_same_reg(dut):
+    """ADD R1, R1, R1: 0x1234 + 0x1234 = 0x2468."""
+    dut._log.info("Test: ALU same register")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0x12
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_add(rd=1, rs1=1, rs2=1))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"ADD same reg result = {val:#06x} (expected 0x2468)")
+    assert val == 0x2468, f"Expected 0x2468, got {val:#06x}"
+    dut._log.info("PASS [alu_same_reg]")
+
+
+# ---------------------------------------------------------------------------
+# Test: ADD cycle count (2 cycles)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_cycle_count_add(dut):
+    """ADD takes 2 cycles throughput."""
+    dut._log.info("Test: ADD cycle count")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: ADD R0, R0, R0
+    _place(prog, 0x0000, _encode_add(rd=0, rs1=0, rs2=0))
+    # 0x0002: JR R0, 1 (spin)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
+
+    cycles = await _measure_instruction_cycles(dut, prog, 2, "ADD")
+    assert cycles == 2, f"ADD: expected 2 cycles, got {cycles}"
+    dut._log.info("PASS [cycle_count_add]")
+
+
+# ---------------------------------------------------------------------------
+# Helper encoders for SLT, SLTU, LI
+# ---------------------------------------------------------------------------
+def _encode_slt(rd, rs1, rs2):
+    return _encode_alu(0b1100101, rd, rs1, rs2)
+
+
+def _encode_sltu(rd, rs1, rs2):
+    return _encode_alu(0b1100110, rd, rs1, rs2)
+
+
+def _encode_li(rd, imm6):
+    """Encode LI rd, imm6 -> 16-bit little-endian bytes."""
+    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+    assert 0 <= rd <= 7
+    imm6 &= 0x3F
+    insn = (0b1110010 << 9) | (imm6 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+# ---------------------------------------------------------------------------
+# Test: LI positive
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_li_positive(dut):
+    """LI R1, 31 -> R1 = 0x001F."""
+    dut._log.info("Test: LI positive")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: LI R1, 31
+    _place(prog, 0x0000, _encode_li(rd=1, imm6=31))
+    # 0x0002: SW R1, 20(R0)  ; MEM[0x28] = R1
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    # 0x0004: JR R0, 2       ; spin
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"LI result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [li_positive]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LI negative
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_li_negative(dut):
+    """LI R1, -1 -> R1 = 0xFFFF."""
+    dut._log.info("Test: LI negative")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    _place(prog, 0x0000, _encode_li(rd=1, imm6=-1))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"LI result = {val:#06x} (expected 0xFFFF)")
+    assert val == 0xFFFF, f"Expected 0xFFFF, got {val:#06x}"
+    dut._log.info("PASS [li_negative]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LI zero
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_li_zero(dut):
+    """LI R1, 0 -> R1 = 0x0000."""
+    dut._log.info("Test: LI zero")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    _place(prog, 0x0000, _encode_li(rd=1, imm6=0))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"LI result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [li_zero]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLT true (signed, positive < positive)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_slt_true(dut):
+    """SLT R3, R1, R2: 0x0005 < 0x000A -> R3 = 1."""
+    dut._log.info("Test: SLT true")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x05
+    prog[0x0021] = 0x00
+    prog[0x0022] = 0x0A
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLT result = {val:#06x} (expected 0x0001)")
+    assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
+    dut._log.info("PASS [slt_true]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLT false (signed, greater)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_slt_false(dut):
+    """SLT R3, R1, R2: 0x000A < 0x0005 -> R3 = 0."""
+    dut._log.info("Test: SLT false")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x0A
+    prog[0x0021] = 0x00
+    prog[0x0022] = 0x05
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLT result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [slt_false]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLT equal
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_slt_equal(dut):
+    """SLT R3, R1, R2: 0x0005 < 0x0005 -> R3 = 0."""
+    dut._log.info("Test: SLT equal")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x05
+    prog[0x0021] = 0x00
+    prog[0x0022] = 0x05
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLT result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [slt_equal]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLT negative less than positive
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_slt_negative(dut):
+    """SLT R3, R1, R2: 0xFFFB (-5) < 0x0005 -> R3 = 1."""
+    dut._log.info("Test: SLT negative")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xFB
+    prog[0x0021] = 0xFF
+    prog[0x0022] = 0x05
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLT result = {val:#06x} (expected 0x0001)")
+    assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
+    dut._log.info("PASS [slt_negative]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLT positive not less than negative
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_slt_negative_false(dut):
+    """SLT R3, R1, R2: 0x0005 < 0xFFFB (-5) -> R3 = 0."""
+    dut._log.info("Test: SLT negative false")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x05
+    prog[0x0021] = 0x00
+    prog[0x0022] = 0xFB
+    prog[0x0023] = 0xFF
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLT result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [slt_negative_false]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLTU true
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sltu_true(dut):
+    """SLTU R3, R1, R2: 0x0005 <u 0x000A -> R3 = 1."""
+    dut._log.info("Test: SLTU true")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x05
+    prog[0x0021] = 0x00
+    prog[0x0022] = 0x0A
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLTU result = {val:#06x} (expected 0x0001)")
+    assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
+    dut._log.info("PASS [sltu_true]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLTU false
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sltu_false(dut):
+    """SLTU R3, R1, R2: 0x000A <u 0x0005 -> R3 = 0."""
+    dut._log.info("Test: SLTU false")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x0A
+    prog[0x0021] = 0x00
+    prog[0x0022] = 0x05
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLTU result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [sltu_false]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLTU large (unsigned: 5 < 65535)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sltu_large(dut):
+    """SLTU R3, R1, R2: 0x0005 <u 0xFFFF -> R3 = 1."""
+    dut._log.info("Test: SLTU large")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0x05
+    prog[0x0021] = 0x00
+    prog[0x0022] = 0xFF
+    prog[0x0023] = 0xFF
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLTU result = {val:#06x} (expected 0x0001)")
+    assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
+    dut._log.info("PASS [sltu_large]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SLTU large reverse (unsigned: 65535 < 5 = false)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sltu_large_reverse(dut):
+    """SLTU R3, R1, R2: 0xFFFF <u 0x0005 -> R3 = 0."""
+    dut._log.info("Test: SLTU large reverse")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0020] = 0xFF
+    prog[0x0021] = 0xFF
+    prog[0x0022] = 0x05
+    prog[0x0023] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"SLTU result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [sltu_large_reverse]")
+
+
+def _encode_lui(rd, imm10):
+    """Encode LUI rd, imm10 -> 16-bit little-endian bytes. [000][imm10:10][rd:3]"""
+    assert -512 <= imm10 <= 511, f"imm10 out of range: {imm10}"
+    assert 0 <= rd <= 7
+    imm10 &= 0x3FF
+    insn = (0b000 << 13) | (imm10 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_bz(rs, off6):
+    """Encode BZ rs, off6 -> 16-bit little-endian bytes. [1011000][off6:6][rs:3]"""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
+    assert 0 <= rs <= 7
+    off6 &= 0x3F
+    insn = (0b1011000 << 9) | (off6 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_bnz(rs, off6):
+    """Encode BNZ rs, off6 -> 16-bit little-endian bytes. [1011001][off6:6][rs:3]"""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
+    assert 0 <= rs <= 7
+    off6 &= 0x3F
+    insn = (0b1011001 << 9) | (off6 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+# ---------------------------------------------------------------------------
+# Test: LUI positive
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lui_positive(dut):
+    """LUI R1, 0x48 -> R1 = 0x1200."""
+    dut._log.info("Test: LUI positive")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # LUI R1, 0x48 -> R1 = 0x48 << 6 = 0x1200
+    _place(prog, 0x0000, _encode_lui(rd=1, imm10=0x48))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"LUI result = {val:#06x} (expected 0x1200)")
+    assert val == 0x1200, f"Expected 0x1200, got {val:#06x}"
+    dut._log.info("PASS [lui_positive]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LUI negative (all 1s -> 0xFFC0)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lui_negative(dut):
+    """LUI R1, -1 -> R1 = 0xFFC0."""
+    dut._log.info("Test: LUI negative")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    _place(prog, 0x0000, _encode_lui(rd=1, imm10=-1))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"LUI result = {val:#06x} (expected 0xFFC0)")
+    assert val == 0xFFC0, f"Expected 0xFFC0, got {val:#06x}"
+    dut._log.info("PASS [lui_negative]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LUI zero
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lui_zero(dut):
+    """LUI R1, 0 -> R1 = 0x0000."""
+    dut._log.info("Test: LUI zero")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    _place(prog, 0x0000, _encode_lui(rd=1, imm10=0))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"LUI result = {val:#06x} (expected 0x0000)")
+    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    dut._log.info("PASS [lui_zero]")
+
+
+# ---------------------------------------------------------------------------
+# Test: BZ taken (branch on zero register)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_bz_taken(dut):
+    """BZ on zero register -> branch taken, skip poison."""
+    dut._log.info("Test: BZ taken")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # R0 is zero after reset
+    # 0x0000: BZ R0, +2 -> skip next instruction (branch to 0x0000+2+2*2 = 0x0006)
+    _place(prog, 0x0000, _encode_bz(rs=0, off6=2))
+    # 0x0002: LI R1, 1 (poison - should be skipped)
+    _place(prog, 0x0002, _encode_li(rd=1, imm6=1))
+    # 0x0004: (fall through if poison executes - doesn't matter)
+    # 0x0006: LI R1, 31 (marker: R1 = 31 means branch was taken)
+    _place(prog, 0x0006, _encode_li(rd=1, imm6=31))
+    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"BZ taken result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [bz_taken]")
+
+
+# ---------------------------------------------------------------------------
+# Test: BZ not taken (branch on non-zero register)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_bz_not_taken(dut):
+    """BZ on non-zero register -> branch not taken."""
+    dut._log.info("Test: BZ not taken")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Load non-zero into R1
+    _place(prog, 0x0000, _encode_li(rd=1, imm6=5))
+    # BZ R1, +3 -> should NOT branch since R1 != 0
+    _place(prog, 0x0002, _encode_bz(rs=1, off6=3))
+    # If not taken, execute this: LI R2, 7 (marker)
+    _place(prog, 0x0004, _encode_li(rd=2, imm6=7))
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"BZ not taken result = {val:#06x} (expected 0x0007)")
+    assert val == 0x0007, f"Expected 0x0007, got {val:#06x}"
+    dut._log.info("PASS [bz_not_taken]")
+
+
+# ---------------------------------------------------------------------------
+# Test: BNZ taken (branch on non-zero register)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_bnz_taken(dut):
+    """BNZ on non-zero register -> branch taken."""
+    dut._log.info("Test: BNZ taken")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Load non-zero into R1
+    _place(prog, 0x0000, _encode_li(rd=1, imm6=5))
+    # BNZ R1, +2 -> branch to 0x0004+2*2 = 0x0008
+    _place(prog, 0x0002, _encode_bnz(rs=1, off6=2))
+    # 0x0004: LI R2, 1 (poison - should be skipped)
+    _place(prog, 0x0004, _encode_li(rd=2, imm6=1))
+    # 0x0006: (fall through)
+    # 0x0008: LI R2, 31 (marker: branch taken)
+    _place(prog, 0x0008, _encode_li(rd=2, imm6=31))
+    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"BNZ taken result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [bnz_taken]")
+
+
+# ---------------------------------------------------------------------------
+# Test: BNZ not taken (branch on zero register)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_bnz_not_taken(dut):
+    """BNZ on zero register -> branch not taken."""
+    dut._log.info("Test: BNZ not taken")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # R0 is zero
+    # BNZ R0, +3 -> should NOT branch since R0 == 0
+    _place(prog, 0x0000, _encode_bnz(rs=0, off6=3))
+    # If not taken, execute this: LI R1, 7 (marker)
+    _place(prog, 0x0002, _encode_li(rd=1, imm6=7))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"BNZ not taken result = {val:#06x} (expected 0x0007)")
+    assert val == 0x0007, f"Expected 0x0007, got {val:#06x}"
+    dut._log.info("PASS [bnz_not_taken]")
+
+
+# ---------------------------------------------------------------------------
+# Test: BNZ high byte non-zero (0x0100 - only high byte is non-zero)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_bnz_high_byte(dut):
+    """BNZ on 0x0100 (only high byte non-zero) -> taken."""
+    dut._log.info("Test: BNZ high byte")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Load 0x0100 into R1: LUI R1, 4 -> R1 = 4 << 6 = 0x0100
+    _place(prog, 0x0000, _encode_lui(rd=1, imm10=4))
+    # BNZ R1, +2 -> branch taken (R1 = 0x0100, low byte 0 but high byte != 0)
+    _place(prog, 0x0002, _encode_bnz(rs=1, off6=2))
+    # 0x0004: LI R2, 1 (poison)
+    _place(prog, 0x0004, _encode_li(rd=2, imm6=1))
+    # 0x0008: LI R2, 31 (marker: branch taken)
+    _place(prog, 0x0008, _encode_li(rd=2, imm6=31))
+    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"BNZ high byte result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [bnz_high_byte]")
+
+
+# ===========================================================================
+# J / JAL / JALR / RET / LRR / LRW Encoders and Tests
+# ===========================================================================
+
+def _encode_j(off12):
+    """Encode J off12 -> 16-bit little-endian bytes. [0100][off12:12]"""
+    assert -2048 <= off12 <= 2047, f"off12 out of range: {off12}"
+    off12 &= 0xFFF
+    insn = (0b0100 << 12) | off12
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_jal(off12):
+    """Encode JAL off12 -> 16-bit little-endian bytes. [0101][off12:12]"""
+    assert -2048 <= off12 <= 2047, f"off12 out of range: {off12}"
+    off12 &= 0xFFF
+    insn = (0b0101 << 12) | off12
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_jalr(rs, off6):
+    """Encode JALR rs, off6 -> 16-bit little-endian bytes. [1011101][off6:6][rs:3]"""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
+    assert 0 <= rs <= 7
+    off6 &= 0x3F
+    insn = (0b1011101 << 9) | (off6 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+
+# ---------------------------------------------------------------------------
+# Test: J forward (skip poison instruction)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_j_forward(dut):
+    """J +2 skips poison, reaches marker."""
+    dut._log.info("Test: J forward")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: J +2 -> target = (0x0000+2) + 2*2 = 0x0006
+    _place(prog, 0x0000, _encode_j(2))
+    # 0x0002: LI R1, 1 (poison - should be skipped)
+    _place(prog, 0x0002, _encode_li(rd=1, imm6=1))
+    # 0x0004: NOP (padding)
+    _place(prog, 0x0004, _encode_li(rd=2, imm6=2))
+    # 0x0006: LI R1, 31 (marker)
+    _place(prog, 0x0006, _encode_li(rd=1, imm6=31))
+    # 0x0008: SW R1, 20(R0) -> MEM[0x28]
+    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, off6=20))
+    # 0x000A: JR R0, 5 -> spin at 0x000A
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"J forward result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [j_forward]")
+
+
+# ---------------------------------------------------------------------------
+# Test: J backward
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_j_backward(dut):
+    """J forward then J backward, reaches target via backward jump."""
+    dut._log.info("Test: J backward")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: J +4 -> target = 0x0002 + 4*2 = 0x000A
+    _place(prog, 0x0000, _encode_j(4))
+    # 0x0002: LI R1, 31 (marker - reached by backward jump)
+    _place(prog, 0x0002, _encode_li(rd=1, imm6=31))
+    # 0x0004: SW R1, 20(R0) -> MEM[0x28]
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    # 0x0006: JR R0, 3 -> spin at 0x0006
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+    # 0x0008: NOP (padding)
+    _place(prog, 0x0008, _encode_li(rd=3, imm6=0))
+    # 0x000A: J -5 -> target = 0x000C + (-5)*2 = 0x0002
+    _place(prog, 0x000A, _encode_j(-5))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"J backward result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [j_backward]")
+
+
+# ---------------------------------------------------------------------------
+# Test: JAL + JR R6 round-trip
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_jal_ret(dut):
+    """JAL to target, JR R6 back. Marker at return point confirms round-trip."""
+    dut._log.info("Test: JAL + JR R6")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: JAL +4 -> R6 = 0x0002, target = 0x0002 + 4*2 = 0x000A
+    _place(prog, 0x0000, _encode_jal(4))
+    # 0x0002: (return here) LI R1, 31 (marker)
+    _place(prog, 0x0002, _encode_li(rd=1, imm6=31))
+    # 0x0004: SW R1, 20(R0) -> MEM[0x28]
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    # 0x0006: JR R0, 3 -> spin at 0x0006
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+    # 0x0008: NOP (padding)
+    _place(prog, 0x0008, _encode_li(rd=3, imm6=0))
+    # 0x000A: JR R6, 0 -> PC = R6 = 0x0002
+    _place(prog, 0x000A, _encode_jr(rs=6, off6=0))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"JAL+JR R6 result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [jal_ret]")
+
+
+# ---------------------------------------------------------------------------
+# Test: JAL link value (verify R6 = correct return address)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_jal_link_value(dut):
+    """JAL, then SW R6 to verify R6 = correct return address."""
+    dut._log.info("Test: JAL link value")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: JAL +3 -> R6 = 0x0002, target = 0x0002 + 3*2 = 0x0008
+    _place(prog, 0x0000, _encode_jal(3))
+    # 0x0002: (poison - should not be reached before target)
+    _place(prog, 0x0002, _encode_li(rd=1, imm6=1))
+    # 0x0004: NOP
+    _place(prog, 0x0004, _encode_li(rd=2, imm6=0))
+    # 0x0006: NOP
+    _place(prog, 0x0006, _encode_li(rd=3, imm6=0))
+    # 0x0008: SW R6, 20(R0) -> MEM[0x28] = R6 = 0x0002
+    _place(prog, 0x0008, _encode_sw(rs2=6, rs1=0, off6=20))
+    # 0x000A: JR R0, 5 -> spin at 0x000A
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"JAL link value = {val:#06x} (expected 0x0002)")
+    assert val == 0x0002, f"Expected 0x0002, got {val:#06x}"
+    dut._log.info("PASS [jal_link_value]")
+
+
+# ---------------------------------------------------------------------------
+# Test: JALR + JR R6 round-trip
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_jalr_ret(dut):
+    """JALR R0, off6 to target, JR R6 back. Verify round-trip."""
+    dut._log.info("Test: JALR + JR R6")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # 0x0000: JALR R0, 5 -> R6 = 0x0002, PC = R0 + 5*2 = 0 + 10 = 0x000A
+    _place(prog, 0x0000, _encode_jalr(rs=0, off6=5))
+    # 0x0002: (return here) LI R1, 31 (marker)
+    _place(prog, 0x0002, _encode_li(rd=1, imm6=31))
+    # 0x0004: SW R1, 20(R0) -> MEM[0x28]
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    # 0x0006: JR R0, 3 -> spin at 0x0006
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+    # 0x0008: NOP
+    _place(prog, 0x0008, _encode_li(rd=3, imm6=0))
+    # 0x000A: JR R6, 0 -> PC = R6 = 0x0002
+    _place(prog, 0x000A, _encode_jr(rs=6, off6=0))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0028)
+    hi = _read_ram(dut, 0x0029)
+    val = lo | (hi << 8)
+    dut._log.info(f"JALR+JR R6 result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [jalr_ret]")
+
+

@@ -115,5 +115,33 @@ def main():
     print("  2. Post-synthesis counts (excludes PnR fill/buffer/CTS cells)")
     print("  3. ng (multi-finger) is layout, not additional devices")
 
+    # SRAM-adjusted transistor count
+    # The register file (riscyv02_regfile) is a regular 8x16-bit 2R1W array.
+    # In a real chip this would be 8T SRAM, not standard cell latches.
+    # See doc/sram_analysis.md for full design and justification.
+    REGFILE_STDCELL_TX = 4674   # exact, from standalone synthesis
+    REGFILE_SRAM_TX    = 1524   # 8T SRAM design (128x8T + peripherals)
+    ARLET_6502_TX      = 13082  # comparison baseline
+
+    discount = REGFILE_STDCELL_TX - REGFILE_SRAM_TX
+    adjusted_tx = total_tx - discount
+    vs_6502_std = (total_tx - ARLET_6502_TX) / ARLET_6502_TX * 100
+    vs_6502_adj = (adjusted_tx - ARLET_6502_TX) / ARLET_6502_TX * 100
+
+    print()
+    print("SRAM-Adjusted Transistor Count")
+    print("─" * 62)
+    print(f"  {'Standard cell (synthesis):':<40s} {total_tx:>10,d}")
+    print(f"  {'Register file (standard cell):':<40s} {REGFILE_STDCELL_TX:>10,d}")
+    print(f"  {'Register file (8T SRAM equivalent):':<40s} {REGFILE_SRAM_TX:>10,d}")
+    print(f"  {'SRAM discount:':<40s} {-discount:>10,d}")
+    print(f"  {'SRAM-adjusted total:':<40s} {adjusted_tx:>10,d}")
+    print()
+    print(f"  {'vs Arlet 6502 ({:,d}):'.format(ARLET_6502_TX):<40s}")
+    print(f"  {'  Standard cell:':<40s} {vs_6502_std:>+10.1f}%")
+    print(f"  {'  SRAM-adjusted:':<40s} {vs_6502_adj:>+10.1f}%")
+    print()
+    print("  See doc/sram_analysis.md for methodology.")
+
 if __name__ == "__main__":
     main()

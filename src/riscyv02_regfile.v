@@ -31,10 +31,15 @@ module riscyv02_regfile (
     input  wire [7:0]  w_data,
     input  wire        w_we,
 
-    // Read port (8-bit)
+    // Read port 1 (8-bit)
     input  wire [2:0]  r_sel,
     input  wire        r_hi,       // Select high byte for read
-    output wire [7:0]  r
+    output wire [7:0]  r,
+
+    // Read port 2 (8-bit)
+    input  wire [2:0]  r2_sel,
+    input  wire        r2_hi,      // Select high byte for read
+    output wire [7:0]  r2
 );
 
   // Phase 1 — Leader latches (sg13g2_dlhrq_1): transparent when GATE=clk=1,
@@ -118,8 +123,12 @@ module riscyv02_regfile (
     end
   endgenerate
 
-  // Read port: 8:1 register mux, then 2:1 hi/lo byte mux
+  // Read port 1: 8:1 register mux, then 2:1 hi/lo byte mux
   wire [15:0] r_full = regs[r_sel];
   assign r = r_hi ? r_full[15:8] : r_full[7:0];
+
+  // Read port 2: same structure as port 1
+  wire [15:0] r2_full = regs[r2_sel];
+  assign r2 = r2_hi ? r2_full[15:8] : r2_full[7:0];
 
 endmodule
