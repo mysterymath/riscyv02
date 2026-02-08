@@ -14,10 +14,10 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 16 ns | 16 ns |
 | fMax (slow corner) | 62.5 MHz | 62.5 MHz |
-| Utilization | 60.4% | 48.4% |
-| Transistor count (synth) | 16,374 | 13,082 |
+| Utilization | 60.7% | 48.4% |
+| Transistor count (synth) | 16,712 | 13,082 |
 
-RISCY-V02 now supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. Making the link register a GPR recovered timing to match the 6502's 62.5 MHz. The total is ~25% above the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 now supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. The total is ~28% above the 6502 (~3.7% SRAM-adjusted), matching its 62.5 MHz clock, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
