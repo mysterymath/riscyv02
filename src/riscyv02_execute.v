@@ -463,10 +463,10 @@ module riscyv02_execute (
           w_hi   = 1'b0;
           w_we   = 1'b1;
         end else begin
-          if (op_r == OP_LB || op_r == OP_LBU || op_r == OP_SB)
-            alu_b = {{2{off6_r[5]}}, off6_r};      // unscaled
+          if (op_r == OP_JR || op_r == OP_JALR)
+            alu_b = {off6_r[5], off6_r, 1'b0};     // offset * 2 (code alignment)
           else
-            alu_b = {off6_r[5], off6_r, 1'b0};     // offset * 2
+            alu_b = {{2{off6_r[5]}}, off6_r};      // unscaled
           if (op_r == OP_JALR) begin
             w_data = pc[7:0];
             w_hi   = 1'b0;
@@ -516,7 +516,7 @@ module riscyv02_execute (
           w_we          = 1'b1;
         end else begin
           bus_active    = 1'b1;
-          ab            = {tmp[15:1], 1'b1};
+          ab            = {tmp[15:8] + {7'b0, ~|tmp[7:0]}, tmp[7:0]};
           w_we          = (op_r != OP_SW);
         end
       end
@@ -610,8 +610,9 @@ module riscyv02_execute (
         end
 
         E_MEM_LO: begin
-          r_hi_r <= (op_r == OP_LB || op_r == OP_LBU) ? 1'b0 : 1'b1;
-          state  <= (op_r == OP_SB) ? E_IDLE : E_MEM_HI;
+          r_hi_r    <= (op_r == OP_LB || op_r == OP_LBU) ? 1'b0 : 1'b1;
+          tmp[7:0]  <= tmp[7:0] + 8'd1;  // Increment for E_MEM_HI address
+          state     <= (op_r == OP_SB) ? E_IDLE : E_MEM_HI;
         end
 
         E_MEM_HI: state <= E_IDLE;

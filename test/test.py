@@ -28,7 +28,7 @@ def _read_ram(dut, addr):
 
 
 def _encode_lw(rd, rs1, off6):
-    """Encode LW rd, off6(rs1) -> 16-bit little-endian bytes."""
+    """Encode LW rd, off6(rs1) -> 16-bit little-endian bytes. off6 is byte offset."""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rd <= 7 and 0 <= rs1 <= 7
     off6 &= 0x3F
@@ -37,7 +37,7 @@ def _encode_lw(rd, rs1, off6):
 
 
 def _encode_sw(rs2, rs1, off6):
-    """Encode SW rs2, off6(rs1) -> 16-bit little-endian bytes."""
+    """Encode SW rs2, off6(rs1) -> 16-bit little-endian bytes. off6 is byte offset."""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs2 <= 7 and 0 <= rs1 <= 7
     off6 &= 0x3F
@@ -77,9 +77,9 @@ async def test_lw_sw_jr_basic(dut):
     prog[0x0011] = 0x12
 
     # 0x0000: LW R1, 8(R0)   ; R1 = MEM[0 + 8*2] = MEM[0x10] = 0x1234
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: SW R1, 9(R0)   ; MEM[0 + 9*2] = MEM[0x12] = R1 = 0x1234
-    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=9))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=18))
     # 0x0004: JR R0, 2       ; PC = 0 + 2*2 = 4 (spin at 0x0004)
     _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
@@ -107,26 +107,22 @@ async def test_jr_computed(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    # Data at 0x0020: LE word 0x0010 (target address)
-    prog[0x0020] = 0x10
-    prog[0x0021] = 0x00
+    # Data at 0x000E: LE word 0x0010 (target address)
+    prog[0x000E] = 0x10
+    prog[0x000F] = 0x00
 
-    # At 0x0010: SW R2, 0(R0) to addr 0x0000 (marker), then spin
-    # But R2 needs a value. Let's use a simpler approach:
-    # At 0x0010: store a known value, then spin.
+    # Data at 0x0018: LE word 0xBEEF
+    prog[0x0018] = 0xEF
+    prog[0x0019] = 0xBE
 
-    # Data at 0x0030: LE word 0xBEEF
-    prog[0x0030] = 0xEF
-    prog[0x0031] = 0xBE
-
-    # 0x0000: LW R1, 16(R0)  ; R1 = MEM[32] = MEM[0x20] = 0x0010
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    # 0x0002: LW R2, 24(R0)  ; R2 = MEM[48] = MEM[0x30] = 0xBEEF
+    # 0x0000: LW R1, 14(R0)  ; R1 = MEM[0x0E] = 0x0010
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=14))
+    # 0x0002: LW R2, 24(R0)  ; R2 = MEM[0x18] = 0xBEEF
     _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=24))
     # 0x0004: JR R1, 0       ; PC = R1 + 0 = 0x0010
     _place(prog, 0x0004, _encode_jr(rs=1, off6=0))
 
-    # At target 0x0010: SW R2, 20(R0) ; MEM[40] = MEM[0x28] = 0xBEEF
+    # At target 0x0010: SW R2, 20(R0) ; MEM[0x14] = 0xBEEF
     _place(prog, 0x0010, _encode_sw(rs2=2, rs1=0, off6=20))
     # 0x0012: JR R0, 9       ; PC = 0 + 9*2 = 18 = 0x12 (spin)
     _place(prog, 0x0012, _encode_jr(rs=0, off6=9))
@@ -135,10 +131,10 @@ async def test_jr_computed(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
-    dut._log.info(f"ram[0x28:0x29] = {val:#06x}")
+    dut._log.info(f"ram[0x14:0x15] = {val:#06x}")
     assert val == 0xBEEF, f"Expected 0xBEEF, got {val:#06x}"
     dut._log.info("PASS [jr_computed]")
 
@@ -158,8 +154,8 @@ async def test_negative_offsets(dut):
 
     # Bootstrap: load a base address into R3 using two LWs.
     # Data at 0x0020: LE word 0x0050 (base address)
-    prog[0x0020] = 0x50
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0x50
+    prog[0x0011] = 0x00
 
     # Data at 0x004E: LE word 0xCAFE (at base 0x50, offset -1 → addr 0x4E)
     prog[0x004E] = 0xFE
@@ -168,9 +164,9 @@ async def test_negative_offsets(dut):
     # 0x0000: LW R3, 16(R0)  ; R3 = MEM[0 + 16*2] = MEM[0x20] = 0x0050
     _place(prog, 0x0000, _encode_lw(rd=3, rs1=0, off6=16))
     # 0x0002: LW R4, -1(R3)  ; R4 = MEM[0x50 + (-1)*2] = MEM[0x4E] = 0xCAFE
-    _place(prog, 0x0002, _encode_lw(rd=4, rs1=3, off6=-1))
+    _place(prog, 0x0002, _encode_lw(rd=4, rs1=3, off6=-2))
     # 0x0004: SW R4, 1(R3)   ; MEM[0x50 + 1*2] = MEM[0x52] = 0xCAFE
-    _place(prog, 0x0004, _encode_sw(rs2=4, rs1=3, off6=1))
+    _place(prog, 0x0004, _encode_sw(rs2=4, rs1=3, off6=2))
     # 0x0006: JR R0, 3       ; PC = 0 + 3*2 = 6 (spin at 0x0006)
     _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
@@ -204,11 +200,11 @@ async def test_jr_after_lw(dut):
     prog[0x0009] = 0x00
 
     # 0x0000: LW R1, 4(R0)   ; R1 = MEM[0x08] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=4))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
     # 0x0002: JR R1, 0        ; jump to 0x0020 (uses just-loaded R1)
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
     # 0x0020: SW R0, 10(R0)   ; MEM[0x14] = 0 (marker write)
-    _place(prog, 0x0020, _encode_sw(rs2=0, rs1=0, off6=10))
+    _place(prog, 0x0020, _encode_sw(rs2=0, rs1=0, off6=20))
     # 0x0022: JR R0, 17       ; spin at 0x0022
     _place(prog, 0x0022, _encode_jr(rs=0, off6=17))
 
@@ -245,38 +241,37 @@ async def test_single_step(dut):
     prog = {}
 
     # Data: three distinct marker values
-    prog[0x0020] = 0x11
-    prog[0x0021] = 0x11
-    prog[0x0022] = 0x22
-    prog[0x0023] = 0x22
-    prog[0x0024] = 0x33
-    prog[0x0025] = 0x33
+    prog[0x0010] = 0x11
+    prog[0x0011] = 0x11
+    prog[0x0012] = 0x22
+    prog[0x0013] = 0x22
+    prog[0x0014] = 0x33
+    prog[0x0015] = 0x33
 
     # Program: load three values, store them as markers, spin
-    # Marker addresses: 0x38, 0x3A, 0x3C (offsets 28, 29, 30 from R0)
-    # 0x0000: LW R1, 16(R0)  ; R1 = MEM[0x20] = 0x1111
+    # 0x0000: LW R1, 16(R0)  ; R1 = MEM[0x10] = 0x1111
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    # 0x0002: LW R2, 17(R0)  ; R2 = MEM[0x22] = 0x2222
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
-    # 0x0004: LW R3, 18(R0)  ; R3 = MEM[0x24] = 0x3333
-    _place(prog, 0x0004, _encode_lw(rd=3, rs1=0, off6=18))
-    # 0x0006: SW R1, 28(R0)  ; MEM[0x38] = 0x1111
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=28))
-    # 0x0008: SW R2, 29(R0)  ; MEM[0x3A] = 0x2222
-    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=29))
-    # 0x000A: SW R3, 30(R0)  ; MEM[0x3C] = 0x3333
-    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=30))
+    # 0x0002: LW R2, 18(R0)  ; R2 = MEM[0x12] = 0x2222
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
+    # 0x0004: LW R3, 20(R0)  ; R3 = MEM[0x14] = 0x3333
+    _place(prog, 0x0004, _encode_lw(rd=3, rs1=0, off6=20))
+    # 0x0006: SW R1, 22(R0)  ; MEM[0x16] = 0x1111
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=22))
+    # 0x0008: SW R2, 24(R0)  ; MEM[0x18] = 0x2222
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=24))
+    # 0x000A: SW R3, 26(R0)  ; MEM[0x1A] = 0x3333
+    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=26))
     # 0x000C: JR R0, 6       ; spin at 0x000C
     _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
 
     def get_sync():
         return (int(dut.uo_out.value) >> 1) & 1
 
-    # Marker addresses: 28*2=0x38, 29*2=0x3A, 30*2=0x3C
+    # Marker addresses: 0x16, 0x18, 0x1A
     def read_markers():
-        m1 = _read_ram(dut, 0x38) | (_read_ram(dut, 0x39) << 8)
-        m2 = _read_ram(dut, 0x3A) | (_read_ram(dut, 0x3B) << 8)
-        m3 = _read_ram(dut, 0x3C) | (_read_ram(dut, 0x3D) << 8)
+        m1 = _read_ram(dut, 0x0016) | (_read_ram(dut, 0x0017) << 8)
+        m2 = _read_ram(dut, 0x0018) | (_read_ram(dut, 0x0019) << 8)
+        m3 = _read_ram(dut, 0x001A) | (_read_ram(dut, 0x001B) << 8)
         return (m1, m2, m3)
 
     async def run_to_sync():
@@ -320,7 +315,7 @@ async def test_single_step(dut):
     _load_program(dut, prog)
 
     # Clear marker addresses (may have garbage from previous tests)
-    for addr in [0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D]:
+    for addr in [0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B]:
         dut.ram[addr].value = 0x00
 
     # Now run to first instruction boundary
@@ -437,12 +432,12 @@ async def test_reset_i_state(dut):
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     # Data: marker value
-    prog[0x0020] = 0xAD
-    prog[0x0021] = 0xDE
+    prog[0x0010] = 0xAD
+    prog[0x0011] = 0xDE
 
     # Clear marker location
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
 
     _load_program(dut, prog)
 
@@ -458,8 +453,8 @@ async def test_reset_i_state(dut):
     await ClockCycles(dut.clk, 100)
 
     # Check marker - should NOT be written since I=1 after reset
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     val = lo | (hi << 8)
     dut._log.info(f"Marker = {val:#06x} (expected 0x0000 if I=1 masks IRQ)")
     assert val == 0x0000, f"IRQ fired after reset! Expected I=1 to mask. Got marker {val:#06x}"
@@ -494,12 +489,12 @@ async def test_cli_enables_irq(dut):
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     # Data: marker value
-    prog[0x0020] = 0xEF
-    prog[0x0021] = 0xBE
+    prog[0x0010] = 0xEF
+    prog[0x0011] = 0xBE
 
     # Clear marker location
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
 
     _load_program(dut, prog)
 
@@ -520,8 +515,8 @@ async def test_cli_enables_irq(dut):
     await ClockCycles(dut.clk, 100)
 
     # Check marker - should be written since CLI enabled interrupts
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     val = lo | (hi << 8)
     dut._log.info(f"Marker = {val:#06x} (expected 0xBEEF if IRQ fired)")
     assert val == 0xBEEF, f"IRQ did not fire after CLI! Got marker {val:#06x}"
@@ -564,7 +559,7 @@ async def test_sei_disables_irq(dut):
 
     # Redesign: Jump over vector area first
     # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0010 (continue address)
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0      ; jump to 0x0010
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
@@ -583,12 +578,12 @@ async def test_sei_disables_irq(dut):
     _place(prog, 0x0014, _encode_jr(rs=0, off6=10))  # spin at 0x0014
 
     # Data: marker value
-    prog[0x0028] = 0xAD
-    prog[0x0029] = 0xDE
+    prog[0x0014] = 0xAD
+    prog[0x0015] = 0xDE
 
     # Clear marker location
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
 
     _load_program(dut, prog)
 
@@ -609,8 +604,8 @@ async def test_sei_disables_irq(dut):
     await ClockCycles(dut.clk, 100)
 
     # Check marker - should NOT be written since SEI masked IRQ
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     val = lo | (hi << 8)
     dut._log.info(f"Marker = {val:#06x} (expected 0x0000 if SEI masked IRQ)")
     assert val == 0x0000, f"IRQ fired despite SEI! Got marker {val:#06x}"
@@ -634,7 +629,7 @@ async def test_reti(dut):
     # After RETI, execution continues at spin, writes second marker
 
     # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0020 (continue address)
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0      ; jump to 0x0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
@@ -656,16 +651,16 @@ async def test_reti(dut):
     _place(prog, 0x0026, _encode_jr(rs=0, off6=19))         # spin at 0x0026
 
     # Data: marker values
-    prog[0x0030] = 0xAA
-    prog[0x0031] = 0xAA
-    prog[0x0034] = 0xBB
-    prog[0x0035] = 0xBB
+    prog[0x0018] = 0xAA
+    prog[0x0019] = 0xAA
+    prog[0x001A] = 0xBB
+    prog[0x001B] = 0xBB
 
     # Clear marker locations
-    prog[0x0038] = 0x00
-    prog[0x0039] = 0x00
-    prog[0x003C] = 0x00
-    prog[0x003D] = 0x00
+    prog[0x001C] = 0x00
+    prog[0x001D] = 0x00
+    prog[0x001E] = 0x00
+    prog[0x001F] = 0x00
 
     _load_program(dut, prog)
 
@@ -691,14 +686,14 @@ async def test_reti(dut):
     await ClockCycles(dut.clk, 100)
 
     # Check IRQ marker at 0x38
-    lo = _read_ram(dut, 0x0038)
-    hi = _read_ram(dut, 0x0039)
+    lo = _read_ram(dut, 0x001C)
+    hi = _read_ram(dut, 0x001D)
     irq_marker = lo | (hi << 8)
     dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0xAAAA)")
 
     # Check return marker at 0x3C
-    lo = _read_ram(dut, 0x003C)
-    hi = _read_ram(dut, 0x003D)
+    lo = _read_ram(dut, 0x001E)
+    hi = _read_ram(dut, 0x001F)
     ret_marker = lo | (hi << 8)
     dut._log.info(f"Return marker = {ret_marker:#06x} (expected 0xBBBB)")
 
@@ -722,7 +717,7 @@ async def test_i_bit_masking(dut):
 
     # Program: jump past vector, CLI, spin
     # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
@@ -736,16 +731,16 @@ async def test_i_bit_masking(dut):
     # Data
     prog[0x000A] = 0x20
     prog[0x000B] = 0x00
-    prog[0x0030] = 0xFE
-    prog[0x0031] = 0xCA
+    prog[0x0018] = 0xFE
+    prog[0x0019] = 0xCA
 
     # Continue at 0x0020: CLI, spin
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_jr(rs=0, off6=17))  # spin at 0x0022
 
     # Clear marker
-    prog[0x0038] = 0x00
-    prog[0x0039] = 0x00
+    prog[0x001C] = 0x00
+    prog[0x001D] = 0x00
 
     _load_program(dut, prog)
 
@@ -766,8 +761,8 @@ async def test_i_bit_masking(dut):
     await ClockCycles(dut.clk, 500)
 
     # Check marker - should be 0xCAFE (written once)
-    lo = _read_ram(dut, 0x0038)
-    hi = _read_ram(dut, 0x0039)
+    lo = _read_ram(dut, 0x001C)
+    hi = _read_ram(dut, 0x001D)
     val = lo | (hi << 8)
     dut._log.info(f"Marker = {val:#06x} (expected 0xCAFE, written exactly once)")
     assert val == 0xCAFE, f"IRQ handler problem! Got {val:#06x}"
@@ -792,7 +787,7 @@ async def test_irq_during_multicycle(dut):
 
     # Program: jump past vector, CLI, LW, SW (prove LW completed), spin
     # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
@@ -814,14 +809,14 @@ async def test_irq_during_multicycle(dut):
     _place(prog, 0x0026, _encode_jr(rs=0, off6=19))
 
     # Data: value for LW
-    prog[0x0030] = 0x34
-    prog[0x0031] = 0x12
+    prog[0x0018] = 0x34
+    prog[0x0019] = 0x12
 
     # Clear markers
-    prog[0x0038] = 0x00
-    prog[0x0039] = 0x00
-    prog[0x003C] = 0x00
-    prog[0x003D] = 0x00
+    prog[0x001C] = 0x00
+    prog[0x001D] = 0x00
+    prog[0x001E] = 0x00
+    prog[0x001F] = 0x00
 
     _load_program(dut, prog)
 
@@ -848,14 +843,14 @@ async def test_irq_during_multicycle(dut):
     await ClockCycles(dut.clk, 50)
 
     # Check main marker at 0x38 (SW after LW)
-    lo = _read_ram(dut, 0x0038)
-    hi = _read_ram(dut, 0x0039)
+    lo = _read_ram(dut, 0x001C)
+    hi = _read_ram(dut, 0x001D)
     main_marker = lo | (hi << 8)
     dut._log.info(f"Main marker = {main_marker:#06x} (expected 0x1234)")
 
     # Check IRQ marker at 0x3C (SW of R5 in handler)
-    lo = _read_ram(dut, 0x003C)
-    hi = _read_ram(dut, 0x003D)
+    lo = _read_ram(dut, 0x001E)
+    hi = _read_ram(dut, 0x001F)
     irq_marker = lo | (hi << 8)
     dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0x1234 if LW completed before IRQ)")
 
@@ -906,22 +901,22 @@ async def test_irq_interrupts_jr(dut):
     # First load 0xBEEF into R1
     prog[0x0010] = 0xEF
     prog[0x0011] = 0xBE
-    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=8))   # R1 = MEM[0x10] = 0xBEEF
+    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))   # R1 = MEM[0x10] = 0xBEEF
     _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=30)) # MEM[0x3C] = 0xBEEF
     _place(prog, 0x0008, _encode_reti())
 
     # JR target at 0x0020: write 0xCAFE to marker at 0x0038, then spin
-    prog[0x0034] = 0xFE
-    prog[0x0035] = 0xCA
+    prog[0x001A] = 0xFE
+    prog[0x001B] = 0xCA
     _place(prog, 0x0020, _encode_lw(rd=2, rs1=0, off6=26))  # R2 = MEM[0x34] = 0xCAFE
     _place(prog, 0x0022, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xCAFE
     _place(prog, 0x0024, _encode_jr(rs=0, off6=18))         # Spin at 0x24
 
     # Clear markers
-    prog[0x003C] = 0x00
-    prog[0x003D] = 0x00
-    prog[0x0038] = 0x00
-    prog[0x0039] = 0x00
+    prog[0x001E] = 0x00
+    prog[0x001F] = 0x00
+    prog[0x001C] = 0x00
+    prog[0x001D] = 0x00
 
     _load_program(dut, prog)
 
@@ -941,14 +936,14 @@ async def test_irq_interrupts_jr(dut):
     await ClockCycles(dut.clk, 100)
 
     # Check IRQ marker at 0x3C (proves handler ran)
-    lo = _read_ram(dut, 0x003C)
-    hi = _read_ram(dut, 0x003D)
+    lo = _read_ram(dut, 0x001E)
+    hi = _read_ram(dut, 0x001F)
     irq_marker = lo | (hi << 8)
     dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0xBEEF)")
 
     # Check JR target marker at 0x38 (proves RETI returned to JR target)
-    lo = _read_ram(dut, 0x0038)
-    hi = _read_ram(dut, 0x0039)
+    lo = _read_ram(dut, 0x001C)
+    hi = _read_ram(dut, 0x001D)
     jr_marker = lo | (hi << 8)
     dut._log.info(f"JR target marker = {jr_marker:#06x} (expected 0xCAFE)")
 
@@ -1032,8 +1027,8 @@ async def test_cli_atomicity(dut):
     _place(prog, 0x0002, _encode_jr(rs=0, off6=1))  # spin at 0x0002
 
     # IRQ handler at 0x0004: write marker and spin
-    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=8))   # R1 = MEM[0x10] = 0xBEEF
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=12)) # MEM[0x18] = 0xBEEF
+    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))   # R1 = MEM[0x10] = 0xBEEF
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[0x18] = 0xBEEF
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))          # spin at 0x0008
 
     # Data: marker value
@@ -1152,7 +1147,7 @@ async def test_cycle_count_lw(dut):
 
     prog = {}
     # 0x0000: LW R1, 8(R0)  ; load from 0x10
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: JR R0, 1 (spin)
     _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
@@ -1177,7 +1172,7 @@ async def test_cycle_count_sw(dut):
 
     prog = {}
     # 0x0000: SW R0, 8(R0)  ; store R0 to 0x10
-    _place(prog, 0x0000, _encode_sw(rs2=0, rs1=0, off6=8))
+    _place(prog, 0x0000, _encode_sw(rs2=0, rs1=0, off6=16))
     # 0x0002: JR R0, 1 (spin)
     _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
@@ -1245,12 +1240,12 @@ async def test_nmi_basic(dut):
     _place(prog, 0x000C, _encode_jr(rs=0, off6=6))           # spin at $000C
 
     # Data
-    prog[0x0020] = 0xEF
-    prog[0x0021] = 0xBE
+    prog[0x0010] = 0xEF
+    prog[0x0011] = 0xBE
 
     # Clear marker
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
 
     _load_program(dut, prog)
 
@@ -1272,8 +1267,8 @@ async def test_nmi_basic(dut):
     # Let handler execute
     await ClockCycles(dut.clk, 100)
 
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     val = lo | (hi << 8)
     dut._log.info(f"Marker = {val:#06x} (expected 0xBEEF)")
     assert val == 0xBEEF, f"NMI handler did not run! Got {val:#06x}"
@@ -1314,14 +1309,14 @@ async def test_nmi_edge_triggered(dut):
     _place(prog, 0x0010, _encode_jr(rs=0, off6=8))           # spin at $0010
 
     # Data
-    prog[0x0028] = 0xAA
-    prog[0x0029] = 0xAA
+    prog[0x0014] = 0xAA
+    prog[0x0015] = 0xAA
 
     # Clear markers
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
-    prog[0x0034] = 0x00
-    prog[0x0035] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
+    prog[0x001A] = 0x00
+    prog[0x001B] = 0x00
 
     _load_program(dut, prog)
 
@@ -1341,11 +1336,11 @@ async def test_nmi_edge_triggered(dut):
     await ClockCycles(dut.clk, 500)
 
     # Check both markers written (handler completed once)
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     marker1 = lo | (hi << 8)
-    lo = _read_ram(dut, 0x0034)
-    hi = _read_ram(dut, 0x0035)
+    lo = _read_ram(dut, 0x001A)
+    hi = _read_ram(dut, 0x001B)
     marker2 = lo | (hi << 8)
 
     dut._log.info(f"Marker1 = {marker1:#06x}, Marker2 = {marker2:#06x} (both expected 0xAAAA)")
@@ -1370,12 +1365,12 @@ async def test_nmi_priority_over_irq(dut):
     prog = {}
 
     # Main code: jump past vectors, CLI, spin
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=12))  # R1 = MEM[$18] = $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=24))  # R1 = MEM[$18] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))           # JR to $0020
 
     # IRQ handler at $0004: write IRQ marker
     _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))   # R2 = MEM[$28] = 0x1111
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=26))  # MEM[$34] = 0x1111
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=28))  # MEM[$34] = 0x1111
     # Spin in IRQ handler
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
@@ -1384,7 +1379,7 @@ async def test_nmi_priority_over_irq(dut):
     prog = {}
 
     # Main code: jump past vectors
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ handler at $0004: write IRQ marker, spin
@@ -1392,8 +1387,8 @@ async def test_nmi_priority_over_irq(dut):
     _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0x1111
 
     # NMI handler at $0008: write NMI marker, spin
-    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, off6=21))    # R3 = MEM[$2A] = 0x2222
-    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=25))   # MEM[$32] = 0x2222
+    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, off6=22))    # R3 = MEM[$2A] = 0x2222
+    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$32] = 0x2222
     _place(prog, 0x000C, _encode_jr(rs=0, off6=6))            # spin at $000C
 
     # Continue at $0020: CLI, then spin
@@ -1403,16 +1398,16 @@ async def test_nmi_priority_over_irq(dut):
     # Data
     prog[0x001E] = 0x20
     prog[0x001F] = 0x00
-    prog[0x0028] = 0x11
-    prog[0x0029] = 0x11
-    prog[0x002A] = 0x22
-    prog[0x002B] = 0x22
+    prog[0x0014] = 0x11
+    prog[0x0015] = 0x11
+    prog[0x0016] = 0x22
+    prog[0x0017] = 0x22
 
     # Clear markers
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
-    prog[0x0032] = 0x00
-    prog[0x0033] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
+    prog[0x001A] = 0x00
+    prog[0x001B] = 0x00
 
     _load_program(dut, prog)
 
@@ -1433,13 +1428,13 @@ async def test_nmi_priority_over_irq(dut):
     await ClockCycles(dut.clk, 200)
 
     # Check NMI marker (should be written — NMI has priority)
-    lo = _read_ram(dut, 0x0032)
-    hi = _read_ram(dut, 0x0033)
+    lo = _read_ram(dut, 0x001A)
+    hi = _read_ram(dut, 0x001B)
     nmi_marker = lo | (hi << 8)
 
     # Check IRQ marker (should NOT be written — I=1 after NMI entry)
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     irq_marker = lo | (hi << 8)
 
     dut._log.info(f"NMI marker = {nmi_marker:#06x} (expected 0x2222)")
@@ -1460,32 +1455,32 @@ async def test_nmi_during_multicycle(dut):
     prog = {}
 
     # Main code: jump past vectors, then LW, then SW to prove LW completed
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ at $0004: unused
     _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     # NMI handler at $0008: write R5 to marker (R5 was loaded by main code's LW)
-    _place(prog, 0x0008, _encode_sw(rs2=5, rs1=0, off6=25))   # MEM[$32] = R5
+    _place(prog, 0x0008, _encode_sw(rs2=5, rs1=0, off6=26))   # MEM[$1A] = R5
     _place(prog, 0x000A, _encode_reti())
 
     # Continue at $0020: LW into R5, SW R5 to another marker, spin
-    _place(prog, 0x0020, _encode_lw(rd=5, rs1=0, off6=24))    # R5 = MEM[$30] = 0x1234
-    _place(prog, 0x0022, _encode_sw(rs2=5, rs1=0, off6=27))   # MEM[$36] = R5
+    _place(prog, 0x0020, _encode_lw(rd=5, rs1=0, off6=24))    # R5 = MEM[$18] = 0x1234
+    _place(prog, 0x0022, _encode_sw(rs2=5, rs1=0, off6=28))   # MEM[$1C] = R5
     _place(prog, 0x0024, _encode_jr(rs=0, off6=18))           # spin at $0024
 
     # Data
     prog[0x001E] = 0x20
     prog[0x001F] = 0x00
-    prog[0x0030] = 0x34
-    prog[0x0031] = 0x12
+    prog[0x0018] = 0x34
+    prog[0x0019] = 0x12
 
     # Clear markers
-    prog[0x0032] = 0x00
-    prog[0x0033] = 0x00
-    prog[0x0036] = 0x00
-    prog[0x0037] = 0x00
+    prog[0x001A] = 0x00
+    prog[0x001B] = 0x00
+    prog[0x001C] = 0x00
+    prog[0x001D] = 0x00
 
     _load_program(dut, prog)
 
@@ -1508,13 +1503,13 @@ async def test_nmi_during_multicycle(dut):
     await ClockCycles(dut.clk, 200)
 
     # Check NMI handler marker (R5 should have been loaded by LW before NMI)
-    lo = _read_ram(dut, 0x0032)
-    hi = _read_ram(dut, 0x0033)
+    lo = _read_ram(dut, 0x001A)
+    hi = _read_ram(dut, 0x001B)
     nmi_marker = lo | (hi << 8)
 
     # Check main code marker (SW after RETI return)
-    lo = _read_ram(dut, 0x0036)
-    hi = _read_ram(dut, 0x0037)
+    lo = _read_ram(dut, 0x001C)
+    hi = _read_ram(dut, 0x001D)
     main_marker = lo | (hi << 8)
 
     dut._log.info(f"NMI marker (R5) = {nmi_marker:#06x} (expected 0x1234)")
@@ -1557,20 +1552,20 @@ async def test_nmi_second_edge(dut):
 
     # NMI handler at $0008:
     _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=24))    # R1 = MEM[$30] (current)
-    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, off6=25))   # MEM[$32] = R1 (copy previous)
+    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, off6=26))   # MEM[$32] = R1 (copy previous)
     _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=22))    # R2 = MEM[$2C] = 0xBBBB
     _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xBBBB
     _place(prog, 0x0010, _encode_reti())
 
     # Data
-    prog[0x002C] = 0xBB
-    prog[0x002D] = 0xBB
+    prog[0x0016] = 0xBB
+    prog[0x0017] = 0xBB
 
     # Clear markers
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
-    prog[0x0032] = 0x00
-    prog[0x0033] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
+    prog[0x001A] = 0x00
+    prog[0x001B] = 0x00
 
     _load_program(dut, prog)
 
@@ -1600,13 +1595,13 @@ async def test_nmi_second_edge(dut):
     await ClockCycles(dut.clk, 100)
 
     # Check: $0030 should be 0xBBBB (written by both NMIs)
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     marker1 = lo | (hi << 8)
 
     # Check: $0032 should be 0xBBBB (second NMI copied $0030's value)
-    lo = _read_ram(dut, 0x0032)
-    hi = _read_ram(dut, 0x0033)
+    lo = _read_ram(dut, 0x001A)
+    hi = _read_ram(dut, 0x001B)
     marker2 = lo | (hi << 8)
 
     dut._log.info(f"$0030 = {marker1:#06x} (expected 0xBBBB)")
@@ -1643,12 +1638,12 @@ async def test_nmi_during_rdy_low(dut):
     _place(prog, 0x000C, _encode_jr(rs=0, off6=6))           # spin at $000C
 
     # Data
-    prog[0x0020] = 0xEF
-    prog[0x0021] = 0xBE
+    prog[0x0010] = 0xEF
+    prog[0x0011] = 0xBE
 
     # Clear marker
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
 
     _load_program(dut, prog)
 
@@ -1673,8 +1668,8 @@ async def test_nmi_during_rdy_low(dut):
     await ClockCycles(dut.clk, 10)
 
     # Verify marker is still 0 (CPU was halted, handler hasn't run)
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     val = lo | (hi << 8)
     assert val == 0x0000, f"NMI handler ran while halted! Got {val:#06x}"
 
@@ -1684,8 +1679,8 @@ async def test_nmi_during_rdy_low(dut):
     # Let handler execute
     await ClockCycles(dut.clk, 100)
 
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     val = lo | (hi << 8)
     dut._log.info(f"Marker = {val:#06x} (expected 0xBEEF)")
     assert val == 0xBEEF, f"NMI during RDY=0 was lost! Got {val:#06x}"
@@ -1707,7 +1702,7 @@ async def test_wai_irq(dut):
     prog = {}
 
     # Main code: jump past vectors, CLI, WAI, then write marker (proves RETI returned past WAI)
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ handler at $0004: write marker, RETI
@@ -1722,23 +1717,23 @@ async def test_wai_irq(dut):
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_wai())
     # After WAI + IRQ + RETI, execution resumes at $0024
-    _place(prog, 0x0024, _encode_lw(rd=3, rs1=0, off6=21))    # R3 = MEM[$2A] = 0xBBBB
-    _place(prog, 0x0026, _encode_sw(rs2=3, rs1=0, off6=25))   # MEM[$32] = 0xBBBB
+    _place(prog, 0x0024, _encode_lw(rd=3, rs1=0, off6=22))    # R3 = MEM[$2A] = 0xBBBB
+    _place(prog, 0x0026, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$32] = 0xBBBB
     _place(prog, 0x0028, _encode_jr(rs=0, off6=20))            # spin at $0028
 
     # Data
     prog[0x001E] = 0x20
     prog[0x001F] = 0x00
-    prog[0x0028] = 0xAA
-    prog[0x0029] = 0xAA
-    prog[0x002A] = 0xBB
-    prog[0x002B] = 0xBB
+    prog[0x0014] = 0xAA
+    prog[0x0015] = 0xAA
+    prog[0x0016] = 0xBB
+    prog[0x0017] = 0xBB
 
     # Clear markers
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
-    prog[0x0032] = 0x00
-    prog[0x0033] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
+    prog[0x001A] = 0x00
+    prog[0x001B] = 0x00
 
     _load_program(dut, prog)
 
@@ -1761,13 +1756,13 @@ async def test_wai_irq(dut):
     await ClockCycles(dut.clk, 100)
 
     # Check IRQ handler marker
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     irq_marker = lo | (hi << 8)
 
     # Check post-WAI marker (proves RETI returned past WAI)
-    lo = _read_ram(dut, 0x0032)
-    hi = _read_ram(dut, 0x0033)
+    lo = _read_ram(dut, 0x001A)
+    hi = _read_ram(dut, 0x001B)
     post_wai_marker = lo | (hi << 8)
 
     dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0xAAAA)")
@@ -1788,7 +1783,7 @@ async def test_wai_nmi(dut):
     prog = {}
 
     # Main code: jump past vectors, WAI (I=1 from reset), then post-WAI marker
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))    # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))    # R1 = MEM[$1E] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
 
     # IRQ vector at $0004: unused
@@ -1802,23 +1797,23 @@ async def test_wai_nmi(dut):
     # Continue at $0020: WAI (I=1, only NMI or masked IRQ can wake)
     _place(prog, 0x0020, _encode_wai())
     # After WAI + NMI + RETI, execution resumes at $0022
-    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=21))    # R3 = MEM[$2A] = 0xBBBB
-    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=25))   # MEM[$32] = 0xBBBB
+    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=22))    # R3 = MEM[$2A] = 0xBBBB
+    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$32] = 0xBBBB
     _place(prog, 0x0026, _encode_jr(rs=0, off6=19))            # spin at $0026
 
     # Data
     prog[0x001E] = 0x20
     prog[0x001F] = 0x00
-    prog[0x0028] = 0xAA
-    prog[0x0029] = 0xAA
-    prog[0x002A] = 0xBB
-    prog[0x002B] = 0xBB
+    prog[0x0014] = 0xAA
+    prog[0x0015] = 0xAA
+    prog[0x0016] = 0xBB
+    prog[0x0017] = 0xBB
 
     # Clear markers
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
-    prog[0x0032] = 0x00
-    prog[0x0033] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
+    prog[0x001A] = 0x00
+    prog[0x001B] = 0x00
 
     _load_program(dut, prog)
 
@@ -1841,13 +1836,13 @@ async def test_wai_nmi(dut):
     await ClockCycles(dut.clk, 200)
 
     # Check NMI handler marker
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     nmi_marker = lo | (hi << 8)
 
     # Check post-WAI marker
-    lo = _read_ram(dut, 0x0032)
-    hi = _read_ram(dut, 0x0033)
+    lo = _read_ram(dut, 0x001A)
+    hi = _read_ram(dut, 0x001B)
     post_wai_marker = lo | (hi << 8)
 
     dut._log.info(f"NMI marker = {nmi_marker:#06x} (expected 0xAAAA)")
@@ -1872,7 +1867,7 @@ async def test_wai_masked_irq_wakes(dut):
     prog = {}
 
     # Main code: jump past vectors, WAI (I=1), then post-WAI marker
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))    # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))    # R1 = MEM[$1E] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
 
     # IRQ handler at $0004: write IRQ marker (should NOT happen)
@@ -1885,23 +1880,23 @@ async def test_wai_masked_irq_wakes(dut):
     # Continue at $0020: WAI (I=1 from reset)
     _place(prog, 0x0020, _encode_wai())
     # After WAI wakes (masked IRQ), resumes here at $0022
-    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=21))    # R3 = MEM[$2A] = 0xBBBB
-    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=25))   # MEM[$32] = 0xBBBB
+    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=22))    # R3 = MEM[$2A] = 0xBBBB
+    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$32] = 0xBBBB
     _place(prog, 0x0026, _encode_jr(rs=0, off6=19))            # spin at $0026
 
     # Data
     prog[0x001E] = 0x20
     prog[0x001F] = 0x00
-    prog[0x0028] = 0xAD
-    prog[0x0029] = 0xDE
-    prog[0x002A] = 0xBB
-    prog[0x002B] = 0xBB
+    prog[0x0014] = 0xAD
+    prog[0x0015] = 0xDE
+    prog[0x0016] = 0xBB
+    prog[0x0017] = 0xBB
 
     # Clear markers
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
-    prog[0x0032] = 0x00
-    prog[0x0033] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
+    prog[0x001A] = 0x00
+    prog[0x001B] = 0x00
 
     _load_program(dut, prog)
 
@@ -1920,13 +1915,13 @@ async def test_wai_masked_irq_wakes(dut):
     await ClockCycles(dut.clk, 200)
 
     # Check that IRQ handler did NOT run
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     irq_marker = lo | (hi << 8)
 
     # Check that post-WAI code DID run
-    lo = _read_ram(dut, 0x0032)
-    hi = _read_ram(dut, 0x0033)
+    lo = _read_ram(dut, 0x001A)
+    hi = _read_ram(dut, 0x001B)
     post_wai_marker = lo | (hi << 8)
 
     dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0x0000 — handler should NOT run)")
@@ -1946,42 +1941,45 @@ async def test_stp(dut):
 
     prog = {}
 
+    # Data layout: 0x0E=jump target, 0x10=DEAD, 0x12=BEEF, 0x14=1111, 0x16=2222
+    # Markers: 0x18=IRQ, 0x1A=NMI, 0x1C=pre-STP, 0x1E=post-STP
+
     # Main code: jump past vectors, write pre-STP marker, STP
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))    # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=14))    # R1 = MEM[$0E] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
 
     # IRQ handler at $0004: write IRQ marker (should NOT happen)
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0xDEAD
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xDEAD
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=16))    # R2 = MEM[$10] = 0xDEAD
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$18] = 0xDEAD
 
     # NMI handler at $0008: write NMI marker (should NOT happen)
-    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, off6=21))    # R3 = MEM[$2A] = 0xBEEF
-    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=25))   # MEM[$32] = 0xBEEF
+    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, off6=18))    # R3 = MEM[$12] = 0xBEEF
+    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$1A] = 0xBEEF
     _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
 
     # Continue at $0020: CLI (enable IRQ), write pre-STP marker, STP
     _place(prog, 0x0020, _encode_cli())
-    _place(prog, 0x0022, _encode_lw(rd=4, rs1=0, off6=22))    # R4 = MEM[$2C] = 0x1111
-    _place(prog, 0x0024, _encode_sw(rs2=4, rs1=0, off6=26))   # MEM[$34] = 0x1111 (pre-STP marker)
+    _place(prog, 0x0022, _encode_lw(rd=4, rs1=0, off6=20))    # R4 = MEM[$14] = 0x1111
+    _place(prog, 0x0024, _encode_sw(rs2=4, rs1=0, off6=28))   # MEM[$1C] = 0x1111 (pre-STP marker)
     _place(prog, 0x0026, _encode_stp())
     # Post-STP: should never execute
-    _place(prog, 0x0028, _encode_lw(rd=5, rs1=0, off6=23))    # R5 = MEM[$2E] = 0x2222
-    _place(prog, 0x002A, _encode_sw(rs2=5, rs1=0, off6=27))   # MEM[$36] = 0x2222
+    _place(prog, 0x0028, _encode_lw(rd=5, rs1=0, off6=22))    # R5 = MEM[$16] = 0x2222
+    _place(prog, 0x002A, _encode_sw(rs2=5, rs1=0, off6=30))   # MEM[$1E] = 0x2222
 
     # Data
-    prog[0x001E] = 0x20
-    prog[0x001F] = 0x00
-    prog[0x0028] = 0xAD
-    prog[0x0029] = 0xDE
-    prog[0x002A] = 0xEF
-    prog[0x002B] = 0xBE
-    prog[0x002C] = 0x11
-    prog[0x002D] = 0x11
-    prog[0x002E] = 0x22
-    prog[0x002F] = 0x22
+    prog[0x000E] = 0x20
+    prog[0x000F] = 0x00
+    prog[0x0010] = 0xAD
+    prog[0x0011] = 0xDE
+    prog[0x0012] = 0xEF
+    prog[0x0013] = 0xBE
+    prog[0x0014] = 0x11
+    prog[0x0015] = 0x11
+    prog[0x0016] = 0x22
+    prog[0x0017] = 0x22
 
     # Clear markers
-    for addr in [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37]:
+    for addr in [0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F]:
         prog[addr] = 0x00
 
     _load_program(dut, prog)
@@ -1997,14 +1995,14 @@ async def test_stp(dut):
     await ClockCycles(dut.clk, 80)
 
     # Verify pre-STP marker was written (proves code ran up to STP)
-    lo = _read_ram(dut, 0x0034)
-    hi = _read_ram(dut, 0x0035)
+    lo = _read_ram(dut, 0x001C)
+    hi = _read_ram(dut, 0x001D)
     pre_stp = lo | (hi << 8)
     assert pre_stp == 0x1111, f"Pre-STP marker not written! Got {pre_stp:#06x}"
 
     # Verify CPU is halted: post-STP code should NOT have run
-    lo = _read_ram(dut, 0x0036)
-    hi = _read_ram(dut, 0x0037)
+    lo = _read_ram(dut, 0x001E)
+    hi = _read_ram(dut, 0x001F)
     post_stp = lo | (hi << 8)
     assert post_stp == 0x0000, f"Post-STP code ran! Got {post_stp:#06x}"
 
@@ -2013,11 +2011,11 @@ async def test_stp(dut):
     await ClockCycles(dut.clk, 200)
 
     # Check that neither handler ran
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     irq_marker = lo | (hi << 8)
-    lo = _read_ram(dut, 0x0032)
-    hi = _read_ram(dut, 0x0033)
+    lo = _read_ram(dut, 0x001A)
+    hi = _read_ram(dut, 0x001B)
     nmi_marker = lo | (hi << 8)
 
     dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0x0000)")
@@ -2027,8 +2025,8 @@ async def test_stp(dut):
 
     # Now reset — CPU should start running from $0000 again
     # Clear the pre-STP marker so we can detect fresh execution
-    dut.ram[0x0034].value = 0x00
-    dut.ram[0x0035].value = 0x00
+    dut.ram[0x001C].value = 0x00
+    dut.ram[0x001D].value = 0x00
 
     # Full reset with clean control signals
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
@@ -2041,8 +2039,8 @@ async def test_stp(dut):
     # Run and verify CPU works after reset
     await ClockCycles(dut.clk, 300)
 
-    lo = _read_ram(dut, 0x0034)
-    hi = _read_ram(dut, 0x0035)
+    lo = _read_ram(dut, 0x001C)
+    hi = _read_ram(dut, 0x001D)
     pre_stp = lo | (hi << 8)
     dut._log.info(f"After reset, pre-STP marker = {pre_stp:#06x} (expected 0x1111)")
     assert pre_stp == 0x1111, f"CPU didn't restart after reset from STP! Got {pre_stp:#06x}"
@@ -2166,7 +2164,7 @@ async def test_brk_basic(dut):
     prog = {}
 
     # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020 (jump target)
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0        ; jump past vectors to 0x0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
@@ -2188,14 +2186,14 @@ async def test_brk_basic(dut):
     _place(prog, 0x0028, _encode_jr(rs=0, off6=20))         # spin
 
     # Data
-    prog[0x0030] = 0xAA
-    prog[0x0031] = 0xAA
-    prog[0x0034] = 0xBB
-    prog[0x0035] = 0xBB
-    prog[0x0038] = 0x00
-    prog[0x0039] = 0x00
-    prog[0x003C] = 0x00
-    prog[0x003D] = 0x00
+    prog[0x0018] = 0xAA
+    prog[0x0019] = 0xAA
+    prog[0x001A] = 0xBB
+    prog[0x001B] = 0xBB
+    prog[0x001C] = 0x00
+    prog[0x001D] = 0x00
+    prog[0x001E] = 0x00
+    prog[0x001F] = 0x00
 
     _load_program(dut, prog)
 
@@ -2208,14 +2206,14 @@ async def test_brk_basic(dut):
     await ClockCycles(dut.clk, 300)
 
     # Check BRK handler marker
-    lo = _read_ram(dut, 0x0038)
-    hi = _read_ram(dut, 0x0039)
+    lo = _read_ram(dut, 0x001C)
+    hi = _read_ram(dut, 0x001D)
     brk_marker = lo | (hi << 8)
     dut._log.info(f"BRK marker = {brk_marker:#06x} (expected 0xAAAA)")
 
     # Check return marker (RETI returned to instruction after BRK)
-    lo = _read_ram(dut, 0x003C)
-    hi = _read_ram(dut, 0x003D)
+    lo = _read_ram(dut, 0x001E)
+    hi = _read_ram(dut, 0x001F)
     ret_marker = lo | (hi << 8)
     dut._log.info(f"Return marker = {ret_marker:#06x} (expected 0xBBBB)")
 
@@ -2238,7 +2236,7 @@ async def test_brk_masks_irq(dut):
     prog = {}
 
     # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0        ; jump to 0x0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
@@ -2262,14 +2260,14 @@ async def test_brk_masks_irq(dut):
     _place(prog, 0x0024, _encode_jr(rs=0, off6=18))  # spin
 
     # Data
-    prog[0x0030] = 0xAA
-    prog[0x0031] = 0xAA
-    prog[0x0034] = 0xCC
-    prog[0x0035] = 0xCC
-    prog[0x0038] = 0x00
-    prog[0x0039] = 0x00
-    prog[0x003C] = 0x00
-    prog[0x003D] = 0x00
+    prog[0x0018] = 0xAA
+    prog[0x0019] = 0xAA
+    prog[0x001A] = 0xCC
+    prog[0x001B] = 0xCC
+    prog[0x001C] = 0x00
+    prog[0x001D] = 0x00
+    prog[0x001E] = 0x00
+    prog[0x001F] = 0x00
 
     _load_program(dut, prog)
 
@@ -2289,15 +2287,15 @@ async def test_brk_masks_irq(dut):
     await ClockCycles(dut.clk, 300)
 
     # BRK handler should have run
-    lo = _read_ram(dut, 0x0038)
-    hi = _read_ram(dut, 0x0039)
+    lo = _read_ram(dut, 0x001C)
+    hi = _read_ram(dut, 0x001D)
     brk_marker = lo | (hi << 8)
     dut._log.info(f"BRK marker = {brk_marker:#06x} (expected 0xAAAA)")
     assert brk_marker == 0xAAAA, f"BRK handler did not run! Got {brk_marker:#06x}"
 
     # After RETI from BRK, I=0 and IRQB=0, so IRQ should fire
-    lo = _read_ram(dut, 0x003C)
-    hi = _read_ram(dut, 0x003D)
+    lo = _read_ram(dut, 0x001E)
+    hi = _read_ram(dut, 0x001F)
     irq_marker = lo | (hi << 8)
     dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0xCCCC)")
     assert irq_marker == 0xCCCC, f"IRQ did not fire after RETI from BRK! Got {irq_marker:#06x}"
@@ -2369,7 +2367,7 @@ async def test_brk_restores_i(dut):
     prog = {}
 
     # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=5))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0        ; jump to 0x0020 (past vectors)
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
@@ -2394,14 +2392,14 @@ async def test_brk_restores_i(dut):
     _place(prog, 0x0026, _encode_jr(rs=0, off6=19))         # spin
 
     # Data
-    prog[0x0030] = 0xAA
-    prog[0x0031] = 0xAA
-    prog[0x0034] = 0xBB
-    prog[0x0035] = 0xBB
-    prog[0x0038] = 0x00
-    prog[0x0039] = 0x00
-    prog[0x003C] = 0x00
-    prog[0x003D] = 0x00
+    prog[0x0018] = 0xAA
+    prog[0x0019] = 0xAA
+    prog[0x001A] = 0xBB
+    prog[0x001B] = 0xBB
+    prog[0x001C] = 0x00
+    prog[0x001D] = 0x00
+    prog[0x001E] = 0x00
+    prog[0x001F] = 0x00
 
     _load_program(dut, prog)
 
@@ -2415,15 +2413,15 @@ async def test_brk_restores_i(dut):
     await ClockCycles(dut.clk, 300)
 
     # BRK handler should have run
-    lo = _read_ram(dut, 0x0038)
-    hi = _read_ram(dut, 0x0039)
+    lo = _read_ram(dut, 0x001C)
+    hi = _read_ram(dut, 0x001D)
     brk_marker = lo | (hi << 8)
     dut._log.info(f"BRK marker = {brk_marker:#06x} (expected 0xAAAA)")
     assert brk_marker == 0xAAAA, f"BRK handler did not run! Got {brk_marker:#06x}"
 
     # Return marker should be 0xBBBB (post-RETI code ran)
-    lo = _read_ram(dut, 0x003C)
-    hi = _read_ram(dut, 0x003D)
+    lo = _read_ram(dut, 0x001E)
+    hi = _read_ram(dut, 0x001F)
     ret_marker = lo | (hi << 8)
     dut._log.info(f"Return marker = {ret_marker:#06x} (expected 0xBBBB)")
     assert ret_marker == 0xBBBB, f"RETI did not return from BRK! Got {ret_marker:#06x}"
@@ -2448,7 +2446,7 @@ async def test_epcr_basic(dut):
     prog = {}
 
     # Main code: jump past vectors, CLI, then spin waiting for IRQ
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ handler at $0004: EPCR R2, store R2 to memory, spin
@@ -2467,8 +2465,8 @@ async def test_epcr_basic(dut):
     prog[0x001F] = 0x00
 
     # Clear marker
-    prog[0x0030] = 0x00
-    prog[0x0031] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
 
     _load_program(dut, prog)
 
@@ -2483,8 +2481,8 @@ async def test_epcr_basic(dut):
 
     # EPC should be: return address ($0022) | I bit (0, since CLI cleared it)
     # CLI at $0020 advances PC to $0022, then IRQ fires. EPC = $0022 | 0 = $0022
-    lo = _read_ram(dut, 0x0030)
-    hi = _read_ram(dut, 0x0031)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     val = lo | (hi << 8)
     dut._log.info(f"EPCR result = {val:#06x} (expected 0x0022)")
     assert val == 0x0022, f"EPCR did not read correct EPC! Got {val:#06x}"
@@ -2501,8 +2499,11 @@ async def test_epcw_basic(dut):
 
     prog = {}
 
+    # Data: 0x0A=jump($0020), 0x12=EPCW target($0030), 0x14=DEAD, 0x16=AAAA
+    # Markers: 0x18=orig-return, 0x1A=target
+
     # Main code: jump past vectors, CLI, BRK to enter handler
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))   # R1 = MEM[$0A] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ at $0004: unused
@@ -2512,38 +2513,38 @@ async def test_epcw_basic(dut):
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     # BRK handler at $000C: load target addr into R3, EPCW R3, RETI
-    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, off6=9))    # R3 = MEM[$12] = $0030
+    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, off6=18))    # R3 = MEM[$12] = $0030
     _place(prog, 0x000E, _encode_epcw(rs=3))                  # EPC = R3 = $0030
     _place(prog, 0x0010, _encode_reti())                       # jump to $0030, I = EPC[0] = 0
 
     # Data
+    prog[0x000A] = 0x20  # initial jump target
+    prog[0x000B] = 0x00
     prog[0x0012] = 0x30  # EPCW target address $0030
     prog[0x0013] = 0x00
     prog[0x0014] = 0xAD  # DEAD marker value
     prog[0x0015] = 0xDE
-    prog[0x0018] = 0xAA  # AAAA marker value
-    prog[0x0019] = 0xAA
-    prog[0x001E] = 0x20  # initial jump target
-    prog[0x001F] = 0x00
+    prog[0x0016] = 0xAA  # AAAA marker value
+    prog[0x0017] = 0xAA
 
     # Continue at $0020: CLI, BRK
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_brk())
     # $0024: should NOT reach here (EPCW redirected RETI)
-    _place(prog, 0x0024, _encode_lw(rd=4, rs1=0, off6=10))   # R4 = MEM[$14] = 0xDEAD
-    _place(prog, 0x0026, _encode_sw(rs2=4, rs1=0, off6=21))  # MEM[$2A] = 0xDEAD
+    _place(prog, 0x0024, _encode_lw(rd=4, rs1=0, off6=20))   # R4 = MEM[$14] = 0xDEAD
+    _place(prog, 0x0026, _encode_sw(rs2=4, rs1=0, off6=24))  # MEM[$18] = 0xDEAD
     _place(prog, 0x0028, _encode_jr(rs=0, off6=20))           # spin at $0028
 
     # EPCW target at $0030: write AAAA marker, spin
-    _place(prog, 0x0030, _encode_lw(rd=5, rs1=0, off6=12))   # R5 = MEM[$18] = 0xAAAA
-    _place(prog, 0x0032, _encode_sw(rs2=5, rs1=0, off6=22))  # MEM[$2C] = 0xAAAA
+    _place(prog, 0x0030, _encode_lw(rd=5, rs1=0, off6=22))   # R5 = MEM[$16] = 0xAAAA
+    _place(prog, 0x0032, _encode_sw(rs2=5, rs1=0, off6=26))  # MEM[$1A] = 0xAAAA
     _place(prog, 0x0034, _encode_jr(rs=0, off6=26))           # spin at $0034
 
     # Clear markers
-    prog[0x002A] = 0x00
-    prog[0x002B] = 0x00
-    prog[0x002C] = 0x00
-    prog[0x002D] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
+    prog[0x001A] = 0x00
+    prog[0x001B] = 0x00
 
     _load_program(dut, prog)
 
@@ -2556,14 +2557,14 @@ async def test_epcw_basic(dut):
     await ClockCycles(dut.clk, 300)
 
     # Target marker should be written (RETI went to $0030)
-    lo = _read_ram(dut, 0x002C)
-    hi = _read_ram(dut, 0x002D)
+    lo = _read_ram(dut, 0x001A)
+    hi = _read_ram(dut, 0x001B)
     target_marker = lo | (hi << 8)
     dut._log.info(f"Target marker = {target_marker:#06x} (expected 0xAAAA)")
 
     # Original return point should NOT have executed
-    lo = _read_ram(dut, 0x002A)
-    hi = _read_ram(dut, 0x002B)
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     orig_marker = lo | (hi << 8)
     dut._log.info(f"Original return marker = {orig_marker:#06x} (expected 0x0000)")
 
@@ -2582,27 +2583,30 @@ async def test_epcw_restores_i(dut):
 
     prog = {}
 
+    # Data: 0x0A=jump($0020), 0x12=EPCW target($0030), 0x14=CCCC value
+    # Marker: 0x18=IRQ marker
+
     # Main code: jump past vectors
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=15))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))   # R1 = MEM[$0A] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ handler at $0004: write IRQ marker, spin
-    _place(prog, 0x0004, _encode_lw(rd=6, rs1=0, off6=10))   # R6 = MEM[$14] = 0xCCCC
-    _place(prog, 0x0006, _encode_sw(rs2=6, rs1=0, off6=20))  # MEM[$28] = 0xCCCC
+    _place(prog, 0x0004, _encode_lw(rd=6, rs1=0, off6=20))   # R6 = MEM[$14] = 0xCCCC
+    _place(prog, 0x0006, _encode_sw(rs2=6, rs1=0, off6=24))  # MEM[$18] = 0xCCCC
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))            # spin at $0008
 
     # BRK handler at $000C: EPCW with I=0 in bit 0, then RETI
-    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, off6=9))    # R3 = MEM[$12] = $0030
+    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, off6=18))    # R3 = MEM[$12] = $0030
     _place(prog, 0x000E, _encode_epcw(rs=3))                  # EPC = $0030 (bit 0 = 0 → I=0)
     _place(prog, 0x0010, _encode_reti())                       # PC=$0030, I=0
 
     # Data
+    prog[0x000A] = 0x20  # initial jump target
+    prog[0x000B] = 0x00
     prog[0x0012] = 0x30  # EPCW target: $0030, bit 0 = 0 (I=0)
     prog[0x0013] = 0x00
     prog[0x0014] = 0xCC  # IRQ marker value
     prog[0x0015] = 0xCC
-    prog[0x001E] = 0x20  # initial jump target
-    prog[0x001F] = 0x00
 
     # Continue at $0020: BRK (I=1 from reset, no CLI needed — BRK is unconditional)
     _place(prog, 0x0020, _encode_brk())
@@ -2612,8 +2616,8 @@ async def test_epcw_restores_i(dut):
     _place(prog, 0x0030, _encode_jr(rs=0, off6=24))           # spin at $0030
 
     # Clear marker
-    prog[0x0028] = 0x00
-    prog[0x0029] = 0x00
+    prog[0x0018] = 0x00
+    prog[0x0019] = 0x00
 
     _load_program(dut, prog)
 
@@ -2627,9 +2631,9 @@ async def test_epcw_restores_i(dut):
     await ClockCycles(dut.clk, 300)
 
     # After BRK handler → EPCW sets EPC=$0030 (I=0) → RETI sets I=0 and jumps to $0030
-    # With IRQB=0 and I=0, IRQ should fire → handler writes 0xCCCC to $0028
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    # With IRQB=0 and I=0, IRQ should fire → handler writes 0xCCCC to $0018
+    lo = _read_ram(dut, 0x0018)
+    hi = _read_ram(dut, 0x0019)
     irq_marker = lo | (hi << 8)
     dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0xCCCC)")
     assert irq_marker == 0xCCCC, f"EPCW did not restore I=0! IRQ didn't fire. Got {irq_marker:#06x}"
@@ -2724,7 +2728,7 @@ async def test_lb_basic(dut):
     prog[0x0011] = 0x00
 
     # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LB R2, 0(R1)    ; R2 = sext(MEM[0x0020]) = 0x0042
     _place(prog, 0x0002, _encode_lb(rs1=1, off6=0, rd=2))
     # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
@@ -2736,8 +2740,8 @@ async def test_lb_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"R2 stored = {val:#06x}")
     assert val == 0x0042, f"Expected 0x0042, got {val:#06x}"
@@ -2764,7 +2768,7 @@ async def test_lb_sign_extend(dut):
     prog[0x0011] = 0x00
 
     # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LB R2, 0(R1)    ; R2 = sext(MEM[0x0020]) = 0xFFA5
     _place(prog, 0x0002, _encode_lb(rs1=1, off6=0, rd=2))
     # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
@@ -2776,8 +2780,8 @@ async def test_lb_sign_extend(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"R2 stored = {val:#06x}")
     assert val == 0xFFA5, f"Expected 0xFFA5, got {val:#06x}"
@@ -2804,7 +2808,7 @@ async def test_lbu_basic(dut):
     prog[0x0011] = 0x00
 
     # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LBU R2, 0(R1)   ; R2 = zext(MEM[0x0020]) = 0x00A5
     _place(prog, 0x0002, _encode_lbu(rs1=1, off6=0, rd=2))
     # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
@@ -2816,8 +2820,8 @@ async def test_lbu_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"R2 stored = {val:#06x}")
     assert val == 0x00A5, f"Expected 0x00A5, got {val:#06x}"
@@ -2849,9 +2853,9 @@ async def test_sb_basic(dut):
     prog[0x0013] = 0x00
 
     # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0xBEEF
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LW R2, 9(R0)    ; R2 = MEM[0x12] = 0x0030
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=9))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     # 0x0004: SB R1, 0(R2)    ; MEM[0x0030] = R1[7:0] = 0xEF
     _place(prog, 0x0004, _encode_sb(rs1=2, off6=0, rs2=1))
     # 0x0006: JR R0, 3        ; spin at 0x0006
@@ -2889,7 +2893,7 @@ async def test_byte_negative_offset(dut):
     prog[0x0011] = 0x00
 
     # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LB R2, -1(R1)   ; R2 = sext(MEM[0x001F]) = 0x007F
     _place(prog, 0x0002, _encode_lb(rs1=1, off6=-1, rd=2))
     # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
@@ -2901,8 +2905,8 @@ async def test_byte_negative_offset(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"R2 stored = {val:#06x}")
     assert val == 0x007F, f"Expected 0x007F, got {val:#06x}"
@@ -3003,8 +3007,8 @@ async def test_auipc_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0004)")
     assert val == 0x0004, f"Expected 0x0004, got {val:#06x}"
@@ -3034,8 +3038,8 @@ async def test_auipc_positive_offset(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0042)")
     assert val == 0x0042, f"Expected 0x0042, got {val:#06x}"
@@ -3057,8 +3061,8 @@ async def test_auipc_negative_offset(dut):
     # Place AUIPC at 0x0080: AUIPC R1, -1  ; R1 = 0x0082 + (-1 << 6) = 0x0082 + 0xFFC0 = 0x0042
     # First: bootstrap to 0x0080 using LW + JR
     # Data at 0x0020: LE word 0x0080 (jump target)
-    prog[0x0020] = 0x80
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0x80
+    prog[0x0011] = 0x00
     # 0x0000: LW R2, 16(R0)  ; R2 = MEM[0x20] = 0x0080
     _place(prog, 0x0000, _encode_lw(rd=2, rs1=0, off6=16))
     # 0x0002: JR R2, 0       ; jump to 0x0080
@@ -3075,8 +3079,8 @@ async def test_auipc_negative_offset(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 400)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"AUIPC result: {val:#06x} (expected 0x0042)")
     assert val == 0x0042, f"Expected 0x0042, got {val:#06x}"
@@ -3104,7 +3108,7 @@ async def test_auipc_with_lw(dut):
     # 0x0000: AUIPC R1, 1    ; R1 = 0x0002 + 0x0040 = 0x0042
     _place(prog, 0x0000, _encode_auipc(rd=1, imm10=1))
     # 0x0002: LW R2, 8(R1)   ; R2 = MEM[0x0042 + 16] = MEM[0x0052] = 0xBEEF
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=1, off6=8))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=1, off6=16))
     # 0x0004: SW R2, 20(R0)  ; MEM[0x28] = R2
     _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
     # 0x0006: JR R0, 3       ; spin at 0x0006
@@ -3114,8 +3118,8 @@ async def test_auipc_with_lw(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"LW via AUIPC result: {val:#06x} (expected 0xBEEF)")
     assert val == 0xBEEF, f"Expected 0xBEEF, got {val:#06x}"
@@ -3145,8 +3149,8 @@ async def test_auipc_large_imm10(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"AUIPC result: {val:#06x} (expected 0x4002)")
     assert val == 0x4002, f"Expected 0x4002, got {val:#06x}"
@@ -3218,15 +3222,15 @@ async def test_add_basic(dut):
 
     prog = {}
     # Data: 0x1234 at 0x0020, 0x5678 at 0x0022
-    prog[0x0020] = 0x34
-    prog[0x0021] = 0x12
-    prog[0x0022] = 0x78
-    prog[0x0023] = 0x56
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0x12
+    prog[0x0012] = 0x78
+    prog[0x0013] = 0x56
 
     # 0x0000: LW R1, 16(R0)  ; R1 = 0x1234
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LW R2, 17(R0)  ; R2 = 0x5678
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     # 0x0004: ADD R3, R1, R2 ; R3 = R1 + R2 = 0x68AC
     _place(prog, 0x0004, _encode_add(rd=3, rs1=1, rs2=2))
     # 0x0006: SW R3, 20(R0)  ; MEM[0x28] = R3
@@ -3238,8 +3242,8 @@ async def test_add_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"ADD result = {val:#06x} (expected 0x68AC)")
     assert val == 0x68AC, f"Expected 0x68AC, got {val:#06x}"
@@ -3258,13 +3262,13 @@ async def test_sub_basic(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x78
-    prog[0x0021] = 0x56
-    prog[0x0022] = 0x34
-    prog[0x0023] = 0x12
+    prog[0x0010] = 0x78
+    prog[0x0011] = 0x56
+    prog[0x0012] = 0x34
+    prog[0x0013] = 0x12
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sub(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3273,8 +3277,8 @@ async def test_sub_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SUB result = {val:#06x} (expected 0x4444)")
     assert val == 0x4444, f"Expected 0x4444, got {val:#06x}"
@@ -3293,13 +3297,13 @@ async def test_sub_borrow(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x00
-    prog[0x0021] = 0x01
-    prog[0x0022] = 0x01
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x00
+    prog[0x0011] = 0x01
+    prog[0x0012] = 0x01
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sub(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3308,8 +3312,8 @@ async def test_sub_borrow(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SUB borrow result = {val:#06x} (expected 0x00FF)")
     assert val == 0x00FF, f"Expected 0x00FF, got {val:#06x}"
@@ -3328,13 +3332,13 @@ async def test_and_basic(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x0F
-    prog[0x0021] = 0xFF
-    prog[0x0022] = 0xFF
-    prog[0x0023] = 0x0F
+    prog[0x0010] = 0x0F
+    prog[0x0011] = 0xFF
+    prog[0x0012] = 0xFF
+    prog[0x0013] = 0x0F
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_and(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3343,8 +3347,8 @@ async def test_and_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"AND result = {val:#06x} (expected 0x0F0F)")
     assert val == 0x0F0F, f"Expected 0x0F0F, got {val:#06x}"
@@ -3363,13 +3367,13 @@ async def test_or_basic(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x00
-    prog[0x0021] = 0xF0
-    prog[0x0022] = 0xF0
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x00
+    prog[0x0011] = 0xF0
+    prog[0x0012] = 0xF0
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_or(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3378,8 +3382,8 @@ async def test_or_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"OR result = {val:#06x} (expected 0xF0F0)")
     assert val == 0xF0F0, f"Expected 0xF0F0, got {val:#06x}"
@@ -3398,13 +3402,13 @@ async def test_xor_basic(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xFF
-    prog[0x0021] = 0xFF
-    prog[0x0022] = 0xAA
-    prog[0x0023] = 0xAA
+    prog[0x0010] = 0xFF
+    prog[0x0011] = 0xFF
+    prog[0x0012] = 0xAA
+    prog[0x0013] = 0xAA
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_xor(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3413,8 +3417,8 @@ async def test_xor_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"XOR result = {val:#06x} (expected 0x5555)")
     assert val == 0x5555, f"Expected 0x5555, got {val:#06x}"
@@ -3433,8 +3437,8 @@ async def test_alu_same_reg(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x34
-    prog[0x0021] = 0x12
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0x12
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_add(rd=1, rs1=1, rs2=1))
@@ -3445,8 +3449,8 @@ async def test_alu_same_reg(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"ADD same reg result = {val:#06x} (expected 0x2468)")
     assert val == 0x2468, f"Expected 0x2468, got {val:#06x}"
@@ -3518,8 +3522,8 @@ async def test_li_positive(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"LI result = {val:#06x} (expected 0x001F)")
     assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
@@ -3546,8 +3550,8 @@ async def test_li_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"LI result = {val:#06x} (expected 0xFFFF)")
     assert val == 0xFFFF, f"Expected 0xFFFF, got {val:#06x}"
@@ -3574,8 +3578,8 @@ async def test_li_zero(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"LI result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -3594,13 +3598,13 @@ async def test_slt_true(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x05
-    prog[0x0021] = 0x00
-    prog[0x0022] = 0x0A
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x05
+    prog[0x0011] = 0x00
+    prog[0x0012] = 0x0A
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3609,8 +3613,8 @@ async def test_slt_true(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLT result = {val:#06x} (expected 0x0001)")
     assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
@@ -3629,13 +3633,13 @@ async def test_slt_false(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x0A
-    prog[0x0021] = 0x00
-    prog[0x0022] = 0x05
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x0A
+    prog[0x0011] = 0x00
+    prog[0x0012] = 0x05
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3644,8 +3648,8 @@ async def test_slt_false(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLT result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -3664,13 +3668,13 @@ async def test_slt_equal(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x05
-    prog[0x0021] = 0x00
-    prog[0x0022] = 0x05
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x05
+    prog[0x0011] = 0x00
+    prog[0x0012] = 0x05
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3679,8 +3683,8 @@ async def test_slt_equal(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLT result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -3699,13 +3703,13 @@ async def test_slt_negative(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xFB
-    prog[0x0021] = 0xFF
-    prog[0x0022] = 0x05
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0xFB
+    prog[0x0011] = 0xFF
+    prog[0x0012] = 0x05
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3714,8 +3718,8 @@ async def test_slt_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLT result = {val:#06x} (expected 0x0001)")
     assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
@@ -3734,13 +3738,13 @@ async def test_slt_negative_false(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x05
-    prog[0x0021] = 0x00
-    prog[0x0022] = 0xFB
-    prog[0x0023] = 0xFF
+    prog[0x0010] = 0x05
+    prog[0x0011] = 0x00
+    prog[0x0012] = 0xFB
+    prog[0x0013] = 0xFF
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3749,8 +3753,8 @@ async def test_slt_negative_false(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLT result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -3769,13 +3773,13 @@ async def test_sltu_true(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x05
-    prog[0x0021] = 0x00
-    prog[0x0022] = 0x0A
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x05
+    prog[0x0011] = 0x00
+    prog[0x0012] = 0x0A
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3784,8 +3788,8 @@ async def test_sltu_true(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLTU result = {val:#06x} (expected 0x0001)")
     assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
@@ -3804,13 +3808,13 @@ async def test_sltu_false(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x0A
-    prog[0x0021] = 0x00
-    prog[0x0022] = 0x05
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x0A
+    prog[0x0011] = 0x00
+    prog[0x0012] = 0x05
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3819,8 +3823,8 @@ async def test_sltu_false(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLTU result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -3839,13 +3843,13 @@ async def test_sltu_large(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x05
-    prog[0x0021] = 0x00
-    prog[0x0022] = 0xFF
-    prog[0x0023] = 0xFF
+    prog[0x0010] = 0x05
+    prog[0x0011] = 0x00
+    prog[0x0012] = 0xFF
+    prog[0x0013] = 0xFF
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3854,8 +3858,8 @@ async def test_sltu_large(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLTU result = {val:#06x} (expected 0x0001)")
     assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
@@ -3874,13 +3878,13 @@ async def test_sltu_large_reverse(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xFF
-    prog[0x0021] = 0xFF
-    prog[0x0022] = 0x05
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0xFF
+    prog[0x0011] = 0xFF
+    prog[0x0012] = 0x05
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -3889,8 +3893,8 @@ async def test_sltu_large_reverse(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLTU result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -3945,8 +3949,8 @@ async def test_lui_positive(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"LUI result = {val:#06x} (expected 0x1200)")
     assert val == 0x1200, f"Expected 0x1200, got {val:#06x}"
@@ -3973,8 +3977,8 @@ async def test_lui_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"LUI result = {val:#06x} (expected 0xFFC0)")
     assert val == 0xFFC0, f"Expected 0xFFC0, got {val:#06x}"
@@ -4001,8 +4005,8 @@ async def test_lui_zero(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"LUI result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -4036,8 +4040,8 @@ async def test_bz_taken(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"BZ taken result = {val:#06x} (expected 0x001F)")
     assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
@@ -4069,8 +4073,8 @@ async def test_bz_not_taken(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"BZ not taken result = {val:#06x} (expected 0x0007)")
     assert val == 0x0007, f"Expected 0x0007, got {val:#06x}"
@@ -4105,8 +4109,8 @@ async def test_bnz_taken(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"BNZ taken result = {val:#06x} (expected 0x001F)")
     assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
@@ -4137,8 +4141,8 @@ async def test_bnz_not_taken(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"BNZ not taken result = {val:#06x} (expected 0x0007)")
     assert val == 0x0007, f"Expected 0x0007, got {val:#06x}"
@@ -4172,8 +4176,8 @@ async def test_bnz_high_byte(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"BNZ high byte result = {val:#06x} (expected 0x001F)")
     assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
@@ -4239,8 +4243,8 @@ async def test_j_forward(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"J forward result = {val:#06x} (expected 0x001F)")
     assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
@@ -4276,8 +4280,8 @@ async def test_j_backward(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"J backward result = {val:#06x} (expected 0x001F)")
     assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
@@ -4313,8 +4317,8 @@ async def test_jal_ret(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"JAL+JR R6 result = {val:#06x} (expected 0x001F)")
     assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
@@ -4350,8 +4354,8 @@ async def test_jal_link_value(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"JAL link value = {val:#06x} (expected 0x0002)")
     assert val == 0x0002, f"Expected 0x0002, got {val:#06x}"
@@ -4387,8 +4391,8 @@ async def test_jalr_ret(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"JALR+JR R6 result = {val:#06x} (expected 0x001F)")
     assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
@@ -4448,8 +4452,8 @@ async def test_addi_positive(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x05
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0x05
+    prog[0x0011] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_addi(rd=1, imm6=10))
@@ -4460,8 +4464,8 @@ async def test_addi_positive(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"ADDI result = {val:#06x} (expected 0x000F)")
     assert val == 0x000F, f"Expected 0x000F, got {val:#06x}"
@@ -4480,8 +4484,8 @@ async def test_addi_negative(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x10
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0x10
+    prog[0x0011] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_addi(rd=1, imm6=-4))
@@ -4492,8 +4496,8 @@ async def test_addi_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"ADDI result = {val:#06x} (expected 0x000C)")
     assert val == 0x000C, f"Expected 0x000C, got {val:#06x}"
@@ -4512,8 +4516,8 @@ async def test_addi_overflow(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xFF
-    prog[0x0021] = 0xFF
+    prog[0x0010] = 0xFF
+    prog[0x0011] = 0xFF
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_addi(rd=1, imm6=1))
@@ -4524,8 +4528,8 @@ async def test_addi_overflow(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"ADDI result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -4544,8 +4548,8 @@ async def test_andi_mask(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xFF
-    prog[0x0021] = 0x12
+    prog[0x0010] = 0xFF
+    prog[0x0011] = 0x12
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_andi(rd=1, imm6=31))   # 0x1F = 31
@@ -4556,8 +4560,8 @@ async def test_andi_mask(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"ANDI result = {val:#06x} (expected 0x001F)")
     assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
@@ -4576,8 +4580,8 @@ async def test_andi_neg1(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xCD
-    prog[0x0021] = 0xAB
+    prog[0x0010] = 0xCD
+    prog[0x0011] = 0xAB
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_andi(rd=1, imm6=-1))   # sext(-1) = 0xFFFF
@@ -4588,8 +4592,8 @@ async def test_andi_neg1(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"ANDI result = {val:#06x} (expected 0xABCD)")
     assert val == 0xABCD, f"Expected 0xABCD, got {val:#06x}"
@@ -4608,8 +4612,8 @@ async def test_ori_set_bits(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x00
-    prog[0x0021] = 0x12
+    prog[0x0010] = 0x00
+    prog[0x0011] = 0x12
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_ori(rd=1, imm6=15))    # 0x0F = 15
@@ -4620,8 +4624,8 @@ async def test_ori_set_bits(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"ORI result = {val:#06x} (expected 0x120F)")
     assert val == 0x120F, f"Expected 0x120F, got {val:#06x}"
@@ -4640,8 +4644,8 @@ async def test_ori_neg1(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x34
-    prog[0x0021] = 0x12
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0x12
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_ori(rd=1, imm6=-1))
@@ -4652,8 +4656,8 @@ async def test_ori_neg1(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"ORI result = {val:#06x} (expected 0xFFFF)")
     assert val == 0xFFFF, f"Expected 0xFFFF, got {val:#06x}"
@@ -4672,8 +4676,8 @@ async def test_xori_toggle(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xFF
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0xFF
+    prog[0x0011] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_xori(rd=1, imm6=31))   # 0x1F
@@ -4684,8 +4688,8 @@ async def test_xori_toggle(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"XORI result = {val:#06x} (expected 0x00E0)")
     assert val == 0x00E0, f"Expected 0x00E0, got {val:#06x}"
@@ -4704,8 +4708,8 @@ async def test_xori_not(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x34
-    prog[0x0021] = 0x12
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0x12
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_xori(rd=1, imm6=-1))
@@ -4716,8 +4720,8 @@ async def test_xori_not(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"XORI result = {val:#06x} (expected 0xEDCB)")
     assert val == 0xEDCB, f"Expected 0xEDCB, got {val:#06x}"
@@ -4736,8 +4740,8 @@ async def test_sltif_true(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x05
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0x05
+    prog[0x0011] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltif(rs=1, imm6=10))
@@ -4749,8 +4753,8 @@ async def test_sltif_true(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLTIF result = {val:#06x} (expected 0x0001)")
     assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
@@ -4769,8 +4773,8 @@ async def test_sltif_false(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x0A
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0x0A
+    prog[0x0011] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltif(rs=1, imm6=3))
@@ -4781,8 +4785,8 @@ async def test_sltif_false(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLTIF result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -4801,8 +4805,8 @@ async def test_sltif_negative(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xFE
-    prog[0x0021] = 0xFF
+    prog[0x0010] = 0xFE
+    prog[0x0011] = 0xFF
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltif(rs=1, imm6=-1))
@@ -4813,8 +4817,8 @@ async def test_sltif_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLTIF result = {val:#06x} (expected 0x0001)")
     assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
@@ -4833,8 +4837,8 @@ async def test_sltif_equal(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x05
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0x05
+    prog[0x0011] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltif(rs=1, imm6=5))
@@ -4845,8 +4849,8 @@ async def test_sltif_equal(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLTIF result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -4865,8 +4869,8 @@ async def test_sltiuf_true(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x05
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0x05
+    prog[0x0011] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltiuf(rs=1, imm6=10))
@@ -4877,8 +4881,8 @@ async def test_sltiuf_true(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLTIUF result = {val:#06x} (expected 0x0001)")
     assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
@@ -4897,8 +4901,8 @@ async def test_sltiuf_false(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xFF
-    prog[0x0021] = 0xFF
+    prog[0x0010] = 0xFF
+    prog[0x0011] = 0xFF
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltiuf(rs=1, imm6=3))
@@ -4909,8 +4913,8 @@ async def test_sltiuf_false(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLTIUF result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -4929,8 +4933,8 @@ async def test_xorif_basic(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xFF
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0xFF
+    prog[0x0011] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_xorif(rs=1, imm6=31))
@@ -4944,15 +4948,15 @@ async def test_xorif_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"XORIF result = {val:#06x} (expected 0x00E0)")
     assert val == 0x00E0, f"Expected 0x00E0, got {val:#06x}"
 
     # Verify source R1 is preserved
-    lo1 = _read_ram(dut, 0x002C)
-    hi1 = _read_ram(dut, 0x002D)
+    lo1 = _read_ram(dut, 0x0016)
+    hi1 = _read_ram(dut, 0x0017)
     val1 = lo1 | (hi1 << 8)
     dut._log.info(f"R1 preserved = {val1:#06x} (expected 0x00FF)")
     assert val1 == 0x00FF, f"Expected 0x00FF, got {val1:#06x}"
@@ -4971,8 +4975,8 @@ async def test_xorif_equality(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x05
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0x05
+    prog[0x0011] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_xorif(rs=1, imm6=5))
@@ -4983,8 +4987,8 @@ async def test_xorif_equality(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"XORIF result = {val:#06x} (expected 0x0000)")
     assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
@@ -5039,13 +5043,13 @@ async def test_sll_basic(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x34
-    prog[0x0021] = 0x12
-    prog[0x0022] = 0x04
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0x12
+    prog[0x0012] = 0x04
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5054,8 +5058,8 @@ async def test_sll_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLL result = {val:#06x} (expected 0x2340)")
     assert val == 0x2340, f"Expected 0x2340, got {val:#06x}"
@@ -5074,13 +5078,13 @@ async def test_sll_by_zero(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xCD
-    prog[0x0021] = 0xAB
-    prog[0x0022] = 0x00
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0xCD
+    prog[0x0011] = 0xAB
+    prog[0x0012] = 0x00
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5089,8 +5093,8 @@ async def test_sll_by_zero(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLL result = {val:#06x} (expected 0xABCD)")
     assert val == 0xABCD, f"Expected 0xABCD, got {val:#06x}"
@@ -5109,13 +5113,13 @@ async def test_sll_by_8(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xFF
-    prog[0x0021] = 0x00
-    prog[0x0022] = 0x08
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0xFF
+    prog[0x0011] = 0x00
+    prog[0x0012] = 0x08
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5124,8 +5128,8 @@ async def test_sll_by_8(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLL result = {val:#06x} (expected 0xFF00)")
     assert val == 0xFF00, f"Expected 0xFF00, got {val:#06x}"
@@ -5144,13 +5148,13 @@ async def test_sll_by_15(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x01
-    prog[0x0021] = 0x00
-    prog[0x0022] = 0x0F
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x01
+    prog[0x0011] = 0x00
+    prog[0x0012] = 0x0F
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5159,8 +5163,8 @@ async def test_sll_by_15(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLL result = {val:#06x} (expected 0x8000)")
     assert val == 0x8000, f"Expected 0x8000, got {val:#06x}"
@@ -5179,13 +5183,13 @@ async def test_sll_cross_byte(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x37
-    prog[0x0021] = 0x00
-    prog[0x0022] = 0x09
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x37
+    prog[0x0011] = 0x00
+    prog[0x0012] = 0x09
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5194,8 +5198,8 @@ async def test_sll_cross_byte(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLL result = {val:#06x} (expected 0x6E00)")
     assert val == 0x6E00, f"Expected 0x6E00, got {val:#06x}"
@@ -5214,13 +5218,13 @@ async def test_srl_basic(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x34
-    prog[0x0021] = 0x12
-    prog[0x0022] = 0x04
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0x12
+    prog[0x0012] = 0x04
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5229,8 +5233,8 @@ async def test_srl_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRL result = {val:#06x} (expected 0x0123)")
     assert val == 0x0123, f"Expected 0x0123, got {val:#06x}"
@@ -5249,13 +5253,13 @@ async def test_srl_by_zero(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xCD
-    prog[0x0021] = 0xAB
-    prog[0x0022] = 0x00
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0xCD
+    prog[0x0011] = 0xAB
+    prog[0x0012] = 0x00
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5264,8 +5268,8 @@ async def test_srl_by_zero(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRL result = {val:#06x} (expected 0xABCD)")
     assert val == 0xABCD, f"Expected 0xABCD, got {val:#06x}"
@@ -5284,13 +5288,13 @@ async def test_srl_by_8(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x00
-    prog[0x0021] = 0xAB
-    prog[0x0022] = 0x08
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x00
+    prog[0x0011] = 0xAB
+    prog[0x0012] = 0x08
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5299,8 +5303,8 @@ async def test_srl_by_8(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRL result = {val:#06x} (expected 0x00AB)")
     assert val == 0x00AB, f"Expected 0x00AB, got {val:#06x}"
@@ -5319,13 +5323,13 @@ async def test_srl_by_15(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x00
-    prog[0x0021] = 0x80
-    prog[0x0022] = 0x0F
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x00
+    prog[0x0011] = 0x80
+    prog[0x0012] = 0x0F
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5334,8 +5338,8 @@ async def test_srl_by_15(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRL result = {val:#06x} (expected 0x0001)")
     assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
@@ -5354,13 +5358,13 @@ async def test_sra_positive(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x34
-    prog[0x0021] = 0x12
-    prog[0x0022] = 0x04
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0x12
+    prog[0x0012] = 0x04
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5369,8 +5373,8 @@ async def test_sra_positive(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRA result = {val:#06x} (expected 0x0123)")
     assert val == 0x0123, f"Expected 0x0123, got {val:#06x}"
@@ -5389,13 +5393,13 @@ async def test_sra_negative(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x34
-    prog[0x0021] = 0xF2
-    prog[0x0022] = 0x04
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0xF2
+    prog[0x0012] = 0x04
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5404,8 +5408,8 @@ async def test_sra_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRA result = {val:#06x} (expected 0xFF23)")
     assert val == 0xFF23, f"Expected 0xFF23, got {val:#06x}"
@@ -5424,13 +5428,13 @@ async def test_sra_by_8_negative(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x00
-    prog[0x0021] = 0x80
-    prog[0x0022] = 0x08
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x00
+    prog[0x0011] = 0x80
+    prog[0x0012] = 0x08
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5439,8 +5443,8 @@ async def test_sra_by_8_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRA result = {val:#06x} (expected 0xFF80)")
     assert val == 0xFF80, f"Expected 0xFF80, got {val:#06x}"
@@ -5459,13 +5463,13 @@ async def test_sra_by_15_negative(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x00
-    prog[0x0021] = 0x80
-    prog[0x0022] = 0x0F
-    prog[0x0023] = 0x00
+    prog[0x0010] = 0x00
+    prog[0x0011] = 0x80
+    prog[0x0012] = 0x0F
+    prog[0x0013] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=17))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
     _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
@@ -5474,8 +5478,8 @@ async def test_sra_by_15_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRA result = {val:#06x} (expected 0xFFFF)")
     assert val == 0xFFFF, f"Expected 0xFFFF, got {val:#06x}"
@@ -5494,8 +5498,8 @@ async def test_slli_basic(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x34
-    prog[0x0021] = 0x12
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0x12
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_slli(rd=1, imm4=4))
@@ -5506,8 +5510,8 @@ async def test_slli_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLLI result = {val:#06x} (expected 0x2340)")
     assert val == 0x2340, f"Expected 0x2340, got {val:#06x}"
@@ -5526,8 +5530,8 @@ async def test_slli_by_8(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0xAB
-    prog[0x0021] = 0x00
+    prog[0x0010] = 0xAB
+    prog[0x0011] = 0x00
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_slli(rd=1, imm4=8))
@@ -5538,8 +5542,8 @@ async def test_slli_by_8(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SLLI result = {val:#06x} (expected 0xAB00)")
     assert val == 0xAB00, f"Expected 0xAB00, got {val:#06x}"
@@ -5558,8 +5562,8 @@ async def test_srli_basic(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x34
-    prog[0x0021] = 0x12
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0x12
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_srli(rd=1, imm4=4))
@@ -5570,8 +5574,8 @@ async def test_srli_basic(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRLI result = {val:#06x} (expected 0x0123)")
     assert val == 0x0123, f"Expected 0x0123, got {val:#06x}"
@@ -5590,8 +5594,8 @@ async def test_srli_by_8(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x00
-    prog[0x0021] = 0xAB
+    prog[0x0010] = 0x00
+    prog[0x0011] = 0xAB
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_srli(rd=1, imm4=8))
@@ -5602,8 +5606,8 @@ async def test_srli_by_8(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRLI result = {val:#06x} (expected 0x00AB)")
     assert val == 0x00AB, f"Expected 0x00AB, got {val:#06x}"
@@ -5622,8 +5626,8 @@ async def test_srai_negative(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x34
-    prog[0x0021] = 0xF2
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0xF2
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_srai(rd=1, imm4=4))
@@ -5634,8 +5638,8 @@ async def test_srai_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRAI result = {val:#06x} (expected 0xFF23)")
     assert val == 0xFF23, f"Expected 0xFF23, got {val:#06x}"
@@ -5654,8 +5658,8 @@ async def test_srai_by_15_negative(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0020] = 0x00
-    prog[0x0021] = 0x80
+    prog[0x0010] = 0x00
+    prog[0x0011] = 0x80
 
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_srai(rd=1, imm4=15))
@@ -5666,8 +5670,8 @@ async def test_srai_by_15_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
-    lo = _read_ram(dut, 0x0028)
-    hi = _read_ram(dut, 0x0029)
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
     val = lo | (hi << 8)
     dut._log.info(f"SRAI result = {val:#06x} (expected 0xFFFF)")
     assert val == 0xFFFF, f"Expected 0xFFFF, got {val:#06x}"
