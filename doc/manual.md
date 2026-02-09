@@ -122,8 +122,8 @@ All instructions are 16 bits. Bits [15:12] form the **opcode**, which determines
 | Opcode | Format | Field layout | Instructions |
 |---|---|---|---|
 | 0000..0011 | **U** | `[prefix:3][imm10:10][rd:3]` | LUI, AUIPC |
-| 0100..0101 | **J** | `[prefix:4][off12:12]` | J, JAL |
-| 0110..1010 | **S** | `[prefix:4][off6[2:0]:3][off6[5:3]:3][rs1:3][rd/rs2:3]` | LB, LBU, LW, SB, SW |
+| 0100..0101 | **J** | `[prefix:4][imm12:12]` | J, JAL |
+| 0110..1010 | **S** | `[prefix:4][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd/rs2:3]` | LB, LBU, LW, SB, SW |
 | 1011..1111 | **C** | `[1][grp:3][sub:3][payload:6][rd:3]` | All others |
 
 U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. All other formats use the full 4-bit opcode. Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction. S-format scrambles the immediate so rs1 stays at [5:3] across all formats.
@@ -131,10 +131,10 @@ U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. Al
 ### LW — Load Word
 
 ```
-[1000][off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+[1000][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
 ```
 
-`rd = MEM[rs1 + sext(off6) * 2]`
+`rd = MEM[rs1 + sext(imm6) * 2]`
 
 Loads a 16-bit word from memory. The 6-bit signed offset is scaled by 2, giving a range of ±64 bytes from the base register. The memory address must be word-aligned (bit 0 = 0). The low byte is read first, then the high byte.
 
@@ -143,10 +143,10 @@ Loads a 16-bit word from memory. The 6-bit signed offset is scaled by 2, giving 
 ### SW — Store Word
 
 ```
-[1010][off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
+[1010][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rs2:3]
 ```
 
-`MEM[rs1 + sext(off6) * 2] = rs2`
+`MEM[rs1 + sext(imm6) * 2] = rs2`
 
 Stores a 16-bit word to memory. The offset encoding is identical to LW. The low byte is written first, then the high byte.
 
@@ -155,10 +155,10 @@ Stores a 16-bit word to memory. The offset encoding is identical to LW. The low 
 ### LB — Load Byte (Sign-Extend)
 
 ```
-[0110][off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+[0110][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
 ```
 
-`rd = sext(MEM[rs1 + sext(off6)])`
+`rd = sext(MEM[rs1 + sext(imm6)])`
 
 Loads a single byte from memory and sign-extends it to 16 bits. The 6-bit signed offset is unscaled (range ±32 bytes from the base register). If bit 7 of the loaded byte is set, the high byte of rd is filled with 0xFF; otherwise 0x00.
 
@@ -167,10 +167,10 @@ Loads a single byte from memory and sign-extends it to 16 bits. The 6-bit signed
 ### LBU — Load Byte (Zero-Extend)
 
 ```
-[0111][off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+[0111][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
 ```
 
-`rd = zext(MEM[rs1 + sext(off6)])`
+`rd = zext(MEM[rs1 + sext(imm6)])`
 
 Loads a single byte from memory and zero-extends it to 16 bits. The high byte of rd is always 0x00. Encoding and offset handling are identical to LB.
 
@@ -179,10 +179,10 @@ Loads a single byte from memory and zero-extends it to 16 bits. The high byte of
 ### SB — Store Byte
 
 ```
-[1001][off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
+[1001][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rs2:3]
 ```
 
-`MEM[rs1 + sext(off6)] = rs2[7:0]`
+`MEM[rs1 + sext(imm6)] = rs2[7:0]`
 
 Stores the low byte of rs2 to memory. Only one byte is written; adjacent bytes are unaffected. The 6-bit signed offset is unscaled (range ±32 bytes).
 
@@ -191,10 +191,10 @@ Stores the low byte of rs2 to memory. Only one byte is written; adjacent bytes a
 ### JR — Jump Register
 
 ```
-[1101110][off6:6][rs:3]
+[1101110][imm6:6][rs:3]
 ```
 
-`PC = rs + sext(off6) * 2`
+`PC = rs + sext(imm6) * 2`
 
 Unconditional jump to the address computed from a register plus a scaled signed offset. The 6-bit offset is scaled by 2, giving a range of ±64 bytes from the register value.
 
@@ -203,10 +203,10 @@ Unconditional jump to the address computed from a register plus a scaled signed 
 ### BZ — Branch if Zero
 
 ```
-[1101000][off6:6][rs:3]
+[1101000][imm6:6][rs:3]
 ```
 
-`if rs == 0: PC = PC + sext(off6) * 2`
+`if rs == 0: PC = PC + sext(imm6) * 2`
 
 Branches to a PC-relative target if the source register is zero. The 6-bit signed offset is scaled by 2, giving a range of ±64 bytes from the next instruction address. The zero check spans two cycles (one byte per cycle) while the ALU speculatively computes the branch target in parallel. Pairs with SLT/SLTU for compare-and-branch patterns: `SLT t, a, b; BZ t, target` (branch if NOT less than).
 
@@ -215,10 +215,10 @@ Branches to a PC-relative target if the source register is zero. The 6-bit signe
 ### BNZ — Branch if Non-Zero
 
 ```
-[1101001][off6:6][rs:3]
+[1101001][imm6:6][rs:3]
 ```
 
-`if rs != 0: PC = PC + sext(off6) * 2`
+`if rs != 0: PC = PC + sext(imm6) * 2`
 
 Branches to a PC-relative target if the source register is non-zero. Encoding and offset handling are identical to BZ. Pairs with SLT/SLTU for compare-and-branch patterns: `SLT t, a, b; BNZ t, target` (branch if less than).
 
@@ -227,10 +227,10 @@ Branches to a PC-relative target if the source register is non-zero. Encoding an
 ### BLTZ — Branch if Less Than Zero
 
 ```
-[1101010][off6:6][rs:3]
+[1101010][imm6:6][rs:3]
 ```
 
-`if rs < 0: PC = PC + sext(off6) * 2`
+`if rs < 0: PC = PC + sext(imm6) * 2`
 
 Branches to a PC-relative target if the source register is negative (sign bit set). The 6-bit signed offset is scaled by 2, giving a range of ±64 bytes from the next instruction address. Tests only the sign bit (rs[15]), so the branch decision is faster than a full zero check. Useful for loop termination on signed counters and sign-dependent control flow.
 
@@ -239,10 +239,10 @@ Branches to a PC-relative target if the source register is negative (sign bit se
 ### BGEZ — Branch if Greater or Equal to Zero
 
 ```
-[1101011][off6:6][rs:3]
+[1101011][imm6:6][rs:3]
 ```
 
-`if rs >= 0: PC = PC + sext(off6) * 2`
+`if rs >= 0: PC = PC + sext(imm6) * 2`
 
 Branches to a PC-relative target if the source register is non-negative (sign bit clear). Encoding and offset handling are identical to BLTZ. Zero is considered non-negative (sign bit = 0), so BGEZ branches on both zero and positive values.
 
@@ -251,10 +251,10 @@ Branches to a PC-relative target if the source register is non-negative (sign bi
 ### J — Jump
 
 ```
-[0100][off12:12]
+[0100][imm12:12]
 ```
 
-`PC = PC + sext(off12) * 2`
+`PC = PC + sext(imm12) * 2`
 
 Unconditional PC-relative jump. The 12-bit signed offset is scaled by 2, giving a range of ±4096 bytes from the next instruction address. Uses the ALU to compute the target in two cycles (low byte, then high byte with carry).
 
@@ -263,10 +263,10 @@ Unconditional PC-relative jump. The 12-bit signed offset is scaled by 2, giving 
 ### JAL — Jump and Link
 
 ```
-[0101][off12:12]
+[0101][imm12:12]
 ```
 
-`R6 = PC+2; PC = PC + sext(off12) * 2`
+`R6 = PC+2; PC = PC + sext(imm12) * 2`
 
 Unconditional PC-relative jump that saves the return address in R6 (link register). The offset encoding is identical to J. JAL writes R6 = PC+2 (the address of the next instruction after JAL), then jumps to the target. Used for subroutine calls; return with `JR R6, 0`.
 
@@ -275,10 +275,10 @@ Unconditional PC-relative jump that saves the return address in R6 (link registe
 ### JALR — Jump and Link Register
 
 ```
-[1101111][off6:6][rs:3]
+[1101111][imm6:6][rs:3]
 ```
 
-`R6 = PC+2; PC = rs + sext(off6) * 2`
+`R6 = PC+2; PC = rs + sext(imm6) * 2`
 
 Register-indirect jump that saves the return address in R6 (link register). The offset encoding is identical to JR. Pairs with AUIPC for full 16-bit PC-relative function calls: `AUIPC t0, upper; JALR t0, lower`.
 
@@ -673,8 +673,8 @@ Bits [15:12] form the **opcode** and determine the instruction format. Four form
 ```
 Format  Opcode range   Layout                                           Instructions
 U       0000..0011     [prefix:3][imm10:10][rd:3]                       LUI, AUIPC
-J       0100..0101     [prefix:4][off12:12]                             J, JAL
-S       0110..1010     [prefix:4][off6[2:0]:3][off6[5:3]:3][rs1:3][rd/rs2:3]   loads, stores
+J       0100..0101     [prefix:4][imm12:12]                             J, JAL
+S       0110..1010     [prefix:4][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd/rs2:3]   loads, stores
 C       1011..1111     [1][grp:3][sub:3][payload:6][rd:3]               all others
 ```
 
@@ -692,16 +692,16 @@ Opcode  Instruction   Payload
 
 ─── J-format (opcode 0100..0101): PC-relative jump ───
 Opcode  Instruction   Payload
-0100    J             [off12:12]
-0101    JAL           [off12:12]
+0100    J             [imm12:12]
+0101    JAL           [imm12:12]
 
 ─── S-format (opcode 0110..1010): load/store ───
 Opcode  Instruction   Payload
-0110    LB            [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
-0111    LBU           [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
-1000    LW            [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
-1001    SB            [off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
-1010    SW            [off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
+0110    LB            [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
+0111    LBU           [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
+1000    LW            [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
+1001    SB            [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rs2:3]
+1010    SW            [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rs2:3]
 
 ─── C-format (opcode 1011..1111): compact ───
 Opcode  grp  sub  Instruction   Payload
@@ -718,14 +718,14 @@ Opcode  grp  sub  Instruction   Payload
 1100    100  100  SLLI          [00][imm4:4][rd:3]
 1100    100  110  SRLI          [00][imm4:4][rd:3]
 1100    100  111  SRAI          [00][imm4:4][rd:3]
-1101    101  000  BZ            [off6:6][rs:3]
-1101    101  001  BNZ           [off6:6][rs:3]
-1101    101  010  BLTZ          [off6:6][rs:3]
-1101    101  011  BGEZ          [off6:6][rs:3]
+1101    101  000  BZ            [imm6:6][rs:3]
+1101    101  001  BNZ           [imm6:6][rs:3]
+1101    101  010  BLTZ          [imm6:6][rs:3]
+1101    101  011  BGEZ          [imm6:6][rs:3]
 1101    101  100  LI            [imm6:6][rd:3]
 1101    101  101  EPCW          [000000][rs:3]
-1101    101  110  JR            [off6:6][rs:3]
-1101    101  111  JALR          [off6:6][rs:3]
+1101    101  110  JR            [imm6:6][rs:3]
+1101    101  111  JALR          [imm6:6][rs:3]
 1110    110  000  ADDI          [imm6:6][rd:3]
 1110    110  010  ANDI          [imm6:6][rd:3]
 1110    110  011  ORI           [imm6:6][rd:3]

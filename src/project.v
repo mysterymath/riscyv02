@@ -24,9 +24,9 @@
  *   ui_in[2]     = RDY (active-high ready input for wait states / single-step)
  *
  * Instruction encoding (16-bit):
- *   LW  rd, off(rs1):  [1000][rs1:3][off6:6][rd:3]
- *   SW  rs2, off(rs1): [1010][rs1:3][off6:6][rs2:3]
- *   JR  rs, off6:      [1011100][off6:6][rs:3]
+ *   LW  rd, imm6(rs1):  [1000][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
+ *   SW  rs2, imm6(rs1): [1010][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rs2:3]
+ *   JR  rs, imm6:       [1101110][imm6:6][rs:3]
  */
 
 `default_nettype none
