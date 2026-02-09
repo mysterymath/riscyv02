@@ -117,21 +117,22 @@ R6 serves as the link register. JAL and JALR write the return address (PC+2) to 
 
 ## Instruction Set
 
-All instructions are 16 bits. Bits [15:12] form the **opcode**, which determines the instruction format:
+All instructions are 16 bits. Registers are at fixed bit positions across all formats: **rd=[2:0]**, **rs1=[5:3]**, **rs2=[8:6]**. Bits [15:12] form the **opcode**, which determines the instruction format:
 
 | Opcode | Format | Field layout | Instructions |
 |---|---|---|---|
 | 0000..0011 | **U** | `[prefix:3][imm10:10][rd:3]` | LUI, AUIPC |
 | 0100..0101 | **J** | `[prefix:4][imm12:12]` | J, JAL |
-| 0110..1010 | **S** | `[prefix:4][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd/rs2:3]` | LB, LBU, LW, SB, SW |
+| 0110..1000 | **I** | `[prefix:4][imm6:6][rs1:3][rd:3]` | LB, LBU, LW |
+| 1001..1010 | **S** | `[prefix:4][imm6[5:3]:3][rs2:3][rs1:3][imm6[2:0]:3]` | SB, SW |
 | 1011..1111 | **C** | `[1][grp:3][sub:3][payload:6][rd:3]` | All others |
 
-U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. All other formats use the full 4-bit opcode. Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction. S-format scrambles the immediate so rs1 stays at [5:3] across all formats.
+U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. All other formats use the full 4-bit opcode. I-format has a contiguous 6-bit immediate at [11:6]. S-format splits the immediate so rs2 stays at [8:6]. Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction; the 6-bit payload has three sub-types: **R-type** (rs2+rs1 for register-register ops), **U6-type** (contiguous imm6 for ALU-immediate/shift-immediate/LI), and **B-type** (imm6 split as [8:6]/[2:0] with rs at [5:3] for branches, JR/JALR, and IF-ops). The hardware reads `op_r = {grp, sub}` directly from the instruction word.
 
 ### LW — Load Word
 
 ```
-[1000][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
+[1000][imm6:6][rs1:3][rd:3]
 ```
 
 `rd = MEM[rs1 + sext(imm6) * 2]`
@@ -143,7 +144,7 @@ Loads a 16-bit word from memory. The 6-bit signed offset is scaled by 2, giving 
 ### SW — Store Word
 
 ```
-[1010][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rs2:3]
+[1010][imm6[5:3]:3][rs2:3][rs1:3][imm6[2:0]:3]
 ```
 
 `MEM[rs1 + sext(imm6) * 2] = rs2`
@@ -155,7 +156,7 @@ Stores a 16-bit word to memory. The offset encoding is identical to LW. The low 
 ### LB — Load Byte (Sign-Extend)
 
 ```
-[0110][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
+[0110][imm6:6][rs1:3][rd:3]
 ```
 
 `rd = sext(MEM[rs1 + sext(imm6)])`
@@ -167,7 +168,7 @@ Loads a single byte from memory and sign-extends it to 16 bits. The 6-bit signed
 ### LBU — Load Byte (Zero-Extend)
 
 ```
-[0111][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
+[0111][imm6:6][rs1:3][rd:3]
 ```
 
 `rd = zext(MEM[rs1 + sext(imm6)])`
@@ -179,7 +180,7 @@ Loads a single byte from memory and zero-extends it to 16 bits. The high byte of
 ### SB — Store Byte
 
 ```
-[1001][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rs2:3]
+[1001][imm6[5:3]:3][rs2:3][rs1:3][imm6[2:0]:3]
 ```
 
 `MEM[rs1 + sext(imm6)] = rs2[7:0]`
@@ -191,7 +192,7 @@ Stores the low byte of rs2 to memory. Only one byte is written; adjacent bytes a
 ### JR — Jump Register
 
 ```
-[1101110][imm6:6][rs:3]
+[1101110][imm6[5:3]:3][rs:3][imm6[2:0]:3]
 ```
 
 `PC = rs + sext(imm6) * 2`
@@ -203,7 +204,7 @@ Unconditional jump to the address computed from a register plus a scaled signed 
 ### BZ — Branch if Zero
 
 ```
-[1101000][imm6:6][rs:3]
+[1101000][imm6[5:3]:3][rs:3][imm6[2:0]:3]
 ```
 
 `if rs == 0: PC = PC + sext(imm6) * 2`
@@ -215,7 +216,7 @@ Branches to a PC-relative target if the source register is zero. The 6-bit signe
 ### BNZ — Branch if Non-Zero
 
 ```
-[1101001][imm6:6][rs:3]
+[1101001][imm6[5:3]:3][rs:3][imm6[2:0]:3]
 ```
 
 `if rs != 0: PC = PC + sext(imm6) * 2`
@@ -227,7 +228,7 @@ Branches to a PC-relative target if the source register is non-zero. Encoding an
 ### BLTZ — Branch if Less Than Zero
 
 ```
-[1101010][imm6:6][rs:3]
+[1101010][imm6[5:3]:3][rs:3][imm6[2:0]:3]
 ```
 
 `if rs < 0: PC = PC + sext(imm6) * 2`
@@ -239,7 +240,7 @@ Branches to a PC-relative target if the source register is negative (sign bit se
 ### BGEZ — Branch if Greater or Equal to Zero
 
 ```
-[1101011][imm6:6][rs:3]
+[1101011][imm6[5:3]:3][rs:3][imm6[2:0]:3]
 ```
 
 `if rs >= 0: PC = PC + sext(imm6) * 2`
@@ -275,7 +276,7 @@ Unconditional PC-relative jump that saves the return address in R6 (link registe
 ### JALR — Jump and Link Register
 
 ```
-[1101111][imm6:6][rs:3]
+[1101111][imm6[5:3]:3][rs:3][imm6[2:0]:3]
 ```
 
 `R6 = PC+2; PC = rs + sext(imm6) * 2`
@@ -491,7 +492,7 @@ Bitwise XOR of the destination register with a sign-extended 6-bit immediate. `X
 ### SLTIF — Set Less Than Immediate (Signed, Fixed-Destination)
 
 ```
-[1110101][imm6:6][rs:3]
+[1110101][imm6[5:3]:3][rs:3][imm6[2:0]:3]
 ```
 
 `t0 = (rs < sext(imm6)) ? 1 : 0` (signed comparison)
@@ -503,7 +504,7 @@ Compares the source register against a sign-extended 6-bit immediate as signed 1
 ### SLTIUF — Set Less Than Immediate (Unsigned, Fixed-Destination)
 
 ```
-[1110110][imm6:6][rs:3]
+[1110110][imm6[5:3]:3][rs:3][imm6[2:0]:3]
 ```
 
 `t0 = (rs <u sext(imm6)) ? 1 : 0` (unsigned comparison)
@@ -515,7 +516,7 @@ Compares the source register against a sign-extended 6-bit immediate as unsigned
 ### XORIF — Xor Immediate (Fixed-Destination)
 
 ```
-[1110111][imm6:6][rs:3]
+[1110111][imm6[5:3]:3][rs:3][imm6[2:0]:3]
 ```
 
 `t0 = rs ^ sext(imm6)`
@@ -651,7 +652,7 @@ Reads the Exception Program Counter (including the I bit in bit 0) into a genera
 ### EPCW — Write EPC
 
 ```
-[1101101][000000][rs:3]
+[1101101][000][rs:3][000]
 ```
 
 `EPC = rs`
@@ -668,19 +669,20 @@ Any instruction not matching the above is executed as a NOP: the PC advances pas
 
 ### Opcode and Formats
 
-Bits [15:12] form the **opcode** and determine the instruction format. Four formats exist:
+Bits [15:12] form the **opcode** and determine the instruction format. Registers are always at fixed bit positions: **rd=[2:0]**, **rs1=[5:3]**, **rs2=[8:6]**. Five formats exist:
 
 ```
-Format  Opcode range   Layout                                           Instructions
-U       0000..0011     [prefix:3][imm10:10][rd:3]                       LUI, AUIPC
-J       0100..0101     [prefix:4][imm12:12]                             J, JAL
-S       0110..1010     [prefix:4][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd/rs2:3]   loads, stores
-C       1011..1111     [1][grp:3][sub:3][payload:6][rd:3]               all others
+Format  Opcode range   Layout                                                    Instructions
+U       0000..0011     [prefix:3][imm10:10][rd:3]                                LUI, AUIPC
+J       0100..0101     [prefix:4][imm12:12]                                      J, JAL
+I       0110..1000     [prefix:4][imm6:6][rs1:3][rd:3]                           LB, LBU, LW
+S       1001..1010     [prefix:4][imm6[5:3]:3][rs2:3][rs1:3][imm6[2:0]:3]       SB, SW
+C       1011..1111     [1][grp:3][sub:3][payload:6][rd:3]                        all others
 ```
 
-U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. S-format scrambles the immediate so rs1 stays at [5:3] across all formats.
+U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. I-format has a contiguous 6-bit immediate at [11:6]. S-format splits the immediate so rs2 stays at [8:6] and rs1 at [5:3].
 
-Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction. The 6-bit payload is rs2+rs1 for R-type operations or imm6 for I-type operations. The hardware reads `op_r = {grp, sub}` directly from the instruction word.
+Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction. The 6-bit payload has three sub-types: **R-type** (rs2[8:6]+rs1[5:3] for register-register ops), **U6-type** (contiguous imm6[8:3] for ALU-immediate, shift-immediate, and LI), and **B-type** (imm6 split as [8:6]/[2:0] with rs at [5:3] for branches, JR/JALR, and IF-ops). The hardware reads `op_r = {grp, sub}` directly from the instruction word.
 
 ### Encoding Table
 
@@ -695,13 +697,16 @@ Opcode  Instruction   Payload
 0100    J             [imm12:12]
 0101    JAL           [imm12:12]
 
-─── S-format (opcode 0110..1010): load/store ───
+─── I-format (opcode 0110..1000): loads ───
 Opcode  Instruction   Payload
-0110    LB            [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
-0111    LBU           [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
-1000    LW            [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
-1001    SB            [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rs2:3]
-1010    SW            [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rs2:3]
+0110    LB            [imm6:6][rs1:3][rd:3]
+0111    LBU           [imm6:6][rs1:3][rd:3]
+1000    LW            [imm6:6][rs1:3][rd:3]
+
+─── S-format (opcode 1001..1010): stores ───
+Opcode  Instruction   Payload
+1001    SB            [imm6[5:3]:3][rs2:3][rs1:3][imm6[2:0]:3]
+1010    SW            [imm6[5:3]:3][rs2:3][rs1:3][imm6[2:0]:3]
 
 ─── C-format (opcode 1011..1111): compact ───
 Opcode  grp  sub  Instruction   Payload
@@ -718,21 +723,21 @@ Opcode  grp  sub  Instruction   Payload
 1100    100  100  SLLI          [00][imm4:4][rd:3]
 1100    100  110  SRLI          [00][imm4:4][rd:3]
 1100    100  111  SRAI          [00][imm4:4][rd:3]
-1101    101  000  BZ            [imm6:6][rs:3]
-1101    101  001  BNZ           [imm6:6][rs:3]
-1101    101  010  BLTZ          [imm6:6][rs:3]
-1101    101  011  BGEZ          [imm6:6][rs:3]
+1101    101  000  BZ            [imm6[5:3]:3][rs:3][imm6[2:0]:3]
+1101    101  001  BNZ           [imm6[5:3]:3][rs:3][imm6[2:0]:3]
+1101    101  010  BLTZ          [imm6[5:3]:3][rs:3][imm6[2:0]:3]
+1101    101  011  BGEZ          [imm6[5:3]:3][rs:3][imm6[2:0]:3]
 1101    101  100  LI            [imm6:6][rd:3]
-1101    101  101  EPCW          [000000][rs:3]
-1101    101  110  JR            [imm6:6][rs:3]
-1101    101  111  JALR          [imm6:6][rs:3]
+1101    101  101  EPCW          [000][rs:3][000]
+1101    101  110  JR            [imm6[5:3]:3][rs:3][imm6[2:0]:3]
+1101    101  111  JALR          [imm6[5:3]:3][rs:3][imm6[2:0]:3]
 1110    110  000  ADDI          [imm6:6][rd:3]
 1110    110  010  ANDI          [imm6:6][rd:3]
 1110    110  011  ORI           [imm6:6][rd:3]
 1110    110  100  XORI          [imm6:6][rd:3]
-1110    110  101  SLTIF         [imm6:6][rs:3]
-1110    110  110  SLTIUF        [imm6:6][rs:3]
-1110    110  111  XORIF         [imm6:6][rs:3]
+1110    110  101  SLTIF         [imm6[5:3]:3][rs:3][imm6[2:0]:3]
+1110    110  110  SLTIUF        [imm6[5:3]:3][rs:3][imm6[2:0]:3]
+1110    110  111  XORIF         [imm6[5:3]:3][rs:3][imm6[2:0]:3]
 1111    111  001  SEI           [000000000]
 1111    111  010  CLI           [000000000]
 1111    111  011  RETI          [000000000]

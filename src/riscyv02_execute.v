@@ -16,22 +16,22 @@
 // E_EXEC_HI (two-cycle ops). Memory instructions proceed from E_EXEC_HI
 // to E_MEM_LO/HI for bus access.
 //
-// ISA encoding
-// ------------
+// ISA encoding — fixed register positions
+// -----------------------------------------
+// Registers always at fixed bit positions: rd=[2:0], rs1=[5:3], rs2=[8:6].
 // Bits [15:12] form the "opcode" and determine the instruction format:
 //
-//   Opcode       Format   Description
-//   0000..0011   U        Upper immediate (LUI, AUIPC; 3-bit prefix)
-//   0100..0101   J        PC-relative jump (J, JAL)
-//   0110..1010   S        Load/store (LB, LBU, LW, SB, SW; scrambled imm)
-//   1011..1111   C        Compact (ALU, shift, branch, control, system)
+//   Opcode       Format   Registers            Immediate
+//   0000..0011   U        rd=[2:0]             imm10=[12:3]
+//   0100..0101   J        —                    imm12=[11:0]
+//   0110..1000   I        rd=[2:0], rs1=[5:3]  imm6=[11:6]     (loads)
+//   1001..1010   S        rs1=[5:3], rs2=[8:6] imm6=[11:9,2:0] (stores)
+//   1011..1111   C        (see below)          (see below)
 //
-// U-format uses a 3-bit prefix [15:13], gaining one extra immediate bit.
-// All other formats use the full 4-bit opcode.
-//
-// Within C-format, bits [14:12] = group and [11:9] = sub identify the
-// specific instruction, with op_r = {group, sub} read directly from the
-// instruction word. S-format scrambles the immediate so rs1 stays at [5:3].
+// C-format sub-types (bits [14:12]=group, [11:9]=sub, op_r={group,sub}):
+//   R-type:  rd=[2:0], rs1=[5:3], rs2=[8:6]  (ALU-RR, shift-RR)
+//   U6-type: rd=[2:0], imm6=[8:3]            (ALU-imm, shift-imm, LI)
+//   B-type:  rs=[5:3], imm6=[8:6,2:0]        (branches, JR/JALR, IF-ops)
 // ============================================================================
 
 module riscyv02_execute (
@@ -134,7 +134,7 @@ module riscyv02_execute (
   localparam T0_REG   = 3'd2;  // R2 is t0 for fixed-destination IF-type ops
 
   // Instruction format ranges (opcode = fetch_ir[15:12])
-  //   U: 0000..0011   J: 0100..0101   S: 0110..1010   C: 1011..1111
+  //   U: 0000..0011   J: 0100..0101   I: 0110..1000   S: 1001..1010   C: 1011..1111
   wire [3:0] opcode = fetch_ir[15:12];
   wire is_fmt_u = opcode[3:2] == 2'b00;                     // 0000..0011
   wire is_fmt_j = opcode[3:1] == 3'b010;                    // 0100..0101
@@ -682,46 +682,67 @@ module riscyv02_execute (
       // ir_accept fires in any completing state (insn_completing=1) or
       // E_IDLE, as long as ir_valid && !fetch_flush.
       //
-      // The opcode (bits [15:12]) determines the instruction format:
-      //   U (0000..0011)  — op_r from prefix, base_sel from imm10[9:6]
-      //   J (0100..0101)  — op_r from prefix, base_sel from imm12[11:9]
-      //   S (0110..1010)  — op_r from prefix, imm6 from scrambled fields
+      // Fixed register positions: rd=[2:0], rs1=[5:3], rs2=[8:6].
+      // Format determines immediate extraction:
+      //   U (0000..0011)  — imm10 at [12:3]
+      //   J (0100..0101)  — imm12 at [11:0]
+      //   I (0110..1000)  — imm6 contiguous at [11:6] (loads)
+      //   S (1001..1010)  — imm6 split [11:9]/[2:0], rs2 at [8:6] (stores)
       //   C (1011..1111)  — op_r = {group, sub} direct from [14:9]
       // ---------------------------------------------------------------------
       if (ir_accept) begin
         pc <= pc + 16'd2;
 
-        // --- imm6_r default (C/I-type): imm6 at [8:3] ---
+        // --- Defaults: B-type C-format (imm6 split [8:6]/[2:0]) ---
         imm6_r[5:3] <= fetch_ir[8:6];
-        imm6_r[2:0] <= fetch_ir[5:3];
+        imm6_r[2:0] <= fetch_ir[2:0];
+        rd_rs2_sel_r <= fetch_ir[2:0];           // rd at [2:0] (stores override)
 
         // --- Decode op_r from opcode ---
-        // U-format: 3-bit prefix determines instruction
-        if      (fetch_ir[15:13] == 3'b000)  op_r <= OP_LUI;
-        else if (fetch_ir[15:13] == 3'b001)  op_r <= OP_AUIPC;
-        // J-format: 4-bit opcode determines instruction
-        else if (opcode == 4'b0100)          op_r <= OP_J;
-        else if (opcode == 4'b0101)          op_r <= OP_JAL;
-        // S-format: 4-bit opcode determines instruction; imm6 from scrambled fields
+        // U-format: 3-bit prefix, imm6 at [8:3] (override B-type default)
+        if (fetch_ir[15:13] == 3'b000) begin
+          op_r <= OP_LUI;
+          imm6_r[2:0] <= fetch_ir[5:3];
+        end
+        else if (fetch_ir[15:13] == 3'b001) begin
+          op_r <= OP_AUIPC;
+          imm6_r[2:0] <= fetch_ir[5:3];
+        end
+        // J-format: 4-bit opcode, imm6 at [8:3] (override B-type default)
+        else if (opcode == 4'b0100) begin
+          op_r <= OP_J;
+          imm6_r[2:0] <= fetch_ir[5:3];
+        end
+        else if (opcode == 4'b0101) begin
+          op_r <= OP_JAL;
+          imm6_r[2:0] <= fetch_ir[5:3];
+        end
+        // I-format loads: imm6 contiguous at [11:6], rs1 at [5:3], rd at [2:0]
         else if (opcode == 4'b0110) begin
           op_r <= OP_LB;
-          imm6_r[2:0] <= fetch_ir[11:9];
+          imm6_r[5:3] <= fetch_ir[11:9];
+          imm6_r[2:0] <= fetch_ir[8:6];
         end
         else if (opcode == 4'b0111) begin
           op_r <= OP_LBU;
-          imm6_r[2:0] <= fetch_ir[11:9];
+          imm6_r[5:3] <= fetch_ir[11:9];
+          imm6_r[2:0] <= fetch_ir[8:6];
         end
         else if (opcode == 4'b1000) begin
           op_r <= OP_LW;
-          imm6_r[2:0] <= fetch_ir[11:9];
+          imm6_r[5:3] <= fetch_ir[11:9];
+          imm6_r[2:0] <= fetch_ir[8:6];
         end
+        // S-format stores: imm6 split [11:9]/[2:0], rs2 at [8:6]
         else if (opcode == 4'b1001) begin
           op_r <= OP_SB;
-          imm6_r[2:0] <= fetch_ir[11:9];
+          imm6_r[5:3] <= fetch_ir[11:9];
+          rd_rs2_sel_r <= fetch_ir[8:6];
         end
         else if (opcode == 4'b1010) begin
           op_r <= OP_SW;
-          imm6_r[2:0] <= fetch_ir[11:9];
+          imm6_r[5:3] <= fetch_ir[11:9];
+          rd_rs2_sel_r <= fetch_ir[8:6];
         end
         // C-format: direct-mapped, with two remapping exceptions
         else if (fetch_ir[14:12] == 3'b111) begin
@@ -746,17 +767,20 @@ module riscyv02_execute (
         else
           base_sel_r <= {1'b0, fetch_ir[5:3]};   // S/C: don't-care
 
-        rd_rs2_sel_r <= fetch_ir[2:0];
-
-        // --- r_sel_r: format-dependent register select ---
-        // C-format I-type: rs/rd at [2:0]. R-type: rs1 at [5:3].
-        // S/U/J formats: rs1 at [5:3] (or don't-care).
+        // --- r_sel_r and imm6_r: fixed register positions ---
+        // C-format U6-type: rd at [2:0], imm6 at [8:3]
+        //   shift-imm (grp=100, sub[2]=1), LI (101_100),
+        //   ALU-imm non-IF (grp=110, !(sub[2] && |sub[1:0]))
+        // All other C-format (R-type, B-type): rs1 at [5:3]
         if (is_fmt_c &&
-            fetch_ir[14:12] != 3'b011 &&
-            !(fetch_ir[14:12] == 3'b100 && !fetch_ir[11]))
-          r_sel_r <= fetch_ir[2:0];   // C-format I-type
-        else
-          r_sel_r <= fetch_ir[5:3];   // C-format R-type, S, U, J
+            ((fetch_ir[14:12] == 3'b100 && fetch_ir[11]) ||
+             fetch_ir[14:9] == 6'b101_100 ||
+             (fetch_ir[14:12] == 3'b110 &&
+              !(fetch_ir[11] && |fetch_ir[10:9])))) begin
+          r_sel_r     <= fetch_ir[2:0];   // U6: rd at [2:0]
+          imm6_r[2:0] <= fetch_ir[5:3];   // U6: imm6[2:0] at [5:3]
+        end else
+          r_sel_r <= fetch_ir[5:3];        // R/B/S/U/J: rs1 at [5:3]
 
         // --- r_hi_r: right shifts read hi byte first ---
         r_hi_r <= (is_fmt_c && fetch_ir[14:12] == 3'b100 && fetch_ir[10])

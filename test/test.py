@@ -27,11 +27,17 @@ def _read_ram(dut, addr):
     return int(dut.ram[addr].value)
 
 
-def _encode_s_format(prefix, imm6, rs1, rd_rs2):
-    """Encode S-format: [prefix:4][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd/rs2:3]."""
+def _encode_i_format(prefix, imm6, rs1, rd):
+    """Encode I-format load: [prefix:4][imm6:6][rs1:3][rd:3]."""
+    insn = (prefix << 12) | (imm6 << 6) | (rs1 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_s_format(prefix, imm6, rs1, rs2):
+    """Encode S-format store: [prefix:4][imm6[5:3]:3][rs2:3][rs1:3][imm6[2:0]:3]."""
     imm6_lo = imm6 & 0x7        # imm6[2:0]
     imm6_hi = (imm6 >> 3) & 0x7 # imm6[5:3]
-    insn = (prefix << 12) | (imm6_lo << 9) | (imm6_hi << 6) | (rs1 << 3) | rd_rs2
+    insn = (prefix << 12) | (imm6_hi << 9) | (rs2 << 6) | (rs1 << 3) | imm6_lo
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
@@ -40,7 +46,7 @@ def _encode_lw(rd, rs1, imm6):
     assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
     assert 0 <= rd <= 7 and 0 <= rs1 <= 7
     imm6 &= 0x3F
-    return _encode_s_format(0b1000, imm6, rs1, rd)
+    return _encode_i_format(0b1000, imm6, rs1, rd)
 
 
 def _encode_sw(rs2, rs1, imm6):
@@ -51,13 +57,20 @@ def _encode_sw(rs2, rs1, imm6):
     return _encode_s_format(0b1010, imm6, rs1, rs2)
 
 
+def _encode_b_format(op7, rs, imm6):
+    """Encode B-format: [op7:7][imm6[5:3]:3][rs:3][imm6[2:0]:3]."""
+    imm6_lo = imm6 & 0x7
+    imm6_hi = (imm6 >> 3) & 0x7
+    insn = (op7 << 9) | (imm6_hi << 6) | (rs << 3) | imm6_lo
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
 def _encode_jr(rs, imm6):
     """Encode JR rs, imm6 -> 16-bit little-endian bytes."""
     assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
     assert 0 <= rs <= 7
     imm6 &= 0x3F
-    insn = (0b1101110 << 9) | (imm6 << 3) | rs
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    return _encode_b_format(0b1101110, rs, imm6)
 
 
 def _place(prog, addr, bytepair):
@@ -407,9 +420,8 @@ def _encode_epcr(rd):
 
 
 def _encode_epcw(rs):
-    """Encode EPCW rs -> 16-bit little-endian bytes. [1101101][000000][rs:3]"""
-    insn = (0b1101101 << 9) | rs
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    """Encode EPCW rs -> 16-bit little-endian bytes. B-format: [1101101][000][rs:3][000]"""
+    return _encode_b_format(0b1101101, rs, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -2688,19 +2700,19 @@ async def test_cycle_count_epcw(dut):
 # Helper encoders for byte load/store instructions
 # ---------------------------------------------------------------------------
 def _encode_lb(rs1, imm6, rd):
-    """Encode LB rd, imm6(rs1) -> 16-bit little-endian bytes. S-format."""
+    """Encode LB rd, imm6(rs1) -> 16-bit little-endian bytes. I-format."""
     assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
     assert 0 <= rd <= 7 and 0 <= rs1 <= 7
     imm6 &= 0x3F
-    return _encode_s_format(0b0110, imm6, rs1, rd)
+    return _encode_i_format(0b0110, imm6, rs1, rd)
 
 
 def _encode_lbu(rs1, imm6, rd):
-    """Encode LBU rd, imm6(rs1) -> 16-bit little-endian bytes. S-format."""
+    """Encode LBU rd, imm6(rs1) -> 16-bit little-endian bytes. I-format."""
     assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
     assert 0 <= rd <= 7 and 0 <= rs1 <= 7
     imm6 &= 0x3F
-    return _encode_s_format(0b0111, imm6, rs1, rd)
+    return _encode_i_format(0b0111, imm6, rs1, rd)
 
 
 def _encode_sb(rs1, imm6, rs2):
@@ -3914,39 +3926,35 @@ def _encode_lui(rd, imm10):
 
 
 def _encode_bz(rs, imm6):
-    """Encode BZ rs, imm6 -> 16-bit little-endian bytes. [1101000][imm6:6][rs:3]"""
+    """Encode BZ rs, imm6 -> 16-bit little-endian bytes. B-format."""
     assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
     assert 0 <= rs <= 7
     imm6 &= 0x3F
-    insn = (0b1101000 << 9) | (imm6 << 3) | rs
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    return _encode_b_format(0b1101000, rs, imm6)
 
 
 def _encode_bnz(rs, imm6):
-    """Encode BNZ rs, imm6 -> 16-bit little-endian bytes. [1101001][imm6:6][rs:3]"""
+    """Encode BNZ rs, imm6 -> 16-bit little-endian bytes. B-format."""
     assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
     assert 0 <= rs <= 7
     imm6 &= 0x3F
-    insn = (0b1101001 << 9) | (imm6 << 3) | rs
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    return _encode_b_format(0b1101001, rs, imm6)
 
 
 def _encode_bltz(rs, imm6):
-    """Encode BLTZ rs, imm6 -> 16-bit little-endian bytes. [1101010][imm6:6][rs:3]"""
+    """Encode BLTZ rs, imm6 -> 16-bit little-endian bytes. B-format."""
     assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
     assert 0 <= rs <= 7
     imm6 &= 0x3F
-    insn = (0b1101010 << 9) | (imm6 << 3) | rs
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    return _encode_b_format(0b1101010, rs, imm6)
 
 
 def _encode_bgez(rs, imm6):
-    """Encode BGEZ rs, imm6 -> 16-bit little-endian bytes. [1101011][imm6:6][rs:3]"""
+    """Encode BGEZ rs, imm6 -> 16-bit little-endian bytes. B-format."""
     assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
     assert 0 <= rs <= 7
     imm6 &= 0x3F
-    insn = (0b1101011 << 9) | (imm6 << 3) | rs
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    return _encode_b_format(0b1101011, rs, imm6)
 
 
 # ---------------------------------------------------------------------------
@@ -4431,12 +4439,11 @@ def _encode_jal(imm12):
 
 
 def _encode_jalr(rs, imm6):
-    """Encode JALR rs, imm6 -> 16-bit little-endian bytes. [1101111][imm6:6][rs:3]"""
+    """Encode JALR rs, imm6 -> 16-bit little-endian bytes. B-format."""
     assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
     assert 0 <= rs <= 7
     imm6 &= 0x3F
-    insn = (0b1101111 << 9) | (imm6 << 3) | rs
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    return _encode_b_format(0b1101111, rs, imm6)
 
 
 
@@ -4655,15 +4662,24 @@ def _encode_xori(rd, imm6):
 
 
 def _encode_sltif(rs, imm6):
-    return _encode_imm_op(0b1110101, rs, imm6)
+    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+    assert 0 <= rs <= 7
+    imm6 &= 0x3F
+    return _encode_b_format(0b1110101, rs, imm6)
 
 
 def _encode_sltiuf(rs, imm6):
-    return _encode_imm_op(0b1110110, rs, imm6)
+    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+    assert 0 <= rs <= 7
+    imm6 &= 0x3F
+    return _encode_b_format(0b1110110, rs, imm6)
 
 
 def _encode_xorif(rs, imm6):
-    return _encode_imm_op(0b1110111, rs, imm6)
+    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+    assert 0 <= rs <= 7
+    imm6 &= 0x3F
+    return _encode_b_format(0b1110111, rs, imm6)
 
 
 # ---------------------------------------------------------------------------
