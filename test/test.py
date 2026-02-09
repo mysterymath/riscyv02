@@ -27,52 +27,37 @@ def _read_ram(dut, addr):
     return int(dut.ram[addr].value)
 
 
-def _encode_i_format(prefix, imm6, rs1, rd):
-    """Encode I-format load: [prefix:4][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]. Sign at inst[8]."""
-    imm6_lo = imm6 & 0x7         # imm6[2:0]
-    imm6_hi = (imm6 >> 3) & 0x7  # imm6[5:3]
-    insn = (prefix << 12) | (imm6_lo << 9) | (imm6_hi << 6) | (rs1 << 3) | rd
+def _encode_s_format(prefix, off6, rs1, rd_rs2):
+    """Encode S-format: [prefix:4][off6[2:0]:3][off6[5:3]:3][rs1:3][rd/rs2:3]."""
+    off6_lo = off6 & 0x7        # off6[2:0]
+    off6_hi = (off6 >> 3) & 0x7 # off6[5:3]
+    insn = (prefix << 12) | (off6_lo << 9) | (off6_hi << 6) | (rs1 << 3) | rd_rs2
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
-def _encode_s_format(prefix, imm6, rs1, rs2):
-    """Encode S-format store: [prefix:4][imm6[5:3]:3][rs2:3][rs1:3][imm6[2:0]:3]."""
-    imm6_lo = imm6 & 0x7        # imm6[2:0]
-    imm6_hi = (imm6 >> 3) & 0x7 # imm6[5:3]
-    insn = (prefix << 12) | (imm6_hi << 9) | (rs2 << 6) | (rs1 << 3) | imm6_lo
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
-
-
-def _encode_lw(rd, rs1, imm6):
-    """Encode LW rd, imm6(rs1) -> 16-bit little-endian bytes. imm6 is byte offset."""
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+def _encode_lw(rd, rs1, off6):
+    """Encode LW rd, off6(rs1) -> 16-bit little-endian bytes. off6 is byte offset."""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rd <= 7 and 0 <= rs1 <= 7
-    imm6 &= 0x3F
-    return _encode_i_format(0b1000, imm6, rs1, rd)
+    off6 &= 0x3F
+    return _encode_s_format(0b1000, off6, rs1, rd)
 
 
-def _encode_sw(rs2, rs1, imm6):
-    """Encode SW rs2, imm6(rs1) -> 16-bit little-endian bytes. imm6 is byte offset."""
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+def _encode_sw(rs2, rs1, off6):
+    """Encode SW rs2, off6(rs1) -> 16-bit little-endian bytes. off6 is byte offset."""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs2 <= 7 and 0 <= rs1 <= 7
-    imm6 &= 0x3F
-    return _encode_s_format(0b1010, imm6, rs1, rs2)
+    off6 &= 0x3F
+    return _encode_s_format(0b1010, off6, rs1, rs2)
 
 
-def _encode_b_format(op7, rs, imm6):
-    """Encode B-format: [op7:7][imm6[5:3]:3][rs:3][imm6[2:0]:3]."""
-    imm6_lo = imm6 & 0x7
-    imm6_hi = (imm6 >> 3) & 0x7
-    insn = (op7 << 9) | (imm6_hi << 6) | (rs << 3) | imm6_lo
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
-
-
-def _encode_jr(rs, imm6):
-    """Encode JR rs, imm6 -> 16-bit little-endian bytes."""
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+def _encode_jr(rs, off6):
+    """Encode JR rs, off6 -> 16-bit little-endian bytes."""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
-    imm6 &= 0x3F
-    return _encode_b_format(0b1101110, rs, imm6)
+    off6 &= 0x3F
+    insn = (0b1101110 << 9) | (off6 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _place(prog, addr, bytepair):
@@ -98,11 +83,11 @@ async def test_lw_sw_jr_basic(dut):
     prog[0x0011] = 0x12
 
     # 0x0000: LW R1, 8(R0)   ; R1 = MEM[0 + 8*2] = MEM[0x10] = 0x1234
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: SW R1, 9(R0)   ; MEM[0 + 9*2] = MEM[0x12] = R1 = 0x1234
-    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, imm6=18))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=18))
     # 0x0004: JR R0, 2       ; PC = 0 + 2*2 = 4 (spin at 0x0004)
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -137,16 +122,16 @@ async def test_jr_computed(dut):
     prog[0x0019] = 0xBE
 
     # 0x0000: LW R1, 14(R0)  ; R1 = MEM[0x0E] = 0x0010
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=14))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=14))
     # 0x0002: LW R2, 24(R0)  ; R2 = MEM[0x18] = 0xBEEF
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=24))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=24))
     # 0x0004: JR R1, 0       ; PC = R1 + 0 = 0x0010
-    _place(prog, 0x0004, _encode_jr(rs=1, imm6=0))
+    _place(prog, 0x0004, _encode_jr(rs=1, off6=0))
 
     # At target 0x0010: SW R2, 20(R0) ; MEM[0x14] = 0xBEEF
-    _place(prog, 0x0010, _encode_sw(rs2=2, rs1=0, imm6=20))
+    _place(prog, 0x0010, _encode_sw(rs2=2, rs1=0, off6=20))
     # 0x0012: JR R0, 9       ; PC = 0 + 9*2 = 18 = 0x12 (spin)
-    _place(prog, 0x0012, _encode_jr(rs=0, imm6=9))
+    _place(prog, 0x0012, _encode_jr(rs=0, off6=9))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -183,13 +168,13 @@ async def test_negative_offsets(dut):
     prog[0x004F] = 0xCA
 
     # 0x0000: LW R3, 16(R0)  ; R3 = MEM[0 + 16*2] = MEM[0x20] = 0x0050
-    _place(prog, 0x0000, _encode_lw(rd=3, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=3, rs1=0, off6=16))
     # 0x0002: LW R4, -1(R3)  ; R4 = MEM[0x50 + (-1)*2] = MEM[0x4E] = 0xCAFE
-    _place(prog, 0x0002, _encode_lw(rd=4, rs1=3, imm6=-2))
+    _place(prog, 0x0002, _encode_lw(rd=4, rs1=3, off6=-2))
     # 0x0004: SW R4, 1(R3)   ; MEM[0x50 + 1*2] = MEM[0x52] = 0xCAFE
-    _place(prog, 0x0004, _encode_sw(rs2=4, rs1=3, imm6=2))
+    _place(prog, 0x0004, _encode_sw(rs2=4, rs1=3, off6=2))
     # 0x0006: JR R0, 3       ; PC = 0 + 3*2 = 6 (spin at 0x0006)
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -221,13 +206,13 @@ async def test_jr_after_lw(dut):
     prog[0x0009] = 0x00
 
     # 0x0000: LW R1, 4(R0)   ; R1 = MEM[0x08] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=8))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=8))
     # 0x0002: JR R1, 0        ; jump to 0x0020 (uses just-loaded R1)
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
     # 0x0020: SW R0, 10(R0)   ; MEM[0x14] = 0 (marker write)
-    _place(prog, 0x0020, _encode_sw(rs2=0, rs1=0, imm6=20))
+    _place(prog, 0x0020, _encode_sw(rs2=0, rs1=0, off6=20))
     # 0x0022: JR R0, 17       ; spin at 0x0022
-    _place(prog, 0x0022, _encode_jr(rs=0, imm6=17))
+    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))
 
     # Pre-fill marker location with non-zero so we can detect the write
     prog[0x0014] = 0xFF
@@ -271,19 +256,19 @@ async def test_single_step(dut):
 
     # Program: load three values, store them as markers, spin
     # 0x0000: LW R1, 16(R0)  ; R1 = MEM[0x10] = 0x1111
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LW R2, 18(R0)  ; R2 = MEM[0x12] = 0x2222
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     # 0x0004: LW R3, 20(R0)  ; R3 = MEM[0x14] = 0x3333
-    _place(prog, 0x0004, _encode_lw(rd=3, rs1=0, imm6=20))
+    _place(prog, 0x0004, _encode_lw(rd=3, rs1=0, off6=20))
     # 0x0006: SW R1, 22(R0)  ; MEM[0x16] = 0x1111
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, imm6=22))
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=22))
     # 0x0008: SW R2, 24(R0)  ; MEM[0x18] = 0x2222
-    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, imm6=24))
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=24))
     # 0x000A: SW R3, 26(R0)  ; MEM[0x1A] = 0x3333
-    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, imm6=26))
+    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=26))
     # 0x000C: JR R0, 6       ; spin at 0x000C
-    _place(prog, 0x000C, _encode_jr(rs=0, imm6=6))
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
 
     def get_sync():
         return (int(dut.uo_out.value) >> 1) & 1
@@ -422,8 +407,9 @@ def _encode_epcr(rd):
 
 
 def _encode_epcw(rs):
-    """Encode EPCW rs -> 16-bit little-endian bytes. B-format: [1101101][000][rs:3][000]"""
-    return _encode_b_format(0b1101101, rs, 0)
+    """Encode EPCW rs -> 16-bit little-endian bytes. [1101101][000000][rs:3]"""
+    insn = (0b1101101 << 9) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 # ---------------------------------------------------------------------------
@@ -441,15 +427,15 @@ async def test_reset_i_state(dut):
 
     # Program: just a spin loop at 0x0000
     # 0x0000: JR R0, 0  ; spin at 0x0000
-    _place(prog, 0x0000, _encode_jr(rs=0, imm6=0))
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=0))
 
     # IRQ handler at 0x0004: write marker and spin
     # 0x0004: LW R1, 16(R0)  ; R1 = 0xDEAD from 0x20
-    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0006: SW R1, 24(R0)  ; MEM[0x30] = 0xDEAD (marker)
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, imm6=24))
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=24))
     # 0x0008: JR R0, 4  ; spin at 0x0008
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     # Data: marker value
     prog[0x0010] = 0xAD
@@ -498,15 +484,15 @@ async def test_cli_enables_irq(dut):
     # 0x0000: CLI
     _place(prog, 0x0000, _encode_cli())
     # 0x0002: JR R0, 1  ; spin at 0x0002
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     # IRQ handler at 0x0004: write marker and spin
     # 0x0004: LW R1, 16(R0)  ; R1 = 0xBEEF from 0x20
-    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0006: SW R1, 24(R0)  ; MEM[0x30] = 0xBEEF (marker)
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, imm6=24))
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=24))
     # 0x0008: JR R0, 4  ; spin at 0x0008
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     # Data: marker value
     prog[0x0010] = 0xEF
@@ -562,7 +548,7 @@ async def test_sei_disables_irq(dut):
     # 0x0002: SEI
     _place(prog, 0x0002, _encode_sei())
     # 0x0004: JR R0, 2  ; spin at 0x0004
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     # IRQ handler at 0x0004 would conflict, so use different addresses
     # Actually the IRQ vector is at 0x0004, but our spin loop is there too.
@@ -579,14 +565,14 @@ async def test_sei_disables_irq(dut):
 
     # Redesign: Jump over vector area first
     # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0010 (continue address)
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=10))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0      ; jump to 0x0010
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
     # IRQ handler at 0x0004
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, imm6=20))  # R2 = MEM[0x28] = 0xDEAD
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=24)) # MEM[0x30] = R2
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))          # spin at 0x0008
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))  # R2 = MEM[0x28] = 0xDEAD
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24)) # MEM[0x30] = R2
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))          # spin at 0x0008
 
     # Data: jump target
     prog[0x000A] = 0x10
@@ -595,7 +581,7 @@ async def test_sei_disables_irq(dut):
     # Continue at 0x0010: CLI, SEI, spin
     _place(prog, 0x0010, _encode_cli())
     _place(prog, 0x0012, _encode_sei())
-    _place(prog, 0x0014, _encode_jr(rs=0, imm6=10))  # spin at 0x0014
+    _place(prog, 0x0014, _encode_jr(rs=0, off6=10))  # spin at 0x0014
 
     # Data: marker value
     prog[0x0014] = 0xAD
@@ -649,13 +635,13 @@ async def test_reti(dut):
     # After RETI, execution continues at spin, writes second marker
 
     # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0020 (continue address)
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=10))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0      ; jump to 0x0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
     # IRQ handler at 0x0004: write marker, RETI
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, imm6=24))  # R2 = MEM[0x30] = 0xAAAA
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=28)) # MEM[0x38] = 0xAAAA (IRQ marker)
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA (IRQ marker)
     _place(prog, 0x0008, _encode_reti())                    # return from interrupt
 
     # Data: jump target at 0x0A
@@ -666,9 +652,9 @@ async def test_reti(dut):
     _place(prog, 0x0020, _encode_cli())
     # After CLI, when IRQ fires, return address will be 0x0022
     # 0x0022: write "returned" marker
-    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, imm6=26))  # R3 = MEM[0x34] = 0xBBBB
-    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, imm6=30)) # MEM[0x3C] = 0xBBBB (return marker)
-    _place(prog, 0x0026, _encode_jr(rs=0, imm6=19))         # spin at 0x0026
+    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=26))  # R3 = MEM[0x34] = 0xBBBB
+    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=30)) # MEM[0x3C] = 0xBBBB (return marker)
+    _place(prog, 0x0026, _encode_jr(rs=0, off6=19))         # spin at 0x0026
 
     # Data: marker values
     prog[0x0018] = 0xAA
@@ -737,16 +723,16 @@ async def test_i_bit_masking(dut):
 
     # Program: jump past vector, CLI, spin
     # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=10))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
     # IRQ handler at 0x0004: write fixed marker, NO RETI (spin forever)
     # If nested interrupts fired, we'd see different behavior
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, imm6=24))  # R2 = MEM[0x30] = 0xCAFE
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=28)) # MEM[0x38] = 0xCAFE
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xCAFE
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xCAFE
     # Spin without RETI - keep IRQB asserted, but I=1 should prevent re-entry
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))          # spin at 0x0008
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))          # spin at 0x0008
 
     # Data
     prog[0x000A] = 0x20
@@ -756,7 +742,7 @@ async def test_i_bit_masking(dut):
 
     # Continue at 0x0020: CLI, spin
     _place(prog, 0x0020, _encode_cli())
-    _place(prog, 0x0022, _encode_jr(rs=0, imm6=17))  # spin at 0x0022
+    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))  # spin at 0x0022
 
     # Clear marker
     prog[0x001C] = 0x00
@@ -807,12 +793,12 @@ async def test_irq_during_multicycle(dut):
 
     # Program: jump past vector, CLI, LW, SW (prove LW completed), spin
     # 0x0000: LW R1, 5(R0)  ; R1 = MEM[0x0A] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=10))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
     # IRQ handler at 0x0004: write R5 to marker (R5 set by main code's LW)
-    _place(prog, 0x0004, _encode_sw(rs2=5, rs1=0, imm6=30)) # MEM[0x3C] = R5
+    _place(prog, 0x0004, _encode_sw(rs2=5, rs1=0, off6=30)) # MEM[0x3C] = R5
     _place(prog, 0x0006, _encode_reti())
 
     # Data
@@ -822,11 +808,11 @@ async def test_irq_during_multicycle(dut):
     # Continue at 0x0020: CLI, LW into R5, write R5 to another marker
     _place(prog, 0x0020, _encode_cli())
     # 0x0022: LW R5, 24(R0)  ; R5 = MEM[0x30] = 0x1234
-    _place(prog, 0x0022, _encode_lw(rd=5, rs1=0, imm6=24))
+    _place(prog, 0x0022, _encode_lw(rd=5, rs1=0, off6=24))
     # 0x0024: SW R5, 28(R0)  ; MEM[0x38] = R5 (proves LW completed)
-    _place(prog, 0x0024, _encode_sw(rs2=5, rs1=0, imm6=28))
+    _place(prog, 0x0024, _encode_sw(rs2=5, rs1=0, off6=28))
     # 0x0026: spin
-    _place(prog, 0x0026, _encode_jr(rs=0, imm6=19))
+    _place(prog, 0x0026, _encode_jr(rs=0, off6=19))
 
     # Data: value for LW
     prog[0x0018] = 0x34
@@ -915,22 +901,22 @@ async def test_irq_interrupts_jr(dut):
 
     # Main code
     _place(prog, 0x0000, _encode_cli())
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=16))  # JR to 0x0020
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=16))  # JR to 0x0020
 
     # IRQ handler at 0x0004: write 0xBEEF to marker at 0x003C, then RETI
     # First load 0xBEEF into R1
     prog[0x0010] = 0xEF
     prog[0x0011] = 0xBE
-    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, imm6=16))   # R1 = MEM[0x10] = 0xBEEF
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, imm6=30)) # MEM[0x3C] = 0xBEEF
+    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))   # R1 = MEM[0x10] = 0xBEEF
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=30)) # MEM[0x3C] = 0xBEEF
     _place(prog, 0x0008, _encode_reti())
 
     # JR target at 0x0020: write 0xCAFE to marker at 0x0038, then spin
     prog[0x001A] = 0xFE
     prog[0x001B] = 0xCA
-    _place(prog, 0x0020, _encode_lw(rd=2, rs1=0, imm6=26))  # R2 = MEM[0x34] = 0xCAFE
-    _place(prog, 0x0022, _encode_sw(rs2=2, rs1=0, imm6=28)) # MEM[0x38] = 0xCAFE
-    _place(prog, 0x0024, _encode_jr(rs=0, imm6=18))         # Spin at 0x24
+    _place(prog, 0x0020, _encode_lw(rd=2, rs1=0, off6=26))  # R2 = MEM[0x34] = 0xCAFE
+    _place(prog, 0x0022, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xCAFE
+    _place(prog, 0x0024, _encode_jr(rs=0, off6=18))         # Spin at 0x24
 
     # Clear markers
     prog[0x001E] = 0x00
@@ -1044,12 +1030,12 @@ async def test_cli_atomicity(dut):
     # Program: CLI at 0x0000, then spin. IRQ will be pending from start.
     # After reset, I=1 masks the IRQ. CLI sets I=0, IRQ should fire immediately.
     _place(prog, 0x0000, _encode_cli())
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))  # spin at 0x0002
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))  # spin at 0x0002
 
     # IRQ handler at 0x0004: write marker and spin
-    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, imm6=16))   # R1 = MEM[0x10] = 0xBEEF
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, imm6=24)) # MEM[0x18] = 0xBEEF
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))          # spin at 0x0008
+    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))   # R1 = MEM[0x10] = 0xBEEF
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[0x18] = 0xBEEF
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))          # spin at 0x0008
 
     # Data: marker value
     prog[0x0010] = 0xEF
@@ -1092,7 +1078,7 @@ async def test_cycle_count_nop(dut):
     # 0x0000: NOP
     _place(prog, 0x0000, _encode_nop())
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     cycles = await _measure_instruction_cycles(dut, prog, 2, "NOP")
     assert cycles == 2, f"NOP: expected 2 cycles, got {cycles}"
@@ -1111,7 +1097,7 @@ async def test_cycle_count_sei(dut):
     # 0x0000: SEI
     _place(prog, 0x0000, _encode_sei())
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     cycles = await _measure_instruction_cycles(dut, prog, 2, "SEI")
     assert cycles == 2, f"SEI: expected 2 cycles, got {cycles}"
@@ -1130,7 +1116,7 @@ async def test_cycle_count_cli(dut):
     # 0x0000: CLI
     _place(prog, 0x0000, _encode_cli())
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     cycles = await _measure_instruction_cycles(dut, prog, 2, "CLI")
     assert cycles == 2, f"CLI: expected 2 cycles, got {cycles}"
@@ -1167,9 +1153,9 @@ async def test_cycle_count_lw(dut):
 
     prog = {}
     # 0x0000: LW R1, 8(R0)  ; load from 0x10
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     # Data at 0x10
     prog[0x0010] = 0x12
@@ -1192,9 +1178,9 @@ async def test_cycle_count_sw(dut):
 
     prog = {}
     # 0x0000: SW R0, 8(R0)  ; store R0 to 0x10
-    _place(prog, 0x0000, _encode_sw(rs2=0, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_sw(rs2=0, rs1=0, off6=16))
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     # SW: 4 cycles throughput (same as LW)
     cycles = await _measure_instruction_cycles(dut, prog, 4, "SW")
@@ -1212,9 +1198,9 @@ async def test_cycle_count_jr(dut):
 
     prog = {}
     # 0x0000: JR R0, 1 (jump to 0x0002)
-    _place(prog, 0x0000, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=1))
     # 0x0002: JR R0, 1 (spin at 0x0002)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     cycles = await _measure_instruction_cycles(dut, prog, 4, "JR")
     assert cycles == 4, f"JR: expected 4 cycles, got {cycles}"
@@ -1249,15 +1235,15 @@ async def test_nmi_basic(dut):
     prog = {}
 
     # Main code at $0000: spin loop (I=1 after reset, no CLI)
-    _place(prog, 0x0000, _encode_jr(rs=0, imm6=0))  # spin at $0000
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=0))  # spin at $0000
 
     # IRQ vector at $0004: spin (should NOT be reached)
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))  # spin at $0004
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))  # spin at $0004
 
     # NMI handler at $0008: write marker and spin
-    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, imm6=16))  # R1 = MEM[$20] = 0xBEEF
-    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, imm6=24)) # MEM[$30] = 0xBEEF
-    _place(prog, 0x000C, _encode_jr(rs=0, imm6=6))           # spin at $000C
+    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=16))  # R1 = MEM[$20] = 0xBEEF
+    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[$30] = 0xBEEF
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))           # spin at $000C
 
     # Data
     prog[0x0010] = 0xEF
@@ -1311,22 +1297,22 @@ async def test_nmi_edge_triggered(dut):
     prog = {}
 
     # Main code: spin at $0000
-    _place(prog, 0x0000, _encode_jr(rs=0, imm6=0))
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=0))
 
     # IRQ vector at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     # NMI handler at $0008: load marker, store marker+1 (count entries), RETI
     # First: load current count from $0030
-    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, imm6=24))  # R1 = MEM[$30]
+    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=24))  # R1 = MEM[$30]
     # Store 0xAAAA as marker (proves handler ran)
-    _place(prog, 0x000A, _encode_lw(rd=2, rs1=0, imm6=20))  # R2 = MEM[$28] = 0xAAAA
-    _place(prog, 0x000C, _encode_sw(rs2=2, rs1=0, imm6=24)) # MEM[$30] = 0xAAAA
+    _place(prog, 0x000A, _encode_lw(rd=2, rs1=0, off6=20))  # R2 = MEM[$28] = 0xAAAA
+    _place(prog, 0x000C, _encode_sw(rs2=2, rs1=0, off6=24)) # MEM[$30] = 0xAAAA
     # Spin in handler (no RETI — if NMI re-fires we'd jump to $0008 again
     # and overwrite marker with something different, but since we write the
     # same value, let's use a different approach: write to TWO locations)
-    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, imm6=26)) # MEM[$34] = 0xAAAA (second write)
-    _place(prog, 0x0010, _encode_jr(rs=0, imm6=8))           # spin at $0010
+    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=26)) # MEM[$34] = 0xAAAA (second write)
+    _place(prog, 0x0010, _encode_jr(rs=0, off6=8))           # spin at $0010
 
     # Data
     prog[0x0014] = 0xAA
@@ -1385,35 +1371,35 @@ async def test_nmi_priority_over_irq(dut):
     prog = {}
 
     # Main code: jump past vectors, CLI, spin
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=24))  # R1 = MEM[$18] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))           # JR to $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=24))  # R1 = MEM[$18] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))           # JR to $0020
 
     # IRQ handler at $0004: write IRQ marker
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, imm6=20))   # R2 = MEM[$28] = 0x1111
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=28))  # MEM[$34] = 0x1111
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))   # R2 = MEM[$28] = 0x1111
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=28))  # MEM[$34] = 0x1111
     # Spin in IRQ handler
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     # NMI handler at $0008 — WAIT, this conflicts with the JR spin above.
     # Need to restructure: IRQ handler can't use $0008 since that's the NMI vector.
     prog = {}
 
     # Main code: jump past vectors
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=30))   # R1 = MEM[$1E] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))            # JR to $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ handler at $0004: write IRQ marker, spin
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, imm6=20))    # R2 = MEM[$28] = 0x1111
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=24))   # MEM[$30] = 0x1111
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0x1111
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0x1111
 
     # NMI handler at $0008: write NMI marker, spin
-    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, imm6=22))    # R3 = MEM[$2A] = 0x2222
-    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, imm6=26))   # MEM[$32] = 0x2222
-    _place(prog, 0x000C, _encode_jr(rs=0, imm6=6))            # spin at $000C
+    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, off6=22))    # R3 = MEM[$2A] = 0x2222
+    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$32] = 0x2222
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))            # spin at $000C
 
     # Continue at $0020: CLI, then spin
     _place(prog, 0x0020, _encode_cli())
-    _place(prog, 0x0022, _encode_jr(rs=0, imm6=17))           # spin at $0022
+    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))           # spin at $0022
 
     # Data
     prog[0x001E] = 0x20
@@ -1475,20 +1461,20 @@ async def test_nmi_during_multicycle(dut):
     prog = {}
 
     # Main code: jump past vectors, then LW, then SW to prove LW completed
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=30))   # R1 = MEM[$1E] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))            # JR to $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     # NMI handler at $0008: write R5 to marker (R5 was loaded by main code's LW)
-    _place(prog, 0x0008, _encode_sw(rs2=5, rs1=0, imm6=26))   # MEM[$1A] = R5
+    _place(prog, 0x0008, _encode_sw(rs2=5, rs1=0, off6=26))   # MEM[$1A] = R5
     _place(prog, 0x000A, _encode_reti())
 
     # Continue at $0020: LW into R5, SW R5 to another marker, spin
-    _place(prog, 0x0020, _encode_lw(rd=5, rs1=0, imm6=24))    # R5 = MEM[$18] = 0x1234
-    _place(prog, 0x0022, _encode_sw(rs2=5, rs1=0, imm6=28))   # MEM[$1C] = R5
-    _place(prog, 0x0024, _encode_jr(rs=0, imm6=18))           # spin at $0024
+    _place(prog, 0x0020, _encode_lw(rd=5, rs1=0, off6=24))    # R5 = MEM[$18] = 0x1234
+    _place(prog, 0x0022, _encode_sw(rs2=5, rs1=0, off6=28))   # MEM[$1C] = R5
+    _place(prog, 0x0024, _encode_jr(rs=0, off6=18))           # spin at $0024
 
     # Data
     prog[0x001E] = 0x20
@@ -1550,10 +1536,10 @@ async def test_nmi_second_edge(dut):
     prog = {}
 
     # Main code: spin at $0000
-    _place(prog, 0x0000, _encode_jr(rs=0, imm6=0))
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=0))
 
     # IRQ at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     # NMI handler at $0008: increment marker word at $0030, then RETI
     # Load current marker value, add 1 by storing a new known value each time.
@@ -1571,10 +1557,10 @@ async def test_nmi_second_edge(dut):
     # Check: $0032 == 0xBBBB proves second NMI ran.
 
     # NMI handler at $0008:
-    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, imm6=24))    # R1 = MEM[$30] (current)
-    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, imm6=26))   # MEM[$32] = R1 (copy previous)
-    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, imm6=22))    # R2 = MEM[$2C] = 0xBBBB
-    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, imm6=24))   # MEM[$30] = 0xBBBB
+    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=24))    # R1 = MEM[$30] (current)
+    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, off6=26))   # MEM[$32] = R1 (copy previous)
+    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=22))    # R2 = MEM[$2C] = 0xBBBB
+    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xBBBB
     _place(prog, 0x0010, _encode_reti())
 
     # Data
@@ -1647,15 +1633,15 @@ async def test_nmi_during_rdy_low(dut):
     prog = {}
 
     # Main code at $0000: spin loop
-    _place(prog, 0x0000, _encode_jr(rs=0, imm6=0))  # spin at $0000
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=0))  # spin at $0000
 
     # IRQ vector at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     # NMI handler at $0008: write marker and spin
-    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, imm6=16))  # R1 = MEM[$20] = 0xBEEF
-    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, imm6=24)) # MEM[$30] = 0xBEEF
-    _place(prog, 0x000C, _encode_jr(rs=0, imm6=6))           # spin at $000C
+    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=16))  # R1 = MEM[$20] = 0xBEEF
+    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[$30] = 0xBEEF
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))           # spin at $000C
 
     # Data
     prog[0x0010] = 0xEF
@@ -1722,12 +1708,12 @@ async def test_wai_irq(dut):
     prog = {}
 
     # Main code: jump past vectors, CLI, WAI, then write marker (proves RETI returned past WAI)
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=30))   # R1 = MEM[$1E] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))            # JR to $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ handler at $0004: write marker, RETI
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, imm6=20))    # R2 = MEM[$28] = 0xAAAA
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=24))   # MEM[$30] = 0xAAAA
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0xAAAA
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xAAAA
     _place(prog, 0x0008, _encode_reti())
 
     # NMI vector at $0008 — conflicts with RETI above. That's fine since
@@ -1737,9 +1723,9 @@ async def test_wai_irq(dut):
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_wai())
     # After WAI + IRQ + RETI, execution resumes at $0024
-    _place(prog, 0x0024, _encode_lw(rd=3, rs1=0, imm6=22))    # R3 = MEM[$2A] = 0xBBBB
-    _place(prog, 0x0026, _encode_sw(rs2=3, rs1=0, imm6=26))   # MEM[$32] = 0xBBBB
-    _place(prog, 0x0028, _encode_jr(rs=0, imm6=20))            # spin at $0028
+    _place(prog, 0x0024, _encode_lw(rd=3, rs1=0, off6=22))    # R3 = MEM[$2A] = 0xBBBB
+    _place(prog, 0x0026, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$32] = 0xBBBB
+    _place(prog, 0x0028, _encode_jr(rs=0, off6=20))            # spin at $0028
 
     # Data
     prog[0x001E] = 0x20
@@ -1803,23 +1789,23 @@ async def test_wai_nmi(dut):
     prog = {}
 
     # Main code: jump past vectors, WAI (I=1 from reset), then post-WAI marker
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=30))    # R1 = MEM[$1E] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))             # JR to $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))    # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
 
     # IRQ vector at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     # NMI handler at $0008: write marker, RETI
-    _place(prog, 0x0008, _encode_lw(rd=2, rs1=0, imm6=20))    # R2 = MEM[$28] = 0xAAAA
-    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, imm6=24))   # MEM[$30] = 0xAAAA
+    _place(prog, 0x0008, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0xAAAA
+    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xAAAA
     _place(prog, 0x000C, _encode_reti())
 
     # Continue at $0020: WAI (I=1, only NMI or masked IRQ can wake)
     _place(prog, 0x0020, _encode_wai())
     # After WAI + NMI + RETI, execution resumes at $0022
-    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, imm6=22))    # R3 = MEM[$2A] = 0xBBBB
-    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, imm6=26))   # MEM[$32] = 0xBBBB
-    _place(prog, 0x0026, _encode_jr(rs=0, imm6=19))            # spin at $0026
+    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=22))    # R3 = MEM[$2A] = 0xBBBB
+    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$32] = 0xBBBB
+    _place(prog, 0x0026, _encode_jr(rs=0, off6=19))            # spin at $0026
 
     # Data
     prog[0x001E] = 0x20
@@ -1887,22 +1873,22 @@ async def test_wai_masked_irq_wakes(dut):
     prog = {}
 
     # Main code: jump past vectors, WAI (I=1), then post-WAI marker
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=30))    # R1 = MEM[$1E] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))             # JR to $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))    # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
 
     # IRQ handler at $0004: write IRQ marker (should NOT happen)
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, imm6=20))    # R2 = MEM[$28] = 0xDEAD
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=24))   # MEM[$30] = 0xDEAD
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0xDEAD
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xDEAD
 
     # NMI vector at $0008: unused
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     # Continue at $0020: WAI (I=1 from reset)
     _place(prog, 0x0020, _encode_wai())
     # After WAI wakes (masked IRQ), resumes here at $0022
-    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, imm6=22))    # R3 = MEM[$2A] = 0xBBBB
-    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, imm6=26))   # MEM[$32] = 0xBBBB
-    _place(prog, 0x0026, _encode_jr(rs=0, imm6=19))            # spin at $0026
+    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=22))    # R3 = MEM[$2A] = 0xBBBB
+    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$32] = 0xBBBB
+    _place(prog, 0x0026, _encode_jr(rs=0, off6=19))            # spin at $0026
 
     # Data
     prog[0x001E] = 0x20
@@ -1965,26 +1951,26 @@ async def test_stp(dut):
     # Markers: 0x18=IRQ, 0x1A=NMI, 0x1C=pre-STP, 0x1E=post-STP
 
     # Main code: jump past vectors, write pre-STP marker, STP
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=14))    # R1 = MEM[$0E] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))             # JR to $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=14))    # R1 = MEM[$0E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
 
     # IRQ handler at $0004: write IRQ marker (should NOT happen)
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, imm6=16))    # R2 = MEM[$10] = 0xDEAD
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=24))   # MEM[$18] = 0xDEAD
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=16))    # R2 = MEM[$10] = 0xDEAD
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$18] = 0xDEAD
 
     # NMI handler at $0008: write NMI marker (should NOT happen)
-    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, imm6=18))    # R3 = MEM[$12] = 0xBEEF
-    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, imm6=26))   # MEM[$1A] = 0xBEEF
-    _place(prog, 0x000C, _encode_jr(rs=0, imm6=6))
+    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, off6=18))    # R3 = MEM[$12] = 0xBEEF
+    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$1A] = 0xBEEF
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
 
     # Continue at $0020: CLI (enable IRQ), write pre-STP marker, STP
     _place(prog, 0x0020, _encode_cli())
-    _place(prog, 0x0022, _encode_lw(rd=4, rs1=0, imm6=20))    # R4 = MEM[$14] = 0x1111
-    _place(prog, 0x0024, _encode_sw(rs2=4, rs1=0, imm6=28))   # MEM[$1C] = 0x1111 (pre-STP marker)
+    _place(prog, 0x0022, _encode_lw(rd=4, rs1=0, off6=20))    # R4 = MEM[$14] = 0x1111
+    _place(prog, 0x0024, _encode_sw(rs2=4, rs1=0, off6=28))   # MEM[$1C] = 0x1111 (pre-STP marker)
     _place(prog, 0x0026, _encode_stp())
     # Post-STP: should never execute
-    _place(prog, 0x0028, _encode_lw(rd=5, rs1=0, imm6=22))    # R5 = MEM[$16] = 0x2222
-    _place(prog, 0x002A, _encode_sw(rs2=5, rs1=0, imm6=30))   # MEM[$1E] = 0x2222
+    _place(prog, 0x0028, _encode_lw(rd=5, rs1=0, off6=22))    # R5 = MEM[$16] = 0x2222
+    _place(prog, 0x002A, _encode_sw(rs2=5, rs1=0, off6=30))   # MEM[$1E] = 0x2222
 
     # Data
     prog[0x000E] = 0x20
@@ -2079,7 +2065,7 @@ async def test_cycle_count_wai(dut):
     # WAI at $0000 with IRQB=0 but I=1 (from reset): masked IRQ wakes immediately
     _place(prog, 0x0000, _encode_wai())
     # $0002: JR R0, 1 (spin) — WAI resumes here after masked IRQ wake
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     def get_sync():
         return (int(dut.uo_out.value) >> 1) & 1
@@ -2184,26 +2170,26 @@ async def test_brk_basic(dut):
     prog = {}
 
     # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020 (jump target)
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=10))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0        ; jump past vectors to 0x0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
     # Data: jump target
     prog[0x000A] = 0x20
     prog[0x000B] = 0x00
 
     # BRK handler at 0x000C: write marker, RETI
-    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, imm6=24))  # R2 = MEM[0x30] = 0xAAAA
-    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, imm6=28)) # MEM[0x38] = 0xAAAA
+    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
+    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA
     _place(prog, 0x0010, _encode_reti())
 
     # 0x0020: CLI, then BRK
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_brk())
     # 0x0024: after BRK returns here, write return marker
-    _place(prog, 0x0024, _encode_lw(rd=3, rs1=0, imm6=26))  # R3 = MEM[0x34] = 0xBBBB
-    _place(prog, 0x0026, _encode_sw(rs2=3, rs1=0, imm6=30)) # MEM[0x3C] = 0xBBBB
-    _place(prog, 0x0028, _encode_jr(rs=0, imm6=20))         # spin
+    _place(prog, 0x0024, _encode_lw(rd=3, rs1=0, off6=26))  # R3 = MEM[0x34] = 0xBBBB
+    _place(prog, 0x0026, _encode_sw(rs2=3, rs1=0, off6=30)) # MEM[0x3C] = 0xBBBB
+    _place(prog, 0x0028, _encode_jr(rs=0, off6=20))         # spin
 
     # Data
     prog[0x0018] = 0xAA
@@ -2256,28 +2242,28 @@ async def test_brk_masks_irq(dut):
     prog = {}
 
     # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=10))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0        ; jump to 0x0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
     # IRQ handler at 0x0004: write IRQ marker
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, imm6=26))  # R2 = MEM[0x34] = 0xCCCC
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=30)) # MEM[0x3C] = 0xCCCC
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=26))  # R2 = MEM[0x34] = 0xCCCC
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=30)) # MEM[0x3C] = 0xCCCC
     _place(prog, 0x0008, _encode_reti())
 
     prog[0x000A] = 0x20
     prog[0x000B] = 0x00
 
     # BRK handler at 0x000C: write BRK marker, RETI
-    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, imm6=24))  # R2 = MEM[0x30] = 0xAAAA
-    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, imm6=28)) # MEM[0x38] = 0xAAAA
+    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
+    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA
     _place(prog, 0x0010, _encode_reti())
 
     # 0x0020: CLI, then BRK (with IRQB held low)
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_brk())
     # 0x0024: after RETI from BRK, I=0 and IRQB still low → IRQ fires
-    _place(prog, 0x0024, _encode_jr(rs=0, imm6=18))  # spin
+    _place(prog, 0x0024, _encode_jr(rs=0, off6=18))  # spin
 
     # Data
     prog[0x0018] = 0xAA
@@ -2338,7 +2324,7 @@ async def test_cycle_count_brk(dut):
     # 0x0000: BRK (from reset, I=1, but BRK is unconditional)
     _place(prog, 0x0000, _encode_brk())
     # BRK handler at 0x000C: spin
-    _place(prog, 0x000C, _encode_jr(rs=0, imm6=6))  # JR R0, 6 → spin at 0x000C
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))  # JR R0, 6 → spin at 0x000C
 
     _load_program(dut, prog)
 
@@ -2387,29 +2373,29 @@ async def test_brk_restores_i(dut):
     prog = {}
 
     # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=10))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
     # 0x0002: JR R1, 0        ; jump to 0x0020 (past vectors)
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
     # IRQ handler at 0x0004: write IRQ marker (should NOT fire)
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, imm6=26))  # R2 = MEM[0x34] = 0xDEAD
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=30)) # MEM[0x3C] = 0xDEAD
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=26))  # R2 = MEM[0x34] = 0xDEAD
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=30)) # MEM[0x3C] = 0xDEAD
     _place(prog, 0x0008, _encode_reti())
 
     prog[0x000A] = 0x20
     prog[0x000B] = 0x00
 
     # BRK handler at 0x000C: write BRK marker, RETI
-    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, imm6=24))  # R2 = MEM[0x30] = 0xAAAA
-    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, imm6=28)) # MEM[0x38] = 0xAAAA
+    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
+    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA
     _place(prog, 0x0010, _encode_reti())
 
     # 0x0020: BRK (I=1 from reset, never cleared)
     _place(prog, 0x0020, _encode_brk())
     # 0x0022: after RETI, I should still be 1; write return marker then spin
-    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, imm6=26))  # R3 = MEM[0x34] = 0xBBBB
-    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, imm6=30)) # MEM[0x3C] = 0xBBBB
-    _place(prog, 0x0026, _encode_jr(rs=0, imm6=19))         # spin
+    _place(prog, 0x0022, _encode_lw(rd=3, rs1=0, off6=26))  # R3 = MEM[0x34] = 0xBBBB
+    _place(prog, 0x0024, _encode_sw(rs2=3, rs1=0, off6=30)) # MEM[0x3C] = 0xBBBB
+    _place(prog, 0x0026, _encode_jr(rs=0, off6=19))         # spin
 
     # Data
     prog[0x0018] = 0xAA
@@ -2466,19 +2452,19 @@ async def test_epcr_basic(dut):
     prog = {}
 
     # Main code: jump past vectors, CLI, then spin waiting for IRQ
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=30))   # R1 = MEM[$1E] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))            # JR to $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ handler at $0004: EPCR R2, store R2 to memory, spin
     _place(prog, 0x0004, _encode_epcr(rd=2))                  # R2 = EPC
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=24))   # MEM[$30] = R2
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))            # spin at $0008
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = R2
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))            # spin at $0008
 
     # NMI vector at $0008 — shared with spin above (no NMI in this test)
 
     # Continue at $0020: CLI, then spin (IRQ will fire immediately)
     _place(prog, 0x0020, _encode_cli())
-    _place(prog, 0x0022, _encode_jr(rs=0, imm6=17))           # spin at $0022
+    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))           # spin at $0022
 
     # Data
     prog[0x001E] = 0x20
@@ -2523,17 +2509,17 @@ async def test_epcw_basic(dut):
     # Markers: 0x18=orig-return, 0x1A=target
 
     # Main code: jump past vectors, CLI, BRK to enter handler
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=10))   # R1 = MEM[$0A] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))            # JR to $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))   # R1 = MEM[$0A] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     # NMI at $0008: unused
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     # BRK handler at $000C: load target addr into R3, EPCW R3, RETI
-    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, imm6=18))    # R3 = MEM[$12] = $0030
+    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, off6=18))    # R3 = MEM[$12] = $0030
     _place(prog, 0x000E, _encode_epcw(rs=3))                  # EPC = R3 = $0030
     _place(prog, 0x0010, _encode_reti())                       # jump to $0030, I = EPC[0] = 0
 
@@ -2551,14 +2537,14 @@ async def test_epcw_basic(dut):
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_brk())
     # $0024: should NOT reach here (EPCW redirected RETI)
-    _place(prog, 0x0024, _encode_lw(rd=4, rs1=0, imm6=20))   # R4 = MEM[$14] = 0xDEAD
-    _place(prog, 0x0026, _encode_sw(rs2=4, rs1=0, imm6=24))  # MEM[$18] = 0xDEAD
-    _place(prog, 0x0028, _encode_jr(rs=0, imm6=20))           # spin at $0028
+    _place(prog, 0x0024, _encode_lw(rd=4, rs1=0, off6=20))   # R4 = MEM[$14] = 0xDEAD
+    _place(prog, 0x0026, _encode_sw(rs2=4, rs1=0, off6=24))  # MEM[$18] = 0xDEAD
+    _place(prog, 0x0028, _encode_jr(rs=0, off6=20))           # spin at $0028
 
     # EPCW target at $0030: write AAAA marker, spin
-    _place(prog, 0x0030, _encode_lw(rd=5, rs1=0, imm6=22))   # R5 = MEM[$16] = 0xAAAA
-    _place(prog, 0x0032, _encode_sw(rs2=5, rs1=0, imm6=26))  # MEM[$1A] = 0xAAAA
-    _place(prog, 0x0034, _encode_jr(rs=0, imm6=26))           # spin at $0034
+    _place(prog, 0x0030, _encode_lw(rd=5, rs1=0, off6=22))   # R5 = MEM[$16] = 0xAAAA
+    _place(prog, 0x0032, _encode_sw(rs2=5, rs1=0, off6=26))  # MEM[$1A] = 0xAAAA
+    _place(prog, 0x0034, _encode_jr(rs=0, off6=26))           # spin at $0034
 
     # Clear markers
     prog[0x0018] = 0x00
@@ -2607,16 +2593,16 @@ async def test_epcw_restores_i(dut):
     # Marker: 0x18=IRQ marker
 
     # Main code: jump past vectors
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=10))   # R1 = MEM[$0A] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, imm6=0))            # JR to $0020
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))   # R1 = MEM[$0A] = $0020
+    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ handler at $0004: write IRQ marker, spin
-    _place(prog, 0x0004, _encode_lw(rd=6, rs1=0, imm6=20))   # R6 = MEM[$14] = 0xCCCC
-    _place(prog, 0x0006, _encode_sw(rs2=6, rs1=0, imm6=24))  # MEM[$18] = 0xCCCC
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))            # spin at $0008
+    _place(prog, 0x0004, _encode_lw(rd=6, rs1=0, off6=20))   # R6 = MEM[$14] = 0xCCCC
+    _place(prog, 0x0006, _encode_sw(rs2=6, rs1=0, off6=24))  # MEM[$18] = 0xCCCC
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))            # spin at $0008
 
     # BRK handler at $000C: EPCW with I=0 in bit 0, then RETI
-    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, imm6=18))    # R3 = MEM[$12] = $0030
+    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, off6=18))    # R3 = MEM[$12] = $0030
     _place(prog, 0x000E, _encode_epcw(rs=3))                  # EPC = $0030 (bit 0 = 0 → I=0)
     _place(prog, 0x0010, _encode_reti())                       # PC=$0030, I=0
 
@@ -2630,10 +2616,10 @@ async def test_epcw_restores_i(dut):
 
     # Continue at $0020: BRK (I=1 from reset, no CLI needed — BRK is unconditional)
     _place(prog, 0x0020, _encode_brk())
-    _place(prog, 0x0022, _encode_jr(rs=0, imm6=17))           # spin (unreachable)
+    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))           # spin (unreachable)
 
     # EPCW target at $0030: spin — I=0, so if IRQB=0, IRQ should fire
-    _place(prog, 0x0030, _encode_jr(rs=0, imm6=24))           # spin at $0030
+    _place(prog, 0x0030, _encode_jr(rs=0, off6=24))           # spin at $0030
 
     # Clear marker
     prog[0x0018] = 0x00
@@ -2672,7 +2658,7 @@ async def test_cycle_count_epcr(dut):
     # 0x0000: EPCR R0
     _place(prog, 0x0000, _encode_epcr(rd=0))
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     cycles = await _measure_instruction_cycles(dut, prog, 2, "EPCR")
     assert cycles == 2, f"EPCR: expected 2 cycles, got {cycles}"
@@ -2691,7 +2677,7 @@ async def test_cycle_count_epcw(dut):
     # 0x0000: EPCW R0
     _place(prog, 0x0000, _encode_epcw(rs=0))
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     cycles = await _measure_instruction_cycles(dut, prog, 2, "EPCW")
     assert cycles == 2, f"EPCW: expected 2 cycles, got {cycles}"
@@ -2701,28 +2687,28 @@ async def test_cycle_count_epcw(dut):
 # ---------------------------------------------------------------------------
 # Helper encoders for byte load/store instructions
 # ---------------------------------------------------------------------------
-def _encode_lb(rs1, imm6, rd):
-    """Encode LB rd, imm6(rs1) -> 16-bit little-endian bytes. I-format."""
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+def _encode_lb(rs1, off6, rd):
+    """Encode LB rd, off6(rs1) -> 16-bit little-endian bytes. S-format."""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rd <= 7 and 0 <= rs1 <= 7
-    imm6 &= 0x3F
-    return _encode_i_format(0b0110, imm6, rs1, rd)
+    off6 &= 0x3F
+    return _encode_s_format(0b0110, off6, rs1, rd)
 
 
-def _encode_lbu(rs1, imm6, rd):
-    """Encode LBU rd, imm6(rs1) -> 16-bit little-endian bytes. I-format."""
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+def _encode_lbu(rs1, off6, rd):
+    """Encode LBU rd, off6(rs1) -> 16-bit little-endian bytes. S-format."""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rd <= 7 and 0 <= rs1 <= 7
-    imm6 &= 0x3F
-    return _encode_i_format(0b0111, imm6, rs1, rd)
+    off6 &= 0x3F
+    return _encode_s_format(0b0111, off6, rs1, rd)
 
 
-def _encode_sb(rs1, imm6, rs2):
-    """Encode SB rs2, imm6(rs1) -> 16-bit little-endian bytes. S-format."""
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+def _encode_sb(rs1, off6, rs2):
+    """Encode SB rs2, off6(rs1) -> 16-bit little-endian bytes. S-format."""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs2 <= 7 and 0 <= rs1 <= 7
-    imm6 &= 0x3F
-    return _encode_s_format(0b1001, imm6, rs1, rs2)
+    off6 &= 0x3F
+    return _encode_s_format(0b1001, off6, rs1, rs2)
 
 
 # ---------------------------------------------------------------------------
@@ -2745,13 +2731,13 @@ async def test_lb_basic(dut):
     prog[0x0011] = 0x00
 
     # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LB R2, 0(R1)    ; R2 = sext(MEM[0x0020]) = 0x0042
-    _place(prog, 0x0002, _encode_lb(rs1=1, imm6=0, rd=2))
+    _place(prog, 0x0002, _encode_lb(rs1=1, off6=0, rd=2))
     # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
     # 0x0006: JR R0, 3        ; spin at 0x0006
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -2785,13 +2771,13 @@ async def test_lb_sign_extend(dut):
     prog[0x0011] = 0x00
 
     # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LB R2, 0(R1)    ; R2 = sext(MEM[0x0020]) = 0xFFA5
-    _place(prog, 0x0002, _encode_lb(rs1=1, imm6=0, rd=2))
+    _place(prog, 0x0002, _encode_lb(rs1=1, off6=0, rd=2))
     # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
     # 0x0006: JR R0, 3        ; spin at 0x0006
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -2825,13 +2811,13 @@ async def test_lbu_basic(dut):
     prog[0x0011] = 0x00
 
     # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LBU R2, 0(R1)   ; R2 = zext(MEM[0x0020]) = 0x00A5
-    _place(prog, 0x0002, _encode_lbu(rs1=1, imm6=0, rd=2))
+    _place(prog, 0x0002, _encode_lbu(rs1=1, off6=0, rd=2))
     # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
     # 0x0006: JR R0, 3        ; spin at 0x0006
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -2870,13 +2856,13 @@ async def test_sb_basic(dut):
     prog[0x0013] = 0x00
 
     # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0xBEEF
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LW R2, 9(R0)    ; R2 = MEM[0x12] = 0x0030
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     # 0x0004: SB R1, 0(R2)    ; MEM[0x0030] = R1[7:0] = 0xEF
-    _place(prog, 0x0004, _encode_sb(rs1=2, imm6=0, rs2=1))
+    _place(prog, 0x0004, _encode_sb(rs1=2, off6=0, rs2=1))
     # 0x0006: JR R0, 3        ; spin at 0x0006
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -2910,13 +2896,13 @@ async def test_byte_negative_offset(dut):
     prog[0x0011] = 0x00
 
     # 0x0000: LW R1, 8(R0)    ; R1 = MEM[0x10] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LB R2, -1(R1)   ; R2 = sext(MEM[0x001F]) = 0x007F
-    _place(prog, 0x0002, _encode_lb(rs1=1, imm6=-1, rd=2))
+    _place(prog, 0x0002, _encode_lb(rs1=1, off6=-1, rd=2))
     # 0x0004: SW R2, 20(R0)   ; MEM[0x28] = R2
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
     # 0x0006: JR R0, 3        ; spin at 0x0006
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -2943,9 +2929,9 @@ async def test_cycle_count_lb(dut):
 
     prog = {}
     # 0x0000: LB R0, 0(R0)    ; load byte from address 0
-    _place(prog, 0x0000, _encode_lb(rs1=0, imm6=0, rd=0))
+    _place(prog, 0x0000, _encode_lb(rs1=0, off6=0, rd=0))
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     cycles = await _measure_instruction_cycles(dut, prog, 4, "LB")
     assert cycles == 4, f"LB: expected 4 cycles, got {cycles}"
@@ -2962,9 +2948,9 @@ async def test_cycle_count_lbu(dut):
 
     prog = {}
     # 0x0000: LBU R0, 0(R0)   ; load byte unsigned from address 0
-    _place(prog, 0x0000, _encode_lbu(rs1=0, imm6=0, rd=0))
+    _place(prog, 0x0000, _encode_lbu(rs1=0, off6=0, rd=0))
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     cycles = await _measure_instruction_cycles(dut, prog, 4, "LBU")
     assert cycles == 4, f"LBU: expected 4 cycles, got {cycles}"
@@ -2981,9 +2967,9 @@ async def test_cycle_count_sb(dut):
 
     prog = {}
     # 0x0000: SB R0, 8(R0)    ; store byte to address 8
-    _place(prog, 0x0000, _encode_sb(rs1=0, imm6=8, rs2=0))
+    _place(prog, 0x0000, _encode_sb(rs1=0, off6=8, rs2=0))
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     cycles = await _measure_instruction_cycles(dut, prog, 3, "SB")
     assert cycles == 3, f"SB: expected 3 cycles, got {cycles}"
@@ -2991,7 +2977,7 @@ async def test_cycle_count_sb(dut):
 
 
 def _encode_auipc(rd, imm10):
-    """Encode AUIPC rd, imm10 -> 16-bit little-endian bytes. [001][imm10:10][rd:3]"""
+    """Encode AUIPC rd, imm10 -> 16-bit little-endian bytes."""
     assert -512 <= imm10 <= 511, f"imm10 out of range: {imm10}"
     assert 0 <= rd <= 7
     imm10 &= 0x3FF
@@ -3016,9 +3002,9 @@ async def test_auipc_basic(dut):
     # 0x0002: AUIPC R1, 0  ; R1 = (PC+2) + 0 = 0x0004
     _place(prog, 0x0002, _encode_auipc(rd=1, imm10=0))
     # 0x0004: SW R1, 20(R0) ; MEM[0 + 20*2] = MEM[0x28] = R1
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
     # 0x0006: JR R0, 3      ; spin at 0x0006
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3047,9 +3033,9 @@ async def test_auipc_positive_offset(dut):
     # 0x0000: AUIPC R1, 1  ; R1 = 0x0002 + (1 << 6) = 0x0042
     _place(prog, 0x0000, _encode_auipc(rd=1, imm10=1))
     # 0x0002: SW R1, 20(R0) ; MEM[0x28] = R1
-    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, imm6=20))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
     # 0x0004: JR R0, 2      ; spin at 0x0004
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3081,16 +3067,16 @@ async def test_auipc_negative_offset(dut):
     prog[0x0010] = 0x80
     prog[0x0011] = 0x00
     # 0x0000: LW R2, 16(R0)  ; R2 = MEM[0x20] = 0x0080
-    _place(prog, 0x0000, _encode_lw(rd=2, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=2, rs1=0, off6=16))
     # 0x0002: JR R2, 0       ; jump to 0x0080
-    _place(prog, 0x0002, _encode_jr(rs=2, imm6=0))
+    _place(prog, 0x0002, _encode_jr(rs=2, off6=0))
 
     # At 0x0080: AUIPC R1, -1 ; R1 = 0x0082 + 0xFFC0 = 0x0042
     _place(prog, 0x0080, _encode_auipc(rd=1, imm10=-1))
     # 0x0082: SW R1, 20(R0)  ; MEM[0x28] = R1
-    _place(prog, 0x0082, _encode_sw(rs2=1, rs1=0, imm6=20))
-    # 0x0084: JR R2, 2       ; spin at 0x0084 (R2=0x0080, imm6=2 → 0x0080+4=0x0084)
-    _place(prog, 0x0084, _encode_jr(rs=2, imm6=2))
+    _place(prog, 0x0082, _encode_sw(rs2=1, rs1=0, off6=20))
+    # 0x0084: JR R2, 2       ; spin at 0x0084 (R2=0x0080, off6=2 → 0x0080+4=0x0084)
+    _place(prog, 0x0084, _encode_jr(rs=2, off6=2))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3125,11 +3111,11 @@ async def test_auipc_with_lw(dut):
     # 0x0000: AUIPC R1, 1    ; R1 = 0x0002 + 0x0040 = 0x0042
     _place(prog, 0x0000, _encode_auipc(rd=1, imm10=1))
     # 0x0002: LW R2, 8(R1)   ; R2 = MEM[0x0042 + 16] = MEM[0x0052] = 0xBEEF
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=1, imm6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=1, off6=16))
     # 0x0004: SW R2, 20(R0)  ; MEM[0x28] = R2
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
     # 0x0006: JR R0, 3       ; spin at 0x0006
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3158,9 +3144,9 @@ async def test_auipc_large_imm10(dut):
     # 0x0000: AUIPC R1, 0x100 (256) ; R1 = 0x0002 + (256 << 6) = 0x0002 + 0x4000 = 0x4002
     _place(prog, 0x0000, _encode_auipc(rd=1, imm10=256))
     # 0x0002: SW R1, 20(R0) ; MEM[0x28] = R1
-    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, imm6=20))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
     # 0x0004: JR R0, 2      ; spin at 0x0004
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3189,7 +3175,7 @@ async def test_cycle_count_auipc(dut):
     # 0x0000: AUIPC R1, 0
     _place(prog, 0x0000, _encode_auipc(rd=1, imm10=0))
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     cycles = await _measure_instruction_cycles(dut, prog, 2, "AUIPC")
     assert cycles == 2, f"AUIPC: expected 2 cycles, got {cycles}"
@@ -3245,15 +3231,15 @@ async def test_add_basic(dut):
     prog[0x0013] = 0x56
 
     # 0x0000: LW R1, 16(R0)  ; R1 = 0x1234
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     # 0x0002: LW R2, 17(R0)  ; R2 = 0x5678
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     # 0x0004: ADD R3, R1, R2 ; R3 = R1 + R2 = 0x68AC
     _place(prog, 0x0004, _encode_add(rd=3, rs1=1, rs2=2))
     # 0x0006: SW R3, 20(R0)  ; MEM[0x28] = R3
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
     # 0x0008: JR R0, 4       ; spin at 0x0008
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3284,11 +3270,11 @@ async def test_sub_basic(dut):
     prog[0x0012] = 0x34
     prog[0x0013] = 0x12
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sub(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3319,11 +3305,11 @@ async def test_sub_borrow(dut):
     prog[0x0012] = 0x01
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sub(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3354,11 +3340,11 @@ async def test_and_basic(dut):
     prog[0x0012] = 0xFF
     prog[0x0013] = 0x0F
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_and(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3389,11 +3375,11 @@ async def test_or_basic(dut):
     prog[0x0012] = 0xF0
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_or(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3424,11 +3410,11 @@ async def test_xor_basic(dut):
     prog[0x0012] = 0xAA
     prog[0x0013] = 0xAA
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_xor(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3457,10 +3443,10 @@ async def test_alu_same_reg(dut):
     prog[0x0010] = 0x34
     prog[0x0011] = 0x12
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_add(rd=1, rs1=1, rs2=1))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3489,7 +3475,7 @@ async def test_cycle_count_add(dut):
     # 0x0000: ADD R0, R0, R0
     _place(prog, 0x0000, _encode_add(rd=0, rs1=0, rs2=0))
     # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, imm6=1))
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
     cycles = await _measure_instruction_cycles(dut, prog, 2, "ADD")
     assert cycles == 2, f"ADD: expected 2 cycles, got {cycles}"
@@ -3531,9 +3517,9 @@ async def test_li_positive(dut):
     # 0x0000: LI R1, 31
     _place(prog, 0x0000, _encode_li(rd=1, imm6=31))
     # 0x0002: SW R1, 20(R0)  ; MEM[0x28] = R1
-    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, imm6=20))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
     # 0x0004: JR R0, 2       ; spin
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3560,8 +3546,8 @@ async def test_li_negative(dut):
 
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm6=-1))
-    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3588,8 +3574,8 @@ async def test_li_zero(dut):
 
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm6=0))
-    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3620,11 +3606,11 @@ async def test_slt_true(dut):
     prog[0x0012] = 0x0A
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3655,11 +3641,11 @@ async def test_slt_false(dut):
     prog[0x0012] = 0x05
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3690,11 +3676,11 @@ async def test_slt_equal(dut):
     prog[0x0012] = 0x05
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3725,11 +3711,11 @@ async def test_slt_negative(dut):
     prog[0x0012] = 0x05
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3760,11 +3746,11 @@ async def test_slt_negative_false(dut):
     prog[0x0012] = 0xFB
     prog[0x0013] = 0xFF
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3795,11 +3781,11 @@ async def test_sltu_true(dut):
     prog[0x0012] = 0x0A
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3830,11 +3816,11 @@ async def test_sltu_false(dut):
     prog[0x0012] = 0x05
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3865,11 +3851,11 @@ async def test_sltu_large(dut):
     prog[0x0012] = 0xFF
     prog[0x0013] = 0xFF
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3900,11 +3886,11 @@ async def test_sltu_large_reverse(dut):
     prog[0x0012] = 0x05
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -3927,36 +3913,40 @@ def _encode_lui(rd, imm10):
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
-def _encode_bz(rs, imm6):
-    """Encode BZ rs, imm6 -> 16-bit little-endian bytes. B-format."""
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+def _encode_bz(rs, off6):
+    """Encode BZ rs, off6 -> 16-bit little-endian bytes. [1101000][off6:6][rs:3]"""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
-    imm6 &= 0x3F
-    return _encode_b_format(0b1101000, rs, imm6)
+    off6 &= 0x3F
+    insn = (0b1101000 << 9) | (off6 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
-def _encode_bnz(rs, imm6):
-    """Encode BNZ rs, imm6 -> 16-bit little-endian bytes. B-format."""
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+def _encode_bnz(rs, off6):
+    """Encode BNZ rs, off6 -> 16-bit little-endian bytes. [1101001][off6:6][rs:3]"""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
-    imm6 &= 0x3F
-    return _encode_b_format(0b1101001, rs, imm6)
+    off6 &= 0x3F
+    insn = (0b1101001 << 9) | (off6 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
-def _encode_bltz(rs, imm6):
-    """Encode BLTZ rs, imm6 -> 16-bit little-endian bytes. B-format."""
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+def _encode_bltz(rs, off6):
+    """Encode BLTZ rs, off6 -> 16-bit little-endian bytes. [1101010][off6:6][rs:3]"""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
-    imm6 &= 0x3F
-    return _encode_b_format(0b1101010, rs, imm6)
+    off6 &= 0x3F
+    insn = (0b1101010 << 9) | (off6 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
-def _encode_bgez(rs, imm6):
-    """Encode BGEZ rs, imm6 -> 16-bit little-endian bytes. B-format."""
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+def _encode_bgez(rs, off6):
+    """Encode BGEZ rs, off6 -> 16-bit little-endian bytes. [1101011][off6:6][rs:3]"""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
-    imm6 &= 0x3F
-    return _encode_b_format(0b1101011, rs, imm6)
+    off6 &= 0x3F
+    insn = (0b1101011 << 9) | (off6 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 # ---------------------------------------------------------------------------
@@ -3973,8 +3963,8 @@ async def test_lui_positive(dut):
     prog = {}
     # LUI R1, 0x48 -> R1 = 0x48 << 6 = 0x1200
     _place(prog, 0x0000, _encode_lui(rd=1, imm10=0x48))
-    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4001,8 +3991,8 @@ async def test_lui_negative(dut):
 
     prog = {}
     _place(prog, 0x0000, _encode_lui(rd=1, imm10=-1))
-    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4029,8 +4019,8 @@ async def test_lui_zero(dut):
 
     prog = {}
     _place(prog, 0x0000, _encode_lui(rd=1, imm10=0))
-    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0004, _encode_jr(rs=0, imm6=2))
+    _place(prog, 0x0002, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4058,14 +4048,14 @@ async def test_bz_taken(dut):
     prog = {}
     # R0 is zero after reset
     # 0x0000: BZ R0, +2 -> skip next instruction (branch to 0x0000+2+2*2 = 0x0006)
-    _place(prog, 0x0000, _encode_bz(rs=0, imm6=2))
+    _place(prog, 0x0000, _encode_bz(rs=0, off6=2))
     # 0x0002: LI R1, 1 (poison - should be skipped)
     _place(prog, 0x0002, _encode_li(rd=1, imm6=1))
     # 0x0004: (fall through if poison executes - doesn't matter)
     # 0x0006: LI R1, 31 (marker: R1 = 31 means branch was taken)
     _place(prog, 0x0006, _encode_li(rd=1, imm6=31))
-    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x000A, _encode_jr(rs=0, imm6=5))
+    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4094,11 +4084,11 @@ async def test_bz_not_taken(dut):
     # Load non-zero into R1
     _place(prog, 0x0000, _encode_li(rd=1, imm6=5))
     # BZ R1, +3 -> should NOT branch since R1 != 0
-    _place(prog, 0x0002, _encode_bz(rs=1, imm6=3))
+    _place(prog, 0x0002, _encode_bz(rs=1, off6=3))
     # If not taken, execute this: LI R2, 7 (marker)
     _place(prog, 0x0004, _encode_li(rd=2, imm6=7))
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4127,14 +4117,14 @@ async def test_bnz_taken(dut):
     # Load non-zero into R1
     _place(prog, 0x0000, _encode_li(rd=1, imm6=5))
     # BNZ R1, +2 -> branch to 0x0004+2*2 = 0x0008
-    _place(prog, 0x0002, _encode_bnz(rs=1, imm6=2))
+    _place(prog, 0x0002, _encode_bnz(rs=1, off6=2))
     # 0x0004: LI R2, 1 (poison - should be skipped)
     _place(prog, 0x0004, _encode_li(rd=2, imm6=1))
     # 0x0006: (fall through)
     # 0x0008: LI R2, 31 (marker: branch taken)
     _place(prog, 0x0008, _encode_li(rd=2, imm6=31))
-    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x000C, _encode_jr(rs=0, imm6=6))
+    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4162,11 +4152,11 @@ async def test_bnz_not_taken(dut):
     prog = {}
     # R0 is zero
     # BNZ R0, +3 -> should NOT branch since R0 == 0
-    _place(prog, 0x0000, _encode_bnz(rs=0, imm6=3))
+    _place(prog, 0x0000, _encode_bnz(rs=0, off6=3))
     # If not taken, execute this: LI R1, 7 (marker)
     _place(prog, 0x0002, _encode_li(rd=1, imm6=7))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4195,13 +4185,13 @@ async def test_bnz_high_byte(dut):
     # Load 0x0100 into R1: LUI R1, 4 -> R1 = 4 << 6 = 0x0100
     _place(prog, 0x0000, _encode_lui(rd=1, imm10=4))
     # BNZ R1, +2 -> branch taken (R1 = 0x0100, low byte 0 but high byte != 0)
-    _place(prog, 0x0002, _encode_bnz(rs=1, imm6=2))
+    _place(prog, 0x0002, _encode_bnz(rs=1, off6=2))
     # 0x0004: LI R2, 1 (poison)
     _place(prog, 0x0004, _encode_li(rd=2, imm6=1))
     # 0x0008: LI R2, 31 (marker: branch taken)
     _place(prog, 0x0008, _encode_li(rd=2, imm6=31))
-    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x000C, _encode_jr(rs=0, imm6=6))
+    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4230,15 +4220,15 @@ async def test_bltz_taken(dut):
     # Load -1 into R1
     _place(prog, 0x0000, _encode_li(rd=1, imm6=-1))
     # BLTZ R1, +2 -> branch to 0x0004+2*2 = 0x0008
-    _place(prog, 0x0002, _encode_bltz(rs=1, imm6=2))
+    _place(prog, 0x0002, _encode_bltz(rs=1, off6=2))
     # 0x0004: LI R2, 1 (poison - should be skipped)
     _place(prog, 0x0004, _encode_li(rd=2, imm6=1))
     # 0x0006: NOP
     _place(prog, 0x0006, _encode_li(rd=3, imm6=0))
     # 0x0008: LI R2, 31 (marker: branch taken)
     _place(prog, 0x0008, _encode_li(rd=2, imm6=31))
-    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x000C, _encode_jr(rs=0, imm6=6))
+    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4266,11 +4256,11 @@ async def test_bltz_not_taken_positive(dut):
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm6=1))
     # BLTZ R1, +3 -> should NOT branch since R1 > 0
-    _place(prog, 0x0002, _encode_bltz(rs=1, imm6=3))
+    _place(prog, 0x0002, _encode_bltz(rs=1, off6=3))
     # If not taken, execute this: LI R2, 7 (marker)
     _place(prog, 0x0004, _encode_li(rd=2, imm6=7))
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4298,11 +4288,11 @@ async def test_bltz_not_taken_zero(dut):
     prog = {}
     # R0 is zero after reset
     # BLTZ R0, +3 -> should NOT branch since R0 == 0
-    _place(prog, 0x0000, _encode_bltz(rs=0, imm6=3))
+    _place(prog, 0x0000, _encode_bltz(rs=0, off6=3))
     # If not taken: LI R1, 7 (marker)
     _place(prog, 0x0002, _encode_li(rd=1, imm6=7))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4330,15 +4320,15 @@ async def test_bgez_taken_positive(dut):
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm6=1))
     # BGEZ R1, +2 -> branch to 0x0004+2*2 = 0x0008
-    _place(prog, 0x0002, _encode_bgez(rs=1, imm6=2))
+    _place(prog, 0x0002, _encode_bgez(rs=1, off6=2))
     # 0x0004: LI R2, 1 (poison - should be skipped)
     _place(prog, 0x0004, _encode_li(rd=2, imm6=1))
     # 0x0006: NOP
     _place(prog, 0x0006, _encode_li(rd=3, imm6=0))
     # 0x0008: LI R2, 31 (marker: branch taken)
     _place(prog, 0x0008, _encode_li(rd=2, imm6=31))
-    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x000C, _encode_jr(rs=0, imm6=6))
+    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4366,15 +4356,15 @@ async def test_bgez_taken_zero(dut):
     prog = {}
     # R0 is zero after reset
     # BGEZ R0, +2 -> branch to 0x0002+2*2 = 0x0006
-    _place(prog, 0x0000, _encode_bgez(rs=0, imm6=2))
+    _place(prog, 0x0000, _encode_bgez(rs=0, off6=2))
     # 0x0002: LI R1, 1 (poison - should be skipped)
     _place(prog, 0x0002, _encode_li(rd=1, imm6=1))
     # 0x0004: NOP
     _place(prog, 0x0004, _encode_li(rd=3, imm6=0))
     # 0x0006: LI R1, 31 (marker: branch taken)
     _place(prog, 0x0006, _encode_li(rd=1, imm6=31))
-    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x000A, _encode_jr(rs=0, imm6=5))
+    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4402,11 +4392,11 @@ async def test_bgez_not_taken(dut):
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm6=-1))
     # BGEZ R1, +3 -> should NOT branch since R1 < 0
-    _place(prog, 0x0002, _encode_bgez(rs=1, imm6=3))
+    _place(prog, 0x0002, _encode_bgez(rs=1, off6=3))
     # If not taken: LI R2, 7 (marker)
     _place(prog, 0x0004, _encode_li(rd=2, imm6=7))
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4424,28 +4414,29 @@ async def test_bgez_not_taken(dut):
 # J / JAL / JALR / RET / LRR / LRW Encoders and Tests
 # ===========================================================================
 
-def _encode_j(imm12):
-    """Encode J imm12 -> 16-bit little-endian bytes. [0100][imm12:12]"""
-    assert -2048 <= imm12 <= 2047, f"imm12 out of range: {imm12}"
-    imm12 &= 0xFFF
-    insn = (0b0100 << 12) | imm12
+def _encode_j(off12):
+    """Encode J off12 -> 16-bit little-endian bytes. [0100][off12:12]"""
+    assert -2048 <= off12 <= 2047, f"off12 out of range: {off12}"
+    off12 &= 0xFFF
+    insn = (0b0100 << 12) | off12
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
-def _encode_jal(imm12):
-    """Encode JAL imm12 -> 16-bit little-endian bytes. [0101][imm12:12]"""
-    assert -2048 <= imm12 <= 2047, f"imm12 out of range: {imm12}"
-    imm12 &= 0xFFF
-    insn = (0b0101 << 12) | imm12
+def _encode_jal(off12):
+    """Encode JAL off12 -> 16-bit little-endian bytes. [0101][off12:12]"""
+    assert -2048 <= off12 <= 2047, f"off12 out of range: {off12}"
+    off12 &= 0xFFF
+    insn = (0b0101 << 12) | off12
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
-def _encode_jalr(rs, imm6):
-    """Encode JALR rs, imm6 -> 16-bit little-endian bytes. B-format."""
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
+def _encode_jalr(rs, off6):
+    """Encode JALR rs, off6 -> 16-bit little-endian bytes. [1101111][off6:6][rs:3]"""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
-    imm6 &= 0x3F
-    return _encode_b_format(0b1101111, rs, imm6)
+    off6 &= 0x3F
+    insn = (0b1101111 << 9) | (off6 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 
@@ -4470,9 +4461,9 @@ async def test_j_forward(dut):
     # 0x0006: LI R1, 31 (marker)
     _place(prog, 0x0006, _encode_li(rd=1, imm6=31))
     # 0x0008: SW R1, 20(R0) -> MEM[0x28]
-    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, imm6=20))
+    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, off6=20))
     # 0x000A: JR R0, 5 -> spin at 0x000A
-    _place(prog, 0x000A, _encode_jr(rs=0, imm6=5))
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4503,9 +4494,9 @@ async def test_j_backward(dut):
     # 0x0002: LI R1, 31 (marker - reached by backward jump)
     _place(prog, 0x0002, _encode_li(rd=1, imm6=31))
     # 0x0004: SW R1, 20(R0) -> MEM[0x28]
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
     # 0x0006: JR R0, 3 -> spin at 0x0006
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
     # 0x0008: NOP (padding)
     _place(prog, 0x0008, _encode_li(rd=3, imm6=0))
     # 0x000A: J -5 -> target = 0x000C + (-5)*2 = 0x0002
@@ -4540,13 +4531,13 @@ async def test_jal_ret(dut):
     # 0x0002: (return here) LI R1, 31 (marker)
     _place(prog, 0x0002, _encode_li(rd=1, imm6=31))
     # 0x0004: SW R1, 20(R0) -> MEM[0x28]
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
     # 0x0006: JR R0, 3 -> spin at 0x0006
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
     # 0x0008: NOP (padding)
     _place(prog, 0x0008, _encode_li(rd=3, imm6=0))
     # 0x000A: JR R6, 0 -> PC = R6 = 0x0002
-    _place(prog, 0x000A, _encode_jr(rs=6, imm6=0))
+    _place(prog, 0x000A, _encode_jr(rs=6, off6=0))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4581,9 +4572,9 @@ async def test_jal_link_value(dut):
     # 0x0006: NOP
     _place(prog, 0x0006, _encode_li(rd=3, imm6=0))
     # 0x0008: SW R6, 20(R0) -> MEM[0x28] = R6 = 0x0002
-    _place(prog, 0x0008, _encode_sw(rs2=6, rs1=0, imm6=20))
+    _place(prog, 0x0008, _encode_sw(rs2=6, rs1=0, off6=20))
     # 0x000A: JR R0, 5 -> spin at 0x000A
-    _place(prog, 0x000A, _encode_jr(rs=0, imm6=5))
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4602,7 +4593,7 @@ async def test_jal_link_value(dut):
 # ---------------------------------------------------------------------------
 @cocotb.test()
 async def test_jalr_ret(dut):
-    """JALR R0, imm6 to target, JR R6 back. Verify round-trip."""
+    """JALR R0, off6 to target, JR R6 back. Verify round-trip."""
     dut._log.info("Test: JALR + JR R6")
 
     clock = Clock(dut.clk, 10, unit="us")
@@ -4610,17 +4601,17 @@ async def test_jalr_ret(dut):
 
     prog = {}
     # 0x0000: JALR R0, 5 -> R6 = 0x0002, PC = R0 + 5*2 = 0 + 10 = 0x000A
-    _place(prog, 0x0000, _encode_jalr(rs=0, imm6=5))
+    _place(prog, 0x0000, _encode_jalr(rs=0, off6=5))
     # 0x0002: (return here) LI R1, 31 (marker)
     _place(prog, 0x0002, _encode_li(rd=1, imm6=31))
     # 0x0004: SW R1, 20(R0) -> MEM[0x28]
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
     # 0x0006: JR R0, 3 -> spin at 0x0006
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
     # 0x0008: NOP
     _place(prog, 0x0008, _encode_li(rd=3, imm6=0))
     # 0x000A: JR R6, 0 -> PC = R6 = 0x0002
-    _place(prog, 0x000A, _encode_jr(rs=6, imm6=0))
+    _place(prog, 0x000A, _encode_jr(rs=6, off6=0))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4664,24 +4655,15 @@ def _encode_xori(rd, imm6):
 
 
 def _encode_sltif(rs, imm6):
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
-    assert 0 <= rs <= 7
-    imm6 &= 0x3F
-    return _encode_b_format(0b1110101, rs, imm6)
+    return _encode_imm_op(0b1110101, rs, imm6)
 
 
 def _encode_sltiuf(rs, imm6):
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
-    assert 0 <= rs <= 7
-    imm6 &= 0x3F
-    return _encode_b_format(0b1110110, rs, imm6)
+    return _encode_imm_op(0b1110110, rs, imm6)
 
 
 def _encode_xorif(rs, imm6):
-    assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
-    assert 0 <= rs <= 7
-    imm6 &= 0x3F
-    return _encode_b_format(0b1110111, rs, imm6)
+    return _encode_imm_op(0b1110111, rs, imm6)
 
 
 # ---------------------------------------------------------------------------
@@ -4699,10 +4681,10 @@ async def test_addi_positive(dut):
     prog[0x0010] = 0x05
     prog[0x0011] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_addi(rd=1, imm6=10))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4731,10 +4713,10 @@ async def test_addi_negative(dut):
     prog[0x0010] = 0x10
     prog[0x0011] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_addi(rd=1, imm6=-4))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4763,10 +4745,10 @@ async def test_addi_overflow(dut):
     prog[0x0010] = 0xFF
     prog[0x0011] = 0xFF
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_addi(rd=1, imm6=1))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4795,10 +4777,10 @@ async def test_andi_mask(dut):
     prog[0x0010] = 0xFF
     prog[0x0011] = 0x12
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_andi(rd=1, imm6=31))   # 0x1F = 31
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4827,10 +4809,10 @@ async def test_andi_neg1(dut):
     prog[0x0010] = 0xCD
     prog[0x0011] = 0xAB
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_andi(rd=1, imm6=-1))   # sext(-1) = 0xFFFF
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4859,10 +4841,10 @@ async def test_ori_set_bits(dut):
     prog[0x0010] = 0x00
     prog[0x0011] = 0x12
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_ori(rd=1, imm6=15))    # 0x0F = 15
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4891,10 +4873,10 @@ async def test_ori_neg1(dut):
     prog[0x0010] = 0x34
     prog[0x0011] = 0x12
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_ori(rd=1, imm6=-1))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4923,10 +4905,10 @@ async def test_xori_toggle(dut):
     prog[0x0010] = 0xFF
     prog[0x0011] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_xori(rd=1, imm6=31))   # 0x1F
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4955,10 +4937,10 @@ async def test_xori_not(dut):
     prog[0x0010] = 0x34
     prog[0x0011] = 0x12
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_xori(rd=1, imm6=-1))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -4987,11 +4969,11 @@ async def test_sltif_true(dut):
     prog[0x0010] = 0x05
     prog[0x0011] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltif(rs=1, imm6=10))
     # Store R2 (t0, the result)
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5020,10 +5002,10 @@ async def test_sltif_false(dut):
     prog[0x0010] = 0x0A
     prog[0x0011] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltif(rs=1, imm6=3))
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5052,10 +5034,10 @@ async def test_sltif_negative(dut):
     prog[0x0010] = 0xFE
     prog[0x0011] = 0xFF
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltif(rs=1, imm6=-1))
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5084,10 +5066,10 @@ async def test_sltif_equal(dut):
     prog[0x0010] = 0x05
     prog[0x0011] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltif(rs=1, imm6=5))
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5116,10 +5098,10 @@ async def test_sltiuf_true(dut):
     prog[0x0010] = 0x05
     prog[0x0011] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltiuf(rs=1, imm6=10))
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5148,10 +5130,10 @@ async def test_sltiuf_false(dut):
     prog[0x0010] = 0xFF
     prog[0x0011] = 0xFF
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_sltiuf(rs=1, imm6=3))
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5180,13 +5162,13 @@ async def test_xorif_basic(dut):
     prog[0x0010] = 0xFF
     prog[0x0011] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_xorif(rs=1, imm6=31))
     # Store R2 (t0, the result)
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
     # Also store R1 to verify it's preserved
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, imm6=22))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=22))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5222,10 +5204,10 @@ async def test_xorif_equality(dut):
     prog[0x0010] = 0x05
     prog[0x0011] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_xorif(rs=1, imm6=5))
-    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5292,11 +5274,11 @@ async def test_sll_basic(dut):
     prog[0x0012] = 0x04
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5327,11 +5309,11 @@ async def test_sll_by_zero(dut):
     prog[0x0012] = 0x00
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5362,11 +5344,11 @@ async def test_sll_by_8(dut):
     prog[0x0012] = 0x08
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5397,11 +5379,11 @@ async def test_sll_by_15(dut):
     prog[0x0012] = 0x0F
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5432,11 +5414,11 @@ async def test_sll_cross_byte(dut):
     prog[0x0012] = 0x09
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sll(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5467,11 +5449,11 @@ async def test_srl_basic(dut):
     prog[0x0012] = 0x04
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5502,11 +5484,11 @@ async def test_srl_by_zero(dut):
     prog[0x0012] = 0x00
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5537,11 +5519,11 @@ async def test_srl_by_8(dut):
     prog[0x0012] = 0x08
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5572,11 +5554,11 @@ async def test_srl_by_15(dut):
     prog[0x0012] = 0x0F
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_srl(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5607,11 +5589,11 @@ async def test_sra_positive(dut):
     prog[0x0012] = 0x04
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5642,11 +5624,11 @@ async def test_sra_negative(dut):
     prog[0x0012] = 0x04
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5677,11 +5659,11 @@ async def test_sra_by_8_negative(dut):
     prog[0x0012] = 0x08
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5712,11 +5694,11 @@ async def test_sra_by_15_negative(dut):
     prog[0x0012] = 0x0F
     prog[0x0013] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
-    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, imm6=18))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=18))
     _place(prog, 0x0004, _encode_sra(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, imm6=20))
-    _place(prog, 0x0008, _encode_jr(rs=0, imm6=4))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5745,10 +5727,10 @@ async def test_slli_basic(dut):
     prog[0x0010] = 0x34
     prog[0x0011] = 0x12
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_slli(rd=1, imm4=4))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5777,10 +5759,10 @@ async def test_slli_by_8(dut):
     prog[0x0010] = 0xAB
     prog[0x0011] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_slli(rd=1, imm4=8))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5809,10 +5791,10 @@ async def test_srli_basic(dut):
     prog[0x0010] = 0x34
     prog[0x0011] = 0x12
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_srli(rd=1, imm4=4))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5841,10 +5823,10 @@ async def test_srli_by_8(dut):
     prog[0x0010] = 0x00
     prog[0x0011] = 0xAB
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_srli(rd=1, imm4=8))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5873,10 +5855,10 @@ async def test_srai_negative(dut):
     prog[0x0010] = 0x34
     prog[0x0011] = 0xF2
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_srai(rd=1, imm4=4))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -5905,10 +5887,10 @@ async def test_srai_by_15_negative(dut):
     prog[0x0010] = 0x00
     prog[0x0011] = 0x80
 
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, imm6=16))
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
     _place(prog, 0x0002, _encode_srai(rd=1, imm4=15))
-    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, imm6=20))
-    _place(prog, 0x0006, _encode_jr(rs=0, imm6=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
 
     _load_program(dut, prog)
     await _reset(dut)

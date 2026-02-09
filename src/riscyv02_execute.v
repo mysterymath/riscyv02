@@ -16,23 +16,22 @@
 // E_EXEC_HI (two-cycle ops). Memory instructions proceed from E_EXEC_HI
 // to E_MEM_LO/HI for bus access.
 //
-// ISA encoding — fixed register positions
-// -----------------------------------------
-// Registers always at fixed bit positions: rd=[2:0], rs1=[5:3], rs2=[8:6].
-// Bits [15:12] form the "opcode" and determine the instruction format.
-// Sign bit at inst[8] for I and C formats; at inst[11-12] for U, J, S.
+// ISA encoding
+// ------------
+// Bits [15:12] form the "opcode" and determine the instruction format:
 //
-//   Opcode       Format   Registers            Immediate
-//   0000..0011   U        rd=[2:0]             imm10=[12:3]
-//   0100..0101   J        —                    imm12=[11:0]
-//   0110..1000   I        rd=[2:0], rs1=[5:3]  imm6: [11:9]=[2:0], [8:6]=[5:3] (loads, sign@[8])
-//   1001..1010   S        rs1=[5:3], rs2=[8:6] imm6=[11:9,2:0] (stores, sign@[11])
-//   1011..1111   C        (see below)          (see below, sign@[8])
+//   Opcode       Format   Description
+//   0000..0011   U        Upper immediate (LUI, AUIPC; 3-bit prefix)
+//   0100..0101   J        PC-relative jump (J, JAL)
+//   0110..1010   S        Load/store (LB, LBU, LW, SB, SW; scrambled imm)
+//   1011..1111   C        Compact (ALU, shift, branch, control, system)
 //
-// C-format sub-types (bits [14:12]=group, [11:9]=sub, op_r={group,sub}):
-//   R-type:  rd=[2:0], rs1=[5:3], rs2=[8:6]  (ALU-RR, shift-RR)
-//   U6-type: rd=[2:0], imm6=[8:3]            (ALU-imm, shift-imm, LI)
-//   B-type:  rs=[5:3], imm6=[8:6,2:0]        (branches, JR/JALR, IF-ops)
+// U-format uses a 3-bit prefix [15:13], gaining one extra immediate bit.
+// All other formats use the full 4-bit opcode.
+//
+// Within C-format, bits [14:12] = group and [11:9] = sub identify the
+// specific instruction, with op_r = {group, sub} read directly from the
+// instruction word. S-format scrambles the immediate so rs1 stays at [5:3].
 // ============================================================================
 
 module riscyv02_execute (
@@ -135,7 +134,7 @@ module riscyv02_execute (
   localparam T0_REG   = 3'd2;  // R2 is t0 for fixed-destination IF-type ops
 
   // Instruction format ranges (opcode = fetch_ir[15:12])
-  //   U: 0000..0011   J: 0100..0101   I: 0110..1000   S: 1001..1010   C: 1011..1111
+  //   U: 0000..0011   J: 0100..0101   S: 0110..1010   C: 1011..1111
   wire [3:0] opcode = fetch_ir[15:12];
   wire is_fmt_u = opcode[3:2] == 2'b00;                     // 0000..0011
   wire is_fmt_j = opcode[3:1] == 3'b010;                    // 0100..0101
@@ -143,9 +142,10 @@ module riscyv02_execute (
 
   reg [5:0]  op_r;            // Decoded instruction identity (group:3, sub:3)
   reg [3:0]  base_sel_r;      // Base register (or imm10[9:6] for AUIPC)
-  reg [5:0]  imm6_r;          // 6-bit immediate
+  reg [5:0]  off6_r;          // 6-bit offset
   reg [2:0]  rd_rs2_sel_r;    // Destination (LW) or source (SW)
   reg [2:0]  r_sel_r;         // Registered regfile read select (set at state transitions)
+  reg [2:0]  r2_sel_r;        // Port 2 read select (set at dispatch, stable through execution)
   reg        r_hi_r;          // Registered regfile read hi/lo (set at state transitions)
 
   // ==========================================================================
@@ -178,7 +178,7 @@ module riscyv02_execute (
     .r_sel  (r_sel),
     .r_hi   (r_hi),
     .r      (r),
-    .r2_sel (imm6_r[5:3]),
+    .r2_sel (r2_sel_r),
     .r2_hi  (r2_hi_mux),
     .r2     (r2)
   );
@@ -207,7 +207,7 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Barrel shifter
   // -------------------------------------------------------------------------
-  wire [3:0] shamt = is_shift_rr ? r2[3:0] : imm6_r[3:0];
+  wire [3:0] shamt = is_shift_rr ? r2[3:0] : off6_r[3:0];
 
   reg  [14:0] shifter_din;
   wire [7:0]  shifter_result;
@@ -334,16 +334,16 @@ module riscyv02_execute (
           alu_new_op = 1'b1;
           if (op_r == OP_AUIPC) begin
             alu_a  = pc[7:0];
-            alu_b  = {imm6_r[1:0], 6'b0};            // (imm10 << 6) low byte
+            alu_b  = {off6_r[1:0], 6'b0};            // (imm10 << 6) low byte
             w_data = alu_result;
             w_hi   = 1'b0;
             w_we   = 1'b1;
           end else
-            alu_b = {{2{imm6_r[5]}}, imm6_r};        // unscaled byte offset
+            alu_b = {{2{off6_r[5]}}, off6_r};        // unscaled byte offset
         end else if (is_jr_jalr) begin
           // JR/JALR address computation low byte
           alu_a      = r;
-          alu_b      = {imm6_r[5], imm6_r, 1'b0};     // offset * 2 (code alignment)
+          alu_b      = {off6_r[5], off6_r, 1'b0};     // offset * 2 (code alignment)
           alu_new_op = 1'b1;
           if (is_linking) begin                        // JALR
             w_data = pc[7:0];
@@ -361,13 +361,13 @@ module riscyv02_execute (
             w_hi   = 1'b1;
           end
         end else if (is_alu_imm) begin
-          alu_b      = {{2{imm6_r[5]}}, imm6_r};
+          alu_b      = {{2{off6_r[5]}}, off6_r};
           alu_new_op = 1'b1;
           w_data     = alu_result;
           w_hi       = 1'b0;
           w_we       = 1'b1;
         end else if (is_slt_imm) begin
-          alu_b      = {{2{imm6_r[5]}}, imm6_r};
+          alu_b      = {{2{off6_r[5]}}, off6_r};
           alu_new_op = 1'b1;
           w_data     = 8'h00;
           w_hi       = 1'b1;
@@ -396,20 +396,20 @@ module riscyv02_execute (
             w_we   = 1'b1;
           end
         end else if (op_r == OP_LI) begin
-          w_data = {{2{imm6_r[5]}}, imm6_r};
+          w_data = {{2{off6_r[5]}}, off6_r};
           w_hi   = 1'b0;
           w_we   = 1'b1;
         end else if (op_r == OP_LUI) begin
-          w_data = {imm6_r[1:0], 6'b0};
+          w_data = {off6_r[1:0], 6'b0};
           w_hi   = 1'b0;
           w_we   = 1'b1;
         end else if (is_branch) begin
           alu_a      = pc[7:0];
-          alu_b      = {imm6_r[5], imm6_r, 1'b0};
+          alu_b      = {off6_r[5], off6_r, 1'b0};
           alu_new_op = 1'b1;
         end else if (is_jump_imm) begin
           alu_a      = pc[7:0];
-          alu_b      = {imm6_r[3:0], rd_rs2_sel_r, 1'b0};
+          alu_b      = {off6_r[3:0], rd_rs2_sel_r, 1'b0};
           alu_new_op = 1'b1;
           if (is_linking) begin                          // JAL
             w_data = pc[7:0];
@@ -430,16 +430,16 @@ module riscyv02_execute (
           alu_new_op = 1'b0;
           if (op_r == OP_AUIPC) begin
             alu_a           = pc[15:8];
-            alu_b           = {base_sel_r, imm6_r[5:2]};   // (imm10 << 6) high byte
+            alu_b           = {base_sel_r, off6_r[5:2]};   // (imm10 << 6) high byte
             w_data          = alu_result;
             w_hi            = 1'b1;
             w_we            = 1'b1;
             insn_completing = 1'b1;
           end else
-            alu_b = {8{imm6_r[5]}};  // sign extension
+            alu_b = {8{off6_r[5]}};  // sign extension
         end else if (is_jr_jalr) begin
           // JR/JALR address computation high byte
-          alu_b           = {8{imm6_r[5]}};
+          alu_b           = {8{off6_r[5]}};
           alu_new_op      = 1'b0;
           jump            = 1'b1;
           next_pc         = {alu_result, tmp[7:0]};
@@ -470,20 +470,20 @@ module riscyv02_execute (
                 w_data = {7'b0, (r[7] ^ r2[7]) ? r[7] : alu_result[7]};
             end
           end else if (is_alu_imm) begin
-            alu_b      = {8{imm6_r[5]}};
+            alu_b      = {8{off6_r[5]}};
             alu_new_op = 1'b0;
             w_data     = alu_result;
             w_hi       = 1'b1;
             w_we       = 1'b1;
           end else if (is_slt_imm) begin
-            alu_b      = {8{imm6_r[5]}};
+            alu_b      = {8{off6_r[5]}};
             alu_new_op = 1'b0;
             w_hi       = 1'b0;
             w_we       = 1'b1;
             if (op_unsigned)                              // SLTIUF
               w_data = {7'b0, ~alu_co};
             else
-              w_data = {7'b0, (r[7] ^ imm6_r[5]) ? r[7] : alu_result[7]};
+              w_data = {7'b0, (r[7] ^ off6_r[5]) ? r[7] : alu_result[7]};
           end else if (is_shift) begin
             // Cycle 2: left shifts process hi, right shifts process lo.
             if (shamt[3]) begin
@@ -513,16 +513,16 @@ module riscyv02_execute (
               w_we   = 1'b1;
             end
           end else if (op_r == OP_LI) begin
-            w_data = {8{imm6_r[5]}};
+            w_data = {8{off6_r[5]}};
             w_hi   = 1'b1;
             w_we   = 1'b1;
           end else if (op_r == OP_LUI) begin
-            w_data = {base_sel_r, imm6_r[5:2]};
+            w_data = {base_sel_r, off6_r[5:2]};
             w_hi   = 1'b1;
             w_we   = 1'b1;
           end else if (is_branch) begin
             alu_a      = pc[15:8];
-            alu_b      = {8{imm6_r[5]}};
+            alu_b      = {8{off6_r[5]}};
             alu_new_op = 1'b0;
             if ((is_sign_branch ? r[7] : !nz_lo_r && r == 8'h00) ^ branch_inv) begin
               jump    = 1'b1;
@@ -530,7 +530,7 @@ module riscyv02_execute (
             end
           end else if (is_jump_imm) begin
             alu_a      = pc[15:8];
-            alu_b      = {{3{base_sel_r[2]}}, base_sel_r[2:0], imm6_r[5:4]};
+            alu_b      = {{3{base_sel_r[2]}}, base_sel_r[2:0], off6_r[5:4]};
             alu_new_op = 1'b0;
             jump       = 1'b1;
             next_pc    = {alu_result, tmp[7:0]};
@@ -588,9 +588,10 @@ module riscyv02_execute (
       tmp              <= 16'h0000;
       op_r             <= OP_NOP;
       base_sel_r       <= 4'b0000;
-      imm6_r           <= 6'b000000;
+      off6_r           <= 6'b000000;
       rd_rs2_sel_r     <= 3'b000;
       r_sel_r          <= 3'b000;
+      r2_sel_r         <= 3'b000;
       r_hi_r           <= 1'b0;
       nz_lo_r          <= 1'b0;
       pc               <= 16'h0000;
@@ -638,11 +639,8 @@ module riscyv02_execute (
         E_EXEC_HI: begin
           if (is_mem_addr) begin
             // Address high byte computed; set up for memory access or complete.
-            // imm6_r[5:3] redirects r2 to read store data (rd_rs2_sel_r),
-            // separating the dout → uio_out path from port 1's high fanout.
             tmp[15:8]   <= alu_result;
             r_sel_r     <= rd_rs2_sel_r;
-            imm6_r[5:3] <= rd_rs2_sel_r;
             r_hi_r      <= 1'b0;
             state       <= (op_r == OP_AUIPC) ? E_IDLE : E_MEM_LO;
           end else if (is_jr_jalr) begin
@@ -683,64 +681,51 @@ module riscyv02_execute (
       // ir_accept fires in any completing state (insn_completing=1) or
       // E_IDLE, as long as ir_valid && !fetch_flush.
       //
-      // Fixed register positions: rd=[2:0], rs1=[5:3], rs2=[8:6].
-      // Format determines immediate extraction:
-      //   U (0000..0011)  — imm10 at [12:3]
-      //   J (0100..0101)  — imm12 at [11:0]
-      //   I (0110..1000)  — imm6: [11:9]=imm[2:0], [8:6]=imm[5:3] (loads, sign@[8])
-      //   S (1001..1010)  — imm6 split [11:9]/[2:0], rs2 at [8:6] (stores)
+      // The opcode (bits [15:12]) determines the instruction format:
+      //   U (0000..0011)  — op_r from prefix, base_sel from imm10[9:6]
+      //   J (0100..0101)  — op_r from prefix, base_sel from off12[11:9]
+      //   S (0110..1010)  — op_r from prefix, off6 from scrambled imm
       //   C (1011..1111)  — op_r = {group, sub} direct from [14:9]
       // ---------------------------------------------------------------------
       if (ir_accept) begin
         pc <= pc + 16'd2;
 
-        // --- Defaults: B-type C-format (imm6 split [8:6]/[2:0]) ---
-        imm6_r[5:3] <= fetch_ir[8:6];
-        imm6_r[2:0] <= fetch_ir[2:0];
-        rd_rs2_sel_r <= fetch_ir[2:0];           // rd at [2:0] (stores override)
+        // --- off6_r default (C/I-type): imm6 at [8:3] ---
+        off6_r[5:3] <= fetch_ir[8:6];
+        off6_r[2:0] <= fetch_ir[5:3];
+
+        // --- r2_sel_r default: rs2 at [8:6] (R-type, shifts) ---
+        r2_sel_r <= fetch_ir[8:6];
 
         // --- Decode op_r from opcode ---
-        // U-format: 3-bit prefix, imm6 at [8:3] (override B-type default)
-        if (fetch_ir[15:13] == 3'b000) begin
-          op_r <= OP_LUI;
-          imm6_r[2:0] <= fetch_ir[5:3];
-        end
-        else if (fetch_ir[15:13] == 3'b001) begin
-          op_r <= OP_AUIPC;
-          imm6_r[2:0] <= fetch_ir[5:3];
-        end
-        // J-format: 4-bit opcode, imm6 at [8:3] (override B-type default)
-        else if (opcode == 4'b0100) begin
-          op_r <= OP_J;
-          imm6_r[2:0] <= fetch_ir[5:3];
-        end
-        else if (opcode == 4'b0101) begin
-          op_r <= OP_JAL;
-          imm6_r[2:0] <= fetch_ir[5:3];
-        end
-        // I-format loads: imm6 scrambled [11:9]=[2:0], [8:6]=[5:3], rs1 at [5:3], rd at [2:0]
+        // U-format: 3-bit prefix determines instruction
+        if      (fetch_ir[15:13] == 3'b000)  op_r <= OP_LUI;
+        else if (fetch_ir[15:13] == 3'b001)  op_r <= OP_AUIPC;
+        // J-format: 4-bit opcode determines instruction
+        else if (opcode == 4'b0100)          op_r <= OP_J;
+        else if (opcode == 4'b0101)          op_r <= OP_JAL;
+        // S-format: 4-bit opcode determines instruction; off6 from scrambled imm
         else if (opcode == 4'b0110) begin
           op_r <= OP_LB;
-          imm6_r[2:0] <= fetch_ir[11:9];
+          off6_r[2:0] <= fetch_ir[11:9];
         end
         else if (opcode == 4'b0111) begin
           op_r <= OP_LBU;
-          imm6_r[2:0] <= fetch_ir[11:9];
+          off6_r[2:0] <= fetch_ir[11:9];
         end
         else if (opcode == 4'b1000) begin
           op_r <= OP_LW;
-          imm6_r[2:0] <= fetch_ir[11:9];
+          off6_r[2:0] <= fetch_ir[11:9];
         end
-        // S-format stores: imm6 split [11:9]/[2:0], rs2 at [8:6]
         else if (opcode == 4'b1001) begin
           op_r <= OP_SB;
-          imm6_r[5:3] <= fetch_ir[11:9];
-          rd_rs2_sel_r <= fetch_ir[8:6];
+          off6_r[2:0] <= fetch_ir[11:9];
+          r2_sel_r <= fetch_ir[2:0];
         end
         else if (opcode == 4'b1010) begin
           op_r <= OP_SW;
-          imm6_r[5:3] <= fetch_ir[11:9];
-          rd_rs2_sel_r <= fetch_ir[8:6];
+          off6_r[2:0] <= fetch_ir[11:9];
+          r2_sel_r <= fetch_ir[2:0];
         end
         // C-format: direct-mapped, with two remapping exceptions
         else if (fetch_ir[14:12] == 3'b111) begin
@@ -761,24 +746,21 @@ module riscyv02_execute (
         if (is_fmt_u)
           base_sel_r <= fetch_ir[12:9];          // U: imm10[9:6]
         else if (is_fmt_j)
-          base_sel_r <= {1'b0, fetch_ir[11:9]};  // J: imm12[11:9]
+          base_sel_r <= {1'b0, fetch_ir[11:9]};  // J: off12[11:9]
         else
           base_sel_r <= {1'b0, fetch_ir[5:3]};   // S/C: don't-care
 
-        // --- r_sel_r and imm6_r: fixed register positions ---
-        // C-format U6-type: rd at [2:0], imm6 at [8:3]
-        //   shift-imm (grp=100, sub[2]=1), LI (101_100),
-        //   ALU-imm non-IF (grp=110, !(sub[2] && |sub[1:0]))
-        // All other C-format (R-type, B-type): rs1 at [5:3]
+        rd_rs2_sel_r <= fetch_ir[2:0];
+
+        // --- r_sel_r: format-dependent register select ---
+        // C-format I-type: rs/rd at [2:0]. R-type: rs1 at [5:3].
+        // S/U/J formats: rs1 at [5:3] (or don't-care).
         if (is_fmt_c &&
-            ((fetch_ir[14:12] == 3'b100 && fetch_ir[11]) ||
-             fetch_ir[14:9] == 6'b101_100 ||
-             (fetch_ir[14:12] == 3'b110 &&
-              !(fetch_ir[11] && |fetch_ir[10:9])))) begin
-          r_sel_r     <= fetch_ir[2:0];   // U6: rd at [2:0]
-          imm6_r[2:0] <= fetch_ir[5:3];   // U6: imm6[2:0] at [5:3]
-        end else
-          r_sel_r <= fetch_ir[5:3];        // R/B/S/U/J: rs1 at [5:3]
+            fetch_ir[14:12] != 3'b011 &&
+            !(fetch_ir[14:12] == 3'b100 && !fetch_ir[11]))
+          r_sel_r <= fetch_ir[2:0];   // C-format I-type
+        else
+          r_sel_r <= fetch_ir[5:3];   // C-format R-type, S, U, J
 
         // --- r_hi_r: right shifts read hi byte first ---
         r_hi_r <= (is_fmt_c && fetch_ir[14:12] == 3'b100 && fetch_ir[10])
