@@ -141,12 +141,24 @@ module riscyv02_execute (
   wire is_fmt_c = opcode >= 4'b1011;                         // 1011..1111
 
   reg [5:0]  op_r;            // Decoded instruction identity (group:3, sub:3)
-  reg [3:0]  base_sel_r;      // Base register (or imm10[9:6] for AUIPC)
   reg [5:0]  off6_r;          // 6-bit offset
   reg [2:0]  rd_rs2_sel_r;    // Destination (LW) or source (SW)
   reg [2:0]  r_sel_r;         // Registered regfile read select (set at state transitions)
   reg [2:0]  r2_sel_r;        // Port 2 read select (set at dispatch, stable through execution)
   reg        r_hi_r;          // Registered regfile read hi/lo (set at state transitions)
+
+  // tmp[15:0] layout — cycle-to-cycle temporary with overlaid fields:
+  //
+  //   tmp[15:12]  Address high byte [7:4], or stale (written at E_EXEC_HI for mem ops)
+  //   tmp[11:8]   base_sel_r: upper immediate bits (written at dispatch).
+  //               Holds imm10[9:6] for U-format, off12[11:9] for J-format.
+  //               Overwritten by address high byte [3:0] at E_EXEC_HI for mem ops
+  //               (after combinational logic has consumed the base_sel value).
+  //   tmp[8]      Also used as nz_lo (|rs_lo|) for branch zero-check: written at
+  //               E_EXEC_LO for branches (which don't use base_sel), read at
+  //               E_EXEC_HI to determine branch condition.
+  //   tmp[7:0]    ALU result / branch target lo / shift carry / mem address lo
+  //               (written at E_EXEC_LO, read at E_EXEC_HI and E_MEM_LO/HI)
 
   // ==========================================================================
   // Shared Infrastructure
@@ -256,7 +268,7 @@ module riscyv02_execute (
   wire op_unsigned   = op_r[1]; // Unsigned variant: SLTU/SLTIUF/LBU (vs SLT/SLTIF/LB)
   wire branch_inv    = op_r[0]; // Branch inversion: BNZ/BGEZ invert condition
   wire is_two_cycle  = |op_r[5:3]; // Non-system group → needs E_EXEC_HI
-  reg  nz_lo_r;  // Latched |rs_lo| for branch zero check
+  // nz_lo (|rs_lo| for branch zero check) is stored in tmp[8]; see tmp layout above
 
   // -------------------------------------------------------------------------
   // State-driven signals (computed in state-property block below)
@@ -430,7 +442,7 @@ module riscyv02_execute (
           alu_new_op = 1'b0;
           if (op_r == OP_AUIPC) begin
             alu_a           = pc[15:8];
-            alu_b           = {base_sel_r, off6_r[5:2]};   // (imm10 << 6) high byte
+            alu_b           = {tmp[11:8], off6_r[5:2]};     // (imm10 << 6) high byte
             w_data          = alu_result;
             w_hi            = 1'b1;
             w_we            = 1'b1;
@@ -517,20 +529,20 @@ module riscyv02_execute (
             w_hi   = 1'b1;
             w_we   = 1'b1;
           end else if (op_r == OP_LUI) begin
-            w_data = {base_sel_r, off6_r[5:2]};
+            w_data = {tmp[11:8], off6_r[5:2]};
             w_hi   = 1'b1;
             w_we   = 1'b1;
           end else if (is_branch) begin
             alu_a      = pc[15:8];
             alu_b      = {8{off6_r[5]}};
             alu_new_op = 1'b0;
-            if ((is_sign_branch ? r[7] : !nz_lo_r && r == 8'h00) ^ branch_inv) begin
+            if ((is_sign_branch ? r[7] : !tmp[8] && r == 8'h00) ^ branch_inv) begin
               jump    = 1'b1;
               next_pc = {alu_result, tmp[7:0]};
             end
           end else if (is_jump_imm) begin
             alu_a      = pc[15:8];
-            alu_b      = {{3{base_sel_r[2]}}, base_sel_r[2:0], off6_r[5:4]};
+            alu_b      = {{3{tmp[10]}}, tmp[10:8], off6_r[5:4]};
             alu_new_op = 1'b0;
             jump       = 1'b1;
             next_pc    = {alu_result, tmp[7:0]};
@@ -587,13 +599,11 @@ module riscyv02_execute (
       state            <= E_IDLE;
       tmp              <= 16'h0000;
       op_r             <= OP_NOP;
-      base_sel_r       <= 4'b0000;
       off6_r           <= 6'b000000;
       rd_rs2_sel_r     <= 3'b000;
       r_sel_r          <= 3'b000;
       r2_sel_r         <= 3'b000;
       r_hi_r           <= 1'b0;
-      nz_lo_r          <= 1'b0;
       pc               <= 16'h0000;
       epc              <= 16'h0000;
       i_bit            <= 1'b1;  // Interrupts disabled after reset
@@ -627,7 +637,7 @@ module riscyv02_execute (
           end
           if (is_branch || is_jump_imm || is_mem_addr || is_jr_jalr)
             tmp[7:0] <= alu_result;
-          if (is_branch) nz_lo_r <= |r;
+          if (is_branch) tmp[8] <= |r;  // nz_lo: branches don't use tmp[11:8] (base_sel)
           if (is_shift) tmp[7:0] <= r;
           if (is_two_cycle) begin
             state  <= E_EXEC_HI;
@@ -742,13 +752,13 @@ module riscyv02_execute (
         else
           op_r <= OP_NOP;
 
-        // --- base_sel_r: format-dependent upper bits ---
+        // --- tmp[11:8] (base_sel): format-dependent upper bits ---
         if (is_fmt_u)
-          base_sel_r <= fetch_ir[12:9];          // U: imm10[9:6]
+          tmp[11:8] <= fetch_ir[12:9];           // U: imm10[9:6]
         else if (is_fmt_j)
-          base_sel_r <= {1'b0, fetch_ir[11:9]};  // J: off12[11:9]
+          tmp[11:8] <= {1'b0, fetch_ir[11:9]};   // J: off12[11:9]
         else
-          base_sel_r <= {1'b0, fetch_ir[5:3]};   // S/C: don't-care
+          tmp[11:8] <= {1'b0, fetch_ir[5:3]};    // S/C: don't-care
 
         rd_rs2_sel_r <= fetch_ir[2:0];
 
