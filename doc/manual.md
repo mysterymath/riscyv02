@@ -12,13 +12,13 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 
 | Metric | RISCY-V02 | Arlet 6502 |
 |---|---|---|
-| Clock period | 17 ns | 16 ns |
-| fMax (slow corner) | 58.8 MHz | 62.5 MHz |
-| Utilization | 59.6% | 48.4% |
-| Transistor count (synth) | 16,282 | 13,082 |
-| SRAM-adjusted | 13,132 | 13,082 |
+| Clock period | 16 ns | 16 ns |
+| fMax (slow corner) | 62.5 MHz | 62.5 MHz |
+| Utilization | 60.1% | 48.4% |
+| Transistor count (synth) | 16,426 | 13,082 |
+| SRAM-adjusted | 13,276 | 13,082 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. The SRAM-adjusted total is within 0.4% of the 6502 at 58.8 MHz, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. The SRAM-adjusted total is within 1.5% of the 6502 at 62.5 MHz, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 

@@ -568,7 +568,7 @@ module riscyv02_execute (
 
     case (state)
       E_MEM_LO, E_MEM_HI: begin
-        dout = r;   // rs2_lo or rs2_hi from regfile (only meaningful for SW/SB)
+        dout = r2;  // rs2 via port 2 (low-fanout path to uio_out)
         rwb  = !is_store;
       end
     endcase
@@ -636,11 +636,14 @@ module riscyv02_execute (
 
         E_EXEC_HI: begin
           if (is_mem_addr) begin
-            // Address high byte computed; set up for memory access or complete
-            tmp[15:8] <= alu_result;
-            r_sel_r   <= rd_rs2_sel_r;
-            r_hi_r    <= 1'b0;
-            state     <= (op_r == OP_AUIPC) ? E_IDLE : E_MEM_LO;
+            // Address high byte computed; set up for memory access or complete.
+            // off6_r[5:3] redirects r2 to read store data (rd_rs2_sel_r),
+            // separating the dout → uio_out path from port 1's high fanout.
+            tmp[15:8]   <= alu_result;
+            r_sel_r     <= rd_rs2_sel_r;
+            off6_r[5:3] <= rd_rs2_sel_r;
+            r_hi_r      <= 1'b0;
+            state       <= (op_r == OP_AUIPC) ? E_IDLE : E_MEM_LO;
           end else if (is_jr_jalr) begin
             pc    <= next_pc;
             state <= E_IDLE;
