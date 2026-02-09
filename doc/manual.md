@@ -121,7 +121,7 @@ All instructions are 16 bits. Opcodes occupy the upper bits and determine the in
 ### LW — Load Word
 
 ```
-[1000][rs1:3][off6:6][rd:3]
+[1000][off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
 ```
 
 `rd = MEM[rs1 + sext(off6) * 2]`
@@ -133,7 +133,7 @@ Loads a 16-bit word from memory. The 6-bit signed offset is scaled by 2, giving 
 ### SW — Store Word
 
 ```
-[1010][rs1:3][off6:6][rs2:3]
+[1010][off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
 ```
 
 `MEM[rs1 + sext(off6) * 2] = rs2`
@@ -145,7 +145,7 @@ Stores a 16-bit word to memory. The offset encoding is identical to LW. The low 
 ### LB — Load Byte (Sign-Extend)
 
 ```
-[0110][rs1:3][off6:6][rd:3]
+[0110][off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
 ```
 
 `rd = sext(MEM[rs1 + sext(off6)])`
@@ -157,7 +157,7 @@ Loads a single byte from memory and sign-extends it to 16 bits. The 6-bit signed
 ### LBU — Load Byte (Zero-Extend)
 
 ```
-[0111][rs1:3][off6:6][rd:3]
+[0111][off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
 ```
 
 `rd = zext(MEM[rs1 + sext(off6)])`
@@ -169,7 +169,7 @@ Loads a single byte from memory and zero-extends it to 16 bits. The high byte of
 ### SB — Store Byte
 
 ```
-[1001][rs1:3][off6:6][rs2:3]
+[1001][off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
 ```
 
 `MEM[rs1 + sext(off6)] = rs2[7:0]`
@@ -181,7 +181,7 @@ Stores the low byte of rs2 to memory. Only one byte is written; adjacent bytes a
 ### JR — Jump Register
 
 ```
-[1011100][off6:6][rs:3]
+[1101110][off6:6][rs:3]
 ```
 
 `PC = rs + sext(off6) * 2`
@@ -193,7 +193,7 @@ Unconditional jump to the address computed from a register plus a scaled signed 
 ### BZ — Branch if Zero
 
 ```
-[1011000][off6:6][rs:3]
+[1101000][off6:6][rs:3]
 ```
 
 `if rs == 0: PC = PC + sext(off6) * 2`
@@ -205,7 +205,7 @@ Branches to a PC-relative target if the source register is zero. The 6-bit signe
 ### BNZ — Branch if Non-Zero
 
 ```
-[1011001][off6:6][rs:3]
+[1101001][off6:6][rs:3]
 ```
 
 `if rs != 0: PC = PC + sext(off6) * 2`
@@ -217,7 +217,7 @@ Branches to a PC-relative target if the source register is non-zero. Encoding an
 ### BLTZ — Branch if Less Than Zero
 
 ```
-[1011010][off6:6][rs:3]
+[1101010][off6:6][rs:3]
 ```
 
 `if rs < 0: PC = PC + sext(off6) * 2`
@@ -229,7 +229,7 @@ Branches to a PC-relative target if the source register is negative (sign bit se
 ### BGEZ — Branch if Greater or Equal to Zero
 
 ```
-[1011011][off6:6][rs:3]
+[1101011][off6:6][rs:3]
 ```
 
 `if rs >= 0: PC = PC + sext(off6) * 2`
@@ -265,7 +265,7 @@ Unconditional PC-relative jump that saves the return address in R6 (link registe
 ### JALR — Jump and Link Register
 
 ```
-[1011101][off6:6][rs:3]
+[1101111][off6:6][rs:3]
 ```
 
 `R6 = PC+2; PC = rs + sext(off6) * 2`
@@ -301,7 +301,7 @@ Loads a sign-extended 10-bit immediate, shifted left by 6, into a register. The 
 ### LI — Load Immediate
 
 ```
-[1110010][imm6:6][rd:3]
+[1101100][imm6:6][rd:3]
 ```
 
 `rd = sext(imm6)`
@@ -313,7 +313,7 @@ Loads a sign-extended 6-bit immediate into a register. The immediate range is -3
 ### ADD — Add
 
 ```
-[1100000][rs2:3][rs1:3][rd:3]
+[1011000][rs2:3][rs1:3][rd:3]
 ```
 
 `rd = rs1 + rs2`
@@ -325,7 +325,7 @@ Adds two registers and writes the result to rd. The 16-bit addition is performed
 ### SUB — Subtract
 
 ```
-[1100001][rs2:3][rs1:3][rd:3]
+[1011001][rs2:3][rs1:3][rd:3]
 ```
 
 `rd = rs1 - rs2`
@@ -337,7 +337,7 @@ Subtracts rs2 from rs1 and writes the result to rd. Implemented as two's complem
 ### AND — Bitwise And
 
 ```
-[1100010][rs2:3][rs1:3][rd:3]
+[1011010][rs2:3][rs1:3][rd:3]
 ```
 
 `rd = rs1 & rs2`
@@ -349,7 +349,7 @@ Bitwise AND of two registers. Each byte is computed independently (no carry chai
 ### OR — Bitwise Or
 
 ```
-[1100011][rs2:3][rs1:3][rd:3]
+[1011011][rs2:3][rs1:3][rd:3]
 ```
 
 `rd = rs1 | rs2`
@@ -361,7 +361,7 @@ Bitwise OR of two registers. Each byte is computed independently.
 ### XOR — Bitwise Exclusive Or
 
 ```
-[1100100][rs2:3][rs1:3][rd:3]
+[1011100][rs2:3][rs1:3][rd:3]
 ```
 
 `rd = rs1 ^ rs2`
@@ -373,7 +373,7 @@ Bitwise XOR of two registers. Each byte is computed independently.
 ### SLT — Set Less Than (Signed)
 
 ```
-[1100101][rs2:3][rs1:3][rd:3]
+[1011101][rs2:3][rs1:3][rd:3]
 ```
 
 `rd = (rs1 < rs2) ? 1 : 0` (signed comparison)
@@ -385,7 +385,7 @@ Compares rs1 and rs2 as signed 16-bit integers. If rs1 is less than rs2, rd is s
 ### SLTU — Set Less Than (Unsigned)
 
 ```
-[1100110][rs2:3][rs1:3][rd:3]
+[1011110][rs2:3][rs1:3][rd:3]
 ```
 
 `rd = (rs1 < rs2) ? 1 : 0` (unsigned comparison)
@@ -397,7 +397,7 @@ Compares rs1 and rs2 as unsigned 16-bit integers. If rs1 is less than rs2, rd is
 ### SLL — Shift Left Logical
 
 ```
-[1100111][rs2:3][rs1:3][rd:3]
+[1100000][rs2:3][rs1:3][rd:3]
 ```
 
 `rd = rs1 << rs2[3:0]`
@@ -409,7 +409,7 @@ Shifts rs1 left by the amount in rs2 (low 4 bits, range 0–15). Vacated bits ar
 ### SRL — Shift Right Logical
 
 ```
-[1101000][rs2:3][rs1:3][rd:3]
+[1100010][rs2:3][rs1:3][rd:3]
 ```
 
 `rd = rs1 >>u rs2[3:0]`
@@ -421,7 +421,7 @@ Shifts rs1 right by the amount in rs2 (low 4 bits, range 0–15). Vacated bits a
 ### SRA — Shift Right Arithmetic
 
 ```
-[1101001][rs2:3][rs1:3][rd:3]
+[1100011][rs2:3][rs1:3][rd:3]
 ```
 
 `rd = rs1 >>s rs2[3:0]`
@@ -433,7 +433,7 @@ Shifts rs1 right by the amount in rs2 (low 4 bits, range 0–15). Vacated bits a
 ### ADDI — Add Immediate
 
 ```
-[1101110][imm6:6][rd:3]
+[1110000][imm6:6][rd:3]
 ```
 
 `rd = rd + sext(imm6)`
@@ -445,7 +445,7 @@ Adds a sign-extended 6-bit immediate (-32 to +31) to the destination register. T
 ### ANDI — And Immediate
 
 ```
-[1101111][imm6:6][rd:3]
+[1110010][imm6:6][rd:3]
 ```
 
 `rd = rd & sext(imm6)`
@@ -457,7 +457,7 @@ Bitwise AND of the destination register with a sign-extended 6-bit immediate. Us
 ### ORI — Or Immediate
 
 ```
-[1110000][imm6:6][rd:3]
+[1110011][imm6:6][rd:3]
 ```
 
 `rd = rd | sext(imm6)`
@@ -469,7 +469,7 @@ Bitwise OR of the destination register with a sign-extended 6-bit immediate. Set
 ### XORI — Xor Immediate
 
 ```
-[1110001][imm6:6][rd:3]
+[1110100][imm6:6][rd:3]
 ```
 
 `rd = rd ^ sext(imm6)`
@@ -481,7 +481,7 @@ Bitwise XOR of the destination register with a sign-extended 6-bit immediate. `X
 ### SLTIF — Set Less Than Immediate (Signed, Fixed-Destination)
 
 ```
-[1110011][imm6:6][rs:3]
+[1110101][imm6:6][rs:3]
 ```
 
 `t0 = (rs < sext(imm6)) ? 1 : 0` (signed comparison)
@@ -493,7 +493,7 @@ Compares the source register against a sign-extended 6-bit immediate as signed 1
 ### SLTIUF — Set Less Than Immediate (Unsigned, Fixed-Destination)
 
 ```
-[1110100][imm6:6][rs:3]
+[1110110][imm6:6][rs:3]
 ```
 
 `t0 = (rs <u sext(imm6)) ? 1 : 0` (unsigned comparison)
@@ -505,7 +505,7 @@ Compares the source register against a sign-extended 6-bit immediate as unsigned
 ### XORIF — Xor Immediate (Fixed-Destination)
 
 ```
-[1110101][imm6:6][rs:3]
+[1110111][imm6:6][rs:3]
 ```
 
 `t0 = rs ^ sext(imm6)`
@@ -517,19 +517,19 @@ Bitwise XOR of the source register with a sign-extended 6-bit immediate, writing
 ### SLLI — Shift Left Logical Immediate
 
 ```
-[111101100][imm4:4][rd:3]
+[1100100][00][imm4:4][rd:3]
 ```
 
 `rd = rd << imm4`
 
-Shifts rd left by a 4-bit immediate (0–15). Vacated bits are filled with zeros. This is the first 9-bit opcode format in the ISA, using 4 fewer payload bits than 7-bit opcodes to accommodate the longer opcode. The shift amount is extracted from `imm4` (bits [6:3] of the instruction).
+Shifts rd left by a 4-bit immediate (0–15). Vacated bits are filled with zeros. The shift amount is extracted from bits [6:3] of the instruction; bits [8:7] are reserved (zero).
 
 **Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
 
 ### SRLI — Shift Right Logical Immediate
 
 ```
-[111101101][imm4:4][rd:3]
+[1100110][00][imm4:4][rd:3]
 ```
 
 `rd = rd >>u imm4`
@@ -541,7 +541,7 @@ Shifts rd right by a 4-bit immediate (0–15). Vacated bits are filled with zero
 ### SRAI — Shift Right Arithmetic Immediate
 
 ```
-[111101110][imm4:4][rd:3]
+[1100111][00][imm4:4][rd:3]
 ```
 
 `rd = rd >>s imm4`
@@ -553,7 +553,7 @@ Shifts rd right by a 4-bit immediate (0–15). Vacated bits are filled with copi
 ### RETI — Return from Interrupt
 
 ```
-[1111111010000001]
+[1111011][000000000]
 ```
 
 `I = EPC[0]; PC = EPC & $FFFE`
@@ -565,7 +565,7 @@ Restores the interrupt enable state from the saved EPC and returns to the interr
 ### SEI — Set Interrupt Disable
 
 ```
-[1111111010000010]
+[1111001][000000000]
 ```
 
 `I = 1`
@@ -577,7 +577,7 @@ Disables interrupts by setting the I bit. While I=1, IRQB assertions are ignored
 ### CLI — Clear Interrupt Disable
 
 ```
-[1111111010000011]
+[1111010][000000000]
 ```
 
 `I = 0`
@@ -589,7 +589,7 @@ Enables interrupts by clearing the I bit. After CLI, a pending IRQ (IRQB=0) will
 ### BRK — Software Interrupt
 
 ```
-[1111111010000100]
+[1111100][000000000]
 ```
 
 `EPC = (PC+2 | I); I = 1; PC = $000C`
@@ -603,7 +603,7 @@ Triggers a software interrupt. Saves the return address with I bit to EPC, disab
 ### WAI — Wait for Interrupt
 
 ```
-[1111111010000101]
+[1111101][000000000]
 ```
 
 Halts execution until an interrupt signal arrives. The PC is advanced past WAI before halting, so the return address always points to the next instruction.
@@ -619,7 +619,7 @@ If an interrupt is already pending when WAI executes, it is serviced immediately
 ### STP — Stop
 
 ```
-[1111111010000110]
+[1111111][000000000]
 ```
 
 Halts the processor permanently. No interrupt (IRQ or NMI) can wake it. Only a hardware reset recovers execution. Both WAI and STP halt via internal clock gating — the CPU clock stops entirely, reducing dynamic power to zero.
@@ -629,7 +629,7 @@ Halts the processor permanently. No interrupt (IRQ or NMI) can wake it. Only a h
 ### EPCR — Read EPC
 
 ```
-[1111111001110][rd:3]
+[1111110][000000][rd:3]
 ```
 
 `rd = EPC`
@@ -641,7 +641,7 @@ Reads the Exception Program Counter (including the I bit in bit 0) into a genera
 ### EPCW — Write EPC
 
 ```
-[1111111001111][rs:3]
+[1101101][000000][rs:3]
 ```
 
 `EPC = rs`
@@ -656,68 +656,74 @@ Any instruction not matching the above is executed as a NOP: the PC advances pas
 
 ## Instruction Encoding Reference
 
+### Instruction Formats
+
 ```
+R-format: [1][grp:3][sub:3][rs2:3][rs1:3][rd:3]         ALU RR, shifts (reg-reg)
+I-format: [1][grp:3][sub:3][imm6:6][rd:3]                ALU imm, branches, LI, JR, JALR, EPCW
+S-format: [prefix:4][off6[2:0]:3][off6[5:3]:3][rs1:3][rd/rs2:3]  loads, stores
+U-format: [prefix:3][imm10:10][rd:3]                     LUI, AUIPC
+J-format: [prefix:4][off12:12]                            J, JAL
+```
+
+S-format uses RISC-V-style immediate scrambling: off6 is split so rs1 stays at [5:3].
+
+### Encoding Table
+
+```
+─── Wide payload (S/U/J formats, individually dispatched) ───
 Bits 15..13  Instruction   Format
-──────────────────────────────────────────────
 000          LUI           [imm10:10][rd:3]
 001          AUIPC         [imm10:10][rd:3]
 
 Bits 15..12  Instruction   Format
-──────────────────────────────────────────────
 0100         J             [off12:12]
 0101         JAL           [off12:12]
-0110         LB            [rs1:3][off6:6][rd:3]
-0111         LBU           [rs1:3][off6:6][rd:3]
-1000         LW            [rs1:3][off6:6][rd:3]
-1001         SB            [rs1:3][off6:6][rs2:3]
-1010         SW            [rs1:3][off6:6][rs2:3]
+0110         LB            [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+0111         LBU           [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+1000         LW            [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+1001         SB            [off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
+1010         SW            [off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
 
+─── Direct-mapped: op_r = fetch_ir[14:9] ───
 Bits 15..9   Instruction   Format
-──────────────────────────────────────────────
-1011000      BZ            [off6:6][rs:3]
-1011001      BNZ           [off6:6][rs:3]
-1011010      BLTZ          [off6:6][rs:3]
-1011011      BGEZ          [off6:6][rs:3]
-1011100      JR            [off6:6][rs:3]
-1011101      JALR          [off6:6][rs:3]
-1100000      ADD           [rs2:3][rs1:3][rd:3]
-1100001      SUB           [rs2:3][rs1:3][rd:3]
-1100010      AND           [rs2:3][rs1:3][rd:3]
-1100011      OR            [rs2:3][rs1:3][rd:3]
-1100100      XOR           [rs2:3][rs1:3][rd:3]
-1100101      SLT           [rs2:3][rs1:3][rd:3]
-1100110      SLTU          [rs2:3][rs1:3][rd:3]
-1100111      SLL           [rs2:3][rs1:3][rd:3]
-1101000      SRL           [rs2:3][rs1:3][rd:3]
-1101001      SRA           [rs2:3][rs1:3][rd:3]
-1101110      ADDI          [imm6:6][rd:3]
-1101111      ANDI          [imm6:6][rd:3]
-1110000      ORI           [imm6:6][rd:3]
-1110001      XORI          [imm6:6][rd:3]
-1110010      LI            [imm6:6][rd:3]
-1110011      SLTIF         [imm6:6][rs:3]
-1110100      SLTIUF        [imm6:6][rs:3]
-1110101      XORIF         [imm6:6][rs:3]
+1011000      ADD           [rs2:3][rs1:3][rd:3]
+1011001      SUB           [rs2:3][rs1:3][rd:3]
+1011010      AND           [rs2:3][rs1:3][rd:3]
+1011011      OR            [rs2:3][rs1:3][rd:3]
+1011100      XOR           [rs2:3][rs1:3][rd:3]
+1011101      SLT           [rs2:3][rs1:3][rd:3]
+1011110      SLTU          [rs2:3][rs1:3][rd:3]
+1100000      SLL           [rs2:3][rs1:3][rd:3]
+1100010      SRL           [rs2:3][rs1:3][rd:3]
+1100011      SRA           [rs2:3][rs1:3][rd:3]
+1100100      SLLI          [00][imm4:4][rd:3]
+1100110      SRLI          [00][imm4:4][rd:3]
+1100111      SRAI          [00][imm4:4][rd:3]
+1101000      BZ            [off6:6][rs:3]
+1101001      BNZ           [off6:6][rs:3]
+1101010      BLTZ          [off6:6][rs:3]
+1101011      BGEZ          [off6:6][rs:3]
+1101100      LI            [imm6:6][rd:3]
+1101101      EPCW          [000000][rs:3]
+1101110      JR            [off6:6][rs:3]
+1101111      JALR          [off6:6][rs:3]
+1110000      ADDI          [imm6:6][rd:3]
+1110010      ANDI          [imm6:6][rd:3]
+1110011      ORI           [imm6:6][rd:3]
+1110100      XORI          [imm6:6][rd:3]
+1110101      SLTIF         [imm6:6][rs:3]
+1110110      SLTIUF        [imm6:6][rs:3]
+1110111      XORIF         [imm6:6][rs:3]
 
-Bits 15..7   Instruction   Format
-──────────────────────────────────────────────
-111101100    SLLI          [imm4:4][rd:3]
-111101101    SRLI          [imm4:4][rd:3]
-111101110    SRAI          [imm4:4][rd:3]
-
-Bits 15..3   Instruction   Format
-──────────────────────────────────────────────
-1111111001110    EPCR          [rd:3]
-1111111001111    EPCW          [rs:3]
-
-Full 16-bit  Instruction
-──────────────────────────────────────────────
-1111111010000001  RETI
-1111111010000010  SEI
-1111111010000011  CLI
-1111111010000100  BRK
-1111111010000101  WAI
-1111111010000110  STP
+─── ISA group 111 (system + EPCR, remapped at dispatch) ───
+1111001      SEI           [000000000]
+1111010      CLI           [000000000]
+1111011      RETI          [000000000]
+1111100      BRK           [000000000]
+1111101      WAI           [000000000]
+1111110      EPCR          [000000][rd:3]
+1111111      STP           [000000000]
 
 All other    NOP           (ignored)
 ```

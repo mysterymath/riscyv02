@@ -27,13 +27,20 @@ def _read_ram(dut, addr):
     return int(dut.ram[addr].value)
 
 
+def _encode_s_format(prefix, off6, rs1, rd_rs2):
+    """Encode S-format: [prefix:4][off6[2:0]:3][off6[5:3]:3][rs1:3][rd/rs2:3]."""
+    off6_lo = off6 & 0x7        # off6[2:0]
+    off6_hi = (off6 >> 3) & 0x7 # off6[5:3]
+    insn = (prefix << 12) | (off6_lo << 9) | (off6_hi << 6) | (rs1 << 3) | rd_rs2
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
 def _encode_lw(rd, rs1, off6):
     """Encode LW rd, off6(rs1) -> 16-bit little-endian bytes. off6 is byte offset."""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rd <= 7 and 0 <= rs1 <= 7
     off6 &= 0x3F
-    insn = (0b1000 << 12) | (rs1 << 9) | (off6 << 3) | rd
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    return _encode_s_format(0b1000, off6, rs1, rd)
 
 
 def _encode_sw(rs2, rs1, off6):
@@ -41,8 +48,7 @@ def _encode_sw(rs2, rs1, off6):
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs2 <= 7 and 0 <= rs1 <= 7
     off6 &= 0x3F
-    insn = (0b1010 << 12) | (rs1 << 9) | (off6 << 3) | rs2
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    return _encode_s_format(0b1010, off6, rs1, rs2)
 
 
 def _encode_jr(rs, off6):
@@ -50,7 +56,7 @@ def _encode_jr(rs, off6):
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
     off6 &= 0x3F
-    insn = (0b1011100 << 9) | (off6 << 3) | rs
+    insn = (0b1101110 << 9) | (off6 << 3) | rs
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
@@ -359,50 +365,50 @@ async def test_single_step(dut):
 # Helper encoders for interrupt instructions
 # ---------------------------------------------------------------------------
 def _encode_reti():
-    """Encode RETI -> 16-bit little-endian bytes."""
-    insn = 0b1111111010000001
+    """Encode RETI -> 16-bit little-endian bytes. [1111011][000000000]"""
+    insn = (0b1111011 << 9)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_sei():
-    """Encode SEI -> 16-bit little-endian bytes."""
-    insn = 0b1111111010000010
+    """Encode SEI -> 16-bit little-endian bytes. [1111001][000000000]"""
+    insn = (0b1111001 << 9)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_cli():
-    """Encode CLI -> 16-bit little-endian bytes."""
-    insn = 0b1111111010000011
+    """Encode CLI -> 16-bit little-endian bytes. [1111010][000000000]"""
+    insn = (0b1111010 << 9)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_brk():
-    """Encode BRK -> 16-bit little-endian bytes."""
-    insn = 0b1111111010000100
+    """Encode BRK -> 16-bit little-endian bytes. [1111100][000000000]"""
+    insn = (0b1111100 << 9)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_wai():
-    """Encode WAI -> 16-bit little-endian bytes."""
-    insn = 0b1111111010000101
+    """Encode WAI -> 16-bit little-endian bytes. [1111101][000000000]"""
+    insn = (0b1111101 << 9)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_stp():
-    """Encode STP -> 16-bit little-endian bytes."""
-    insn = 0b1111111010000110
+    """Encode STP -> 16-bit little-endian bytes. [1111111][000000000]"""
+    insn = (0b1111111 << 9)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_epcr(rd):
-    """Encode EPCR rd -> 16-bit little-endian bytes."""
-    insn = (0b1111111001110 << 3) | rd
+    """Encode EPCR rd -> 16-bit little-endian bytes. [1111110][000000][rd:3]"""
+    insn = (0b1111110 << 9) | rd
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_epcw(rs):
-    """Encode EPCW rs -> 16-bit little-endian bytes."""
-    insn = (0b1111111001111 << 3) | rs
+    """Encode EPCW rs -> 16-bit little-endian bytes. [1101101][000000][rs:3]"""
+    insn = (0b1101101 << 9) | rs
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
@@ -958,7 +964,7 @@ async def test_irq_interrupts_jr(dut):
 
 def _encode_nop():
     """Encode NOP (any unrecognized instruction) -> 16-bit little-endian bytes."""
-    # Use 0x0000 as NOP - not recognized as LW/SW/JR/SEI/CLI/RETI
+    # Use 0x0000 as NOP - decodes as LUI R0,0 which is a functional no-op
     return (0x00, 0x00)
 
 
@@ -2682,30 +2688,27 @@ async def test_cycle_count_epcw(dut):
 # Helper encoders for byte load/store instructions
 # ---------------------------------------------------------------------------
 def _encode_lb(rs1, off6, rd):
-    """Encode LB rd, off6(rs1) -> 16-bit little-endian bytes."""
+    """Encode LB rd, off6(rs1) -> 16-bit little-endian bytes. S-format."""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rd <= 7 and 0 <= rs1 <= 7
     off6 &= 0x3F
-    insn = (0b0110 << 12) | (rs1 << 9) | (off6 << 3) | rd
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    return _encode_s_format(0b0110, off6, rs1, rd)
 
 
 def _encode_lbu(rs1, off6, rd):
-    """Encode LBU rd, off6(rs1) -> 16-bit little-endian bytes."""
+    """Encode LBU rd, off6(rs1) -> 16-bit little-endian bytes. S-format."""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rd <= 7 and 0 <= rs1 <= 7
     off6 &= 0x3F
-    insn = (0b0111 << 12) | (rs1 << 9) | (off6 << 3) | rd
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    return _encode_s_format(0b0111, off6, rs1, rd)
 
 
 def _encode_sb(rs1, off6, rs2):
-    """Encode SB rs2, off6(rs1) -> 16-bit little-endian bytes."""
+    """Encode SB rs2, off6(rs1) -> 16-bit little-endian bytes. S-format."""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs2 <= 7 and 0 <= rs1 <= 7
     off6 &= 0x3F
-    insn = (0b1001 << 12) | (rs1 << 9) | (off6 << 3) | rs2
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+    return _encode_s_format(0b1001, off6, rs1, rs2)
 
 
 # ---------------------------------------------------------------------------
@@ -3190,23 +3193,23 @@ def _encode_alu(op_bits, rd, rs1, rs2):
 
 
 def _encode_add(rd, rs1, rs2):
-    return _encode_alu(0b1100000, rd, rs1, rs2)
+    return _encode_alu(0b1011000, rd, rs1, rs2)
 
 
 def _encode_sub(rd, rs1, rs2):
-    return _encode_alu(0b1100001, rd, rs1, rs2)
+    return _encode_alu(0b1011001, rd, rs1, rs2)
 
 
 def _encode_and(rd, rs1, rs2):
-    return _encode_alu(0b1100010, rd, rs1, rs2)
+    return _encode_alu(0b1011010, rd, rs1, rs2)
 
 
 def _encode_or(rd, rs1, rs2):
-    return _encode_alu(0b1100011, rd, rs1, rs2)
+    return _encode_alu(0b1011011, rd, rs1, rs2)
 
 
 def _encode_xor(rd, rs1, rs2):
-    return _encode_alu(0b1100100, rd, rs1, rs2)
+    return _encode_alu(0b1011100, rd, rs1, rs2)
 
 
 # ---------------------------------------------------------------------------
@@ -3483,19 +3486,19 @@ async def test_cycle_count_add(dut):
 # Helper encoders for SLT, SLTU, LI
 # ---------------------------------------------------------------------------
 def _encode_slt(rd, rs1, rs2):
-    return _encode_alu(0b1100101, rd, rs1, rs2)
+    return _encode_alu(0b1011101, rd, rs1, rs2)
 
 
 def _encode_sltu(rd, rs1, rs2):
-    return _encode_alu(0b1100110, rd, rs1, rs2)
+    return _encode_alu(0b1011110, rd, rs1, rs2)
 
 
 def _encode_li(rd, imm6):
-    """Encode LI rd, imm6 -> 16-bit little-endian bytes."""
+    """Encode LI rd, imm6 -> 16-bit little-endian bytes. [1101100][imm6:6][rd:3]"""
     assert -32 <= imm6 <= 31, f"imm6 out of range: {imm6}"
     assert 0 <= rd <= 7
     imm6 &= 0x3F
-    insn = (0b1110010 << 9) | (imm6 << 3) | rd
+    insn = (0b1101100 << 9) | (imm6 << 3) | rd
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
@@ -3911,38 +3914,38 @@ def _encode_lui(rd, imm10):
 
 
 def _encode_bz(rs, off6):
-    """Encode BZ rs, off6 -> 16-bit little-endian bytes. [1011000][off6:6][rs:3]"""
+    """Encode BZ rs, off6 -> 16-bit little-endian bytes. [1101000][off6:6][rs:3]"""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
     off6 &= 0x3F
-    insn = (0b1011000 << 9) | (off6 << 3) | rs
+    insn = (0b1101000 << 9) | (off6 << 3) | rs
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_bnz(rs, off6):
-    """Encode BNZ rs, off6 -> 16-bit little-endian bytes. [1011001][off6:6][rs:3]"""
+    """Encode BNZ rs, off6 -> 16-bit little-endian bytes. [1101001][off6:6][rs:3]"""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
     off6 &= 0x3F
-    insn = (0b1011001 << 9) | (off6 << 3) | rs
+    insn = (0b1101001 << 9) | (off6 << 3) | rs
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_bltz(rs, off6):
-    """Encode BLTZ rs, off6 -> 16-bit little-endian bytes. [1011010][off6:6][rs:3]"""
+    """Encode BLTZ rs, off6 -> 16-bit little-endian bytes. [1101010][off6:6][rs:3]"""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
     off6 &= 0x3F
-    insn = (0b1011010 << 9) | (off6 << 3) | rs
+    insn = (0b1101010 << 9) | (off6 << 3) | rs
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_bgez(rs, off6):
-    """Encode BGEZ rs, off6 -> 16-bit little-endian bytes. [1011011][off6:6][rs:3]"""
+    """Encode BGEZ rs, off6 -> 16-bit little-endian bytes. [1101011][off6:6][rs:3]"""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
     off6 &= 0x3F
-    insn = (0b1011011 << 9) | (off6 << 3) | rs
+    insn = (0b1101011 << 9) | (off6 << 3) | rs
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
@@ -4428,11 +4431,11 @@ def _encode_jal(off12):
 
 
 def _encode_jalr(rs, off6):
-    """Encode JALR rs, off6 -> 16-bit little-endian bytes. [1011101][off6:6][rs:3]"""
+    """Encode JALR rs, off6 -> 16-bit little-endian bytes. [1101111][off6:6][rs:3]"""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs <= 7
     off6 &= 0x3F
-    insn = (0b1011101 << 9) | (off6 << 3) | rs
+    insn = (0b1101111 << 9) | (off6 << 3) | rs
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
@@ -4636,31 +4639,31 @@ def _encode_imm_op(op7, rd_rs, imm6):
 
 
 def _encode_addi(rd, imm6):
-    return _encode_imm_op(0b1101110, rd, imm6)
-
-
-def _encode_andi(rd, imm6):
-    return _encode_imm_op(0b1101111, rd, imm6)
-
-
-def _encode_ori(rd, imm6):
     return _encode_imm_op(0b1110000, rd, imm6)
 
 
+def _encode_andi(rd, imm6):
+    return _encode_imm_op(0b1110010, rd, imm6)
+
+
+def _encode_ori(rd, imm6):
+    return _encode_imm_op(0b1110011, rd, imm6)
+
+
 def _encode_xori(rd, imm6):
-    return _encode_imm_op(0b1110001, rd, imm6)
+    return _encode_imm_op(0b1110100, rd, imm6)
 
 
 def _encode_sltif(rs, imm6):
-    return _encode_imm_op(0b1110011, rs, imm6)
+    return _encode_imm_op(0b1110101, rs, imm6)
 
 
 def _encode_sltiuf(rs, imm6):
-    return _encode_imm_op(0b1110100, rs, imm6)
+    return _encode_imm_op(0b1110110, rs, imm6)
 
 
 def _encode_xorif(rs, imm6):
-    return _encode_imm_op(0b1110101, rs, imm6)
+    return _encode_imm_op(0b1110111, rs, imm6)
 
 
 # ---------------------------------------------------------------------------
@@ -5223,35 +5226,35 @@ async def test_xorif_equality(dut):
 # ===========================================================================
 
 def _encode_sll(rd, rs1, rs2):
-    return _encode_alu(0b1100111, rd, rs1, rs2)
+    return _encode_alu(0b1100000, rd, rs1, rs2)
 
 
 def _encode_srl(rd, rs1, rs2):
-    return _encode_alu(0b1101000, rd, rs1, rs2)
+    return _encode_alu(0b1100010, rd, rs1, rs2)
 
 
 def _encode_sra(rd, rs1, rs2):
-    return _encode_alu(0b1101001, rd, rs1, rs2)
+    return _encode_alu(0b1100011, rd, rs1, rs2)
 
 
-def _encode_shift_imm(op9, rd, imm4):
-    """Encode a 9-bit opcode shift immediate: [op9:9][imm4:4][rd:3]."""
+def _encode_shift_imm(op7, rd, imm4):
+    """Encode a shift immediate: [op7:7][00][imm4:4][rd:3]."""
     assert 0 <= imm4 <= 15, f"imm4 out of range: {imm4}"
     assert 0 <= rd <= 7
-    insn = (op9 << 7) | (imm4 << 3) | rd
+    insn = (op7 << 9) | (imm4 << 3) | rd
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_slli(rd, imm4):
-    return _encode_shift_imm(0b111101100, rd, imm4)
+    return _encode_shift_imm(0b1100100, rd, imm4)
 
 
 def _encode_srli(rd, imm4):
-    return _encode_shift_imm(0b111101101, rd, imm4)
+    return _encode_shift_imm(0b1100110, rd, imm4)
 
 
 def _encode_srai(rd, imm4):
-    return _encode_shift_imm(0b111101110, rd, imm4)
+    return _encode_shift_imm(0b1100111, rd, imm4)
 
 
 # ---------------------------------------------------------------------------

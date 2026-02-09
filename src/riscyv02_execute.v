@@ -22,6 +22,10 @@
 // All instructions dispatch to E_EXEC_LO, then optionally continue to
 // E_EXEC_HI (two-cycle ops). Memory instructions proceed from E_EXEC_HI
 // to E_MEM_LO/HI for bus access.
+//
+// ISA encoding: RISC-V style with fixed functional fields.
+// Compact instructions (R/I): grp = [14:12], sub = [11:9], op_r = {grp, sub}.
+// S-format (loads/stores): immediate scrambled so rs1 stays at [5:3].
 // ============================================================================
 
 module riscyv02_execute (
@@ -67,39 +71,35 @@ module riscyv02_execute (
 
   // Decoded instruction state (latched at ir_accept)
   // op_r encoding: [5:3] = group, [2:0] = sub-opcode with meaningful bit properties
-  // Group 000 — System (single-cycle)
+  // Group 000 — System (single-cycle, ISA grp 111 remapped here)
   localparam OP_NOP    = 6'b000_000;  // 0
   localparam OP_SEI    = 6'b000_001;  // 1
   localparam OP_CLI    = 6'b000_010;  // 2
   localparam OP_RETI   = 6'b000_011;  // 3
   localparam OP_BRK    = 6'b000_100;  // 4
   localparam OP_WAI    = 6'b000_101;  // 5
-  localparam OP_STP    = 6'b000_110;  // 6
-  // Group 001 — Memory/Addr ([2]=1&&[1]=0→store, [2]=1&&[1]=1→JR/JALR)
+  localparam OP_STP    = 6'b000_111;  // 7
+  // Group 001 — Memory (loads, stores, AUIPC)
   localparam OP_LW     = 6'b001_000;  // 8
   localparam OP_LB     = 6'b001_001;  // 9
   localparam OP_LBU    = 6'b001_010;  // 10
   localparam OP_AUIPC  = 6'b001_011;  // 11
   localparam OP_SW     = 6'b001_100;  // 12
   localparam OP_SB     = 6'b001_101;  // 13
-  localparam OP_JR     = 6'b001_110;  // 14
-  localparam OP_JALR   = 6'b001_111;  // 15
-  // Group 010 — ALU RR ([2:0] maps to alu_op for [2:0]<=4)
-  localparam OP_ADD    = 6'b010_000;  // 16
-  localparam OP_SUB    = 6'b010_001;  // 17
-  localparam OP_AND    = 6'b010_010;  // 18
-  localparam OP_OR     = 6'b010_011;  // 19
-  localparam OP_XOR    = 6'b010_100;  // 20
-  localparam OP_SLT    = 6'b010_101;  // 21
-  localparam OP_SLTU   = 6'b010_110;  // 22
-  // Group 011 — ALU Immediate (parallel sub-opcodes to group 010)
-  localparam OP_ADDI   = 6'b011_000;  // 24
-  localparam OP_ANDI   = 6'b011_010;  // 26
-  localparam OP_ORI    = 6'b011_011;  // 27
-  localparam OP_XORI   = 6'b011_100;  // 28
-  localparam OP_SLTIF  = 6'b011_101;  // 29
-  localparam OP_SLTIUF = 6'b011_110;  // 30
-  localparam OP_XORIF  = 6'b011_111;  // 31
+  // Group 010 — Wide two-cycle (J, JAL, LUI, EPCR, EPCW)
+  localparam OP_J      = 6'b010_000;  // 16
+  localparam OP_JAL    = 6'b010_001;  // 17
+  localparam OP_LUI    = 6'b010_100;  // 20
+  localparam OP_EPCR   = 6'b010_101;  // 21
+  localparam OP_EPCW   = 6'b010_110;  // 22
+  // Group 011 — ALU RR (direct-mapped, sub = alu function)
+  localparam OP_ADD    = 6'b011_000;  // 24
+  localparam OP_SUB    = 6'b011_001;  // 25
+  localparam OP_AND    = 6'b011_010;  // 26
+  localparam OP_OR     = 6'b011_011;  // 27
+  localparam OP_XOR    = 6'b011_100;  // 28
+  localparam OP_SLT    = 6'b011_101;  // 29
+  localparam OP_SLTU   = 6'b011_110;  // 30
   // Group 100 — Shift ([2]=immediate, [1]=right, [0]=arithmetic)
   localparam OP_SLL    = 6'b100_000;  // 32
   localparam OP_SRL    = 6'b100_010;  // 34
@@ -107,18 +107,22 @@ module riscyv02_execute (
   localparam OP_SLLI   = 6'b100_100;  // 36
   localparam OP_SRLI   = 6'b100_110;  // 38
   localparam OP_SRAI   = 6'b100_111;  // 39
-  // Group 101 — Control flow & misc two-cycle ([0] distinguishes pairs)
+  // Group 101 — Control (branches, LI, JR, JALR)
   localparam OP_BZ     = 6'b101_000;  // 40
   localparam OP_BNZ    = 6'b101_001;  // 41
   localparam OP_BLTZ   = 6'b101_010;  // 42
   localparam OP_BGEZ   = 6'b101_011;  // 43
   localparam OP_LI     = 6'b101_100;  // 44
-  localparam OP_LUI    = 6'b101_101;  // 45
-  localparam OP_EPCR   = 6'b101_110;  // 46
-  localparam OP_EPCW   = 6'b101_111;  // 47
-  // Group 110 — Unconditional jumps
-  localparam OP_J      = 6'b110_000;  // 48
-  localparam OP_JAL    = 6'b110_001;  // 49
+  localparam OP_JR     = 6'b101_110;  // 46
+  localparam OP_JALR   = 6'b101_111;  // 47
+  // Group 110 — ALU Immediate (parallel sub-opcodes to group 011)
+  localparam OP_ADDI   = 6'b110_000;  // 48
+  localparam OP_ANDI   = 6'b110_010;  // 50
+  localparam OP_ORI    = 6'b110_011;  // 51
+  localparam OP_XORI   = 6'b110_100;  // 52
+  localparam OP_SLTIF  = 6'b110_101;  // 53
+  localparam OP_SLTIUF = 6'b110_110;  // 54
+  localparam OP_XORIF  = 6'b110_111;  // 55
 
   localparam LINK_REG = 3'd6;  // R6 is the link register for JAL/JALR
   localparam T0_REG   = 3'd2;  // R2 is t0 for fixed-destination IF-type ops
@@ -209,15 +213,15 @@ module riscyv02_execute (
   endfunction
 
   // Group checks (one 3-bit compare each)
-  wire is_mem_addr    = op_r[5:3] == 3'b001;
-  wire is_alu_rr      = op_r[5:3] == 3'b010;
-  wire is_alu_imm_grp = op_r[5:3] == 3'b011;
-  wire is_shift       = op_r[5:3] == 3'b100;
+  wire is_mem_addr    = op_r[5:3] == 3'b001;           // Group 001
+  wire is_alu_rr      = op_r[5:3] == 3'b011;           // Group 011
+  wire is_alu_imm_grp = op_r[5:3] == 3'b110;           // Group 110
+  wire is_shift       = op_r[5:3] == 3'b100;           // Group 100
+  wire is_control     = op_r[5:3] == 3'b101;           // Group 101
   // Memory group properties
   wire is_store     = is_mem_addr && op_r[2] && !op_r[1];   // SW, SB
-  wire is_jr_jalr   = is_mem_addr && op_r[2] && op_r[1];    // JR, JALR
   wire is_byte_load = is_mem_addr && !op_r[2] && (op_r[1] ^ op_r[0]); // LB, LBU
-  // ALU sub-groups (parallel encoding between groups 010 and 011)
+  // ALU sub-groups (parallel encoding between groups 011 and 110)
   wire is_slt       = is_alu_rr      && op_r[2] && (op_r[1] ^ op_r[0]);
   wire is_slt_imm   = is_alu_imm_grp && op_r[2] && (op_r[1] ^ op_r[0]);
   wire is_alu_imm   = is_alu_imm_grp && !(op_r[2] && (op_r[1] ^ op_r[0]));
@@ -226,12 +230,14 @@ module riscyv02_execute (
   wire is_shift_rr    = is_shift && !op_r[2];
   wire is_right_shift = is_shift && op_r[1];
   wire is_arith_shift = is_shift && op_r[0];
-  // Control flow
-  wire is_branch      = op_r[5:2] == 4'b1010;     // BZ, BNZ, BLTZ, BGEZ
-  wire is_sign_branch = is_branch && op_r[1];      // BLTZ, BGEZ (sign-bit test)
-  wire is_jump_imm    = op_r[5:3] == 3'b110;       // J, JAL (group 110)
+  // Control group properties
+  wire is_branch      = is_control && !op_r[2];         // BZ,BNZ,BLTZ,BGEZ (sub 0xx)
+  wire is_sign_branch = is_branch && op_r[1];           // BLTZ,BGEZ
+  wire is_jr_jalr     = is_control && op_r[2] && op_r[1]; // JR(110),JALR(111)
+  // Jump
+  wire is_jump_imm    = op_r[5:3] == 3'b010 && !op_r[2]; // J(16),JAL(17)
+  wire is_linking     = (is_jump_imm || is_jr_jalr) && op_r[0]; // JAL,JALR
   // Sub-opcode properties (named to avoid raw bit tests in behavioral code)
-  wire is_linking    = (is_jump_imm || is_jr_jalr) && op_r[0]; // JAL, JALR save return addr
   wire is_byte_store = is_store && op_r[0];     // SB (vs SW)
   wire op_unsigned   = op_r[1]; // Unsigned variant: SLTU/SLTIUF/LBU (vs SLT/SLTIF/LB)
   wire branch_inv    = op_r[0]; // Branch inversion: BNZ/BGEZ invert condition
@@ -286,7 +292,7 @@ module riscyv02_execute (
     jump            = 1'b0;
     shifter_din     = 15'b0;
 
-    // ALU operation select: groups 010/011 share sub-opcode semantics
+    // ALU operation select: groups 011/110 share sub-opcode semantics
     if (is_alu_rr || is_alu_imm_grp) begin
       if (is_slt || is_slt_imm)
         alu_op = 3'd1;                // SLT variants → SUB
@@ -310,7 +316,7 @@ module riscyv02_execute (
           w_we   = 1'b1;
         end else if (op_r == OP_EPCW) begin
         end else if (is_mem_addr) begin
-          // Address computation low byte (loads, stores, JR, JALR, AUIPC)
+          // Address computation low byte (loads, stores, AUIPC)
           alu_new_op = 1'b1;
           if (op_r == OP_AUIPC) begin
             alu_a  = pc[7:0];
@@ -318,16 +324,17 @@ module riscyv02_execute (
             w_data = alu_result;
             w_hi   = 1'b0;
             w_we   = 1'b1;
-          end else begin
-            if (is_jr_jalr)
-              alu_b = {off6_r[5], off6_r, 1'b0};     // offset * 2 (code alignment)
-            else
-              alu_b = {{2{off6_r[5]}}, off6_r};      // unscaled
-            if (is_linking) begin                      // JALR
-              w_data = pc[7:0];
-              w_hi   = 1'b0;
-              w_we   = 1'b1;
-            end
+          end else
+            alu_b = {{2{off6_r[5]}}, off6_r};        // unscaled byte offset
+        end else if (is_jr_jalr) begin
+          // JR/JALR address computation low byte
+          alu_a      = r;
+          alu_b      = {off6_r[5], off6_r, 1'b0};     // offset * 2 (code alignment)
+          alu_new_op = 1'b1;
+          if (is_linking) begin                        // JALR
+            w_data = pc[7:0];
+            w_hi   = 1'b0;
+            w_we   = 1'b1;
           end
         end else if (is_alu_rr) begin
           alu_b      = r2;
@@ -405,7 +412,7 @@ module riscyv02_execute (
 
       E_EXEC_HI: begin
         if (is_mem_addr) begin
-          // Address computation high byte (loads, stores, JR, JALR, AUIPC)
+          // Address computation high byte (loads, stores, AUIPC)
           alu_new_op = 1'b0;
           if (op_r == OP_AUIPC) begin
             alu_a           = pc[15:8];
@@ -414,18 +421,19 @@ module riscyv02_execute (
             w_hi            = 1'b1;
             w_we            = 1'b1;
             insn_completing = 1'b1;
-          end else begin
+          end else
             alu_b = {8{off6_r[5]}};  // sign extension
-            if (is_jr_jalr) begin
-              insn_completing = 1'b1;
-              jump    = 1'b1;
-              next_pc = {alu_result, tmp[7:0]};
-            end
-            if (is_linking) begin                          // JALR
-              w_data = pc[15:8];
-              w_hi   = 1'b1;
-              w_we   = 1'b1;
-            end
+        end else if (is_jr_jalr) begin
+          // JR/JALR address computation high byte
+          alu_b           = {8{off6_r[5]}};
+          alu_new_op      = 1'b0;
+          jump            = 1'b1;
+          next_pc         = {alu_result, tmp[7:0]};
+          insn_completing = 1'b1;
+          if (is_linking) begin                          // JALR
+            w_data = pc[15:8];
+            w_hi   = 1'b1;
+            w_we   = 1'b1;
           end
         end else begin
           // Execute high byte (ALU, shift, branch, jump, LI, LUI, EPC)
@@ -602,7 +610,7 @@ module riscyv02_execute (
             i_bit <= 1'b1;
             pc    <= 16'h000C;
           end
-          if (is_branch || is_jump_imm || is_mem_addr)
+          if (is_branch || is_jump_imm || is_mem_addr || is_jr_jalr)
             tmp[7:0] <= alu_result;
           if (is_branch) nz_lo_r <= |r;
           if (is_shift) tmp[7:0] <= r;
@@ -617,10 +625,12 @@ module riscyv02_execute (
           if (is_mem_addr) begin
             // Address high byte computed; set up for memory access or complete
             tmp[15:8] <= alu_result;
-            if (is_jr_jalr) pc <= next_pc;
             r_sel_r   <= rd_rs2_sel_r;
             r_hi_r    <= 1'b0;
-            state     <= (is_jr_jalr || op_r == OP_AUIPC) ? E_IDLE : E_MEM_LO;
+            state     <= (op_r == OP_AUIPC) ? E_IDLE : E_MEM_LO;
+          end else if (is_jr_jalr) begin
+            pc    <= next_pc;
+            state <= E_IDLE;
           end else begin
             if (op_r == OP_EPCW) epc[15:8] <= r;
             if (jump) pc <= next_pc;
@@ -658,78 +668,79 @@ module riscyv02_execute (
       // ---------------------------------------------------------------------
       if (ir_accept) begin
         pc <= pc + 16'd2;
-        // Decode opcode from fetch_ir bit patterns
-        if      (fetch_ir[15:12] == 4'b1010)        op_r <= OP_SW;
-        else if (fetch_ir[15:12] == 4'b1000)        op_r <= OP_LW;
-        else if (fetch_ir[15:9]  == 7'b1011100)     op_r <= OP_JR;
-        else if (fetch_ir[15:9]  == 7'b1011101)     op_r <= OP_JALR;
-        else if (fetch_ir == 16'b1111111010000001)  op_r <= OP_RETI;
-        else if (fetch_ir == 16'b1111111010000010)  op_r <= OP_SEI;
-        else if (fetch_ir == 16'b1111111010000011)  op_r <= OP_CLI;
-        else if (fetch_ir == 16'b1111111010000100)  op_r <= OP_BRK;
-        else if (fetch_ir == 16'b1111111010000101)  op_r <= OP_WAI;
-        else if (fetch_ir == 16'b1111111010000110)  op_r <= OP_STP;
-        else if (fetch_ir[15:3] == 13'b1111111001110)  op_r <= OP_EPCR;
-        else if (fetch_ir[15:3] == 13'b1111111001111)  op_r <= OP_EPCW;
-        else if (fetch_ir[15:12] == 4'b1100) begin
-          if (fetch_ir[11:9] == 3'b111)
-            op_r <= OP_SLL;                              // SLL in shift group
-          else
-            op_r <= {3'b010, fetch_ir[11:9]};            // ALU RR: direct mapping
+
+        // --- off6_r default (I-format): imm6 at [8:3] ---
+        off6_r[5:3] <= fetch_ir[8:6];
+        off6_r[2:0] <= fetch_ir[5:3];
+
+        // --- Decode opcode from fetch_ir bit patterns ---
+        // Wide-payload formats (ISA prefixes all unchanged)
+        if      (fetch_ir[15:13] == 3'b000)      op_r <= OP_LUI;
+        else if (fetch_ir[15:13] == 3'b001)      op_r <= OP_AUIPC;
+        else if (fetch_ir[15:12] == 4'b0100)     op_r <= OP_J;
+        else if (fetch_ir[15:12] == 4'b0101)     op_r <= OP_JAL;
+        else if (fetch_ir[15:12] == 4'b0110) begin
+          op_r <= OP_LB;
+          off6_r[2:0] <= fetch_ir[11:9];  // S-format override
         end
-        else if (fetch_ir[15:10] == 6'b110100)
-          op_r <= {3'b100, 2'b01, fetch_ir[9]};          // SRL/SRA
-        else if (fetch_ir[15:7] == 9'b111101100)       op_r <= OP_SLLI;
-        else if (fetch_ir[15:7] == 9'b111101101)       op_r <= OP_SRLI;
-        else if (fetch_ir[15:7] == 9'b111101110)       op_r <= OP_SRAI;
-        else if (fetch_ir[15:9] == 7'b1101110)         op_r <= OP_ADDI;
-        else if (fetch_ir[15:9] == 7'b1101111)         op_r <= OP_ANDI;
-        else if (fetch_ir[15:9] == 7'b1110000)         op_r <= OP_ORI;
-        else if (fetch_ir[15:9] == 7'b1110001)         op_r <= OP_XORI;
-        else if (fetch_ir[15:9] == 7'b1110010)         op_r <= OP_LI;
-        else if (fetch_ir[15:9] == 7'b1110011)         op_r <= OP_SLTIF;
-        else if (fetch_ir[15:9] == 7'b1110100)         op_r <= OP_SLTIUF;
-        else if (fetch_ir[15:9] == 7'b1110101)         op_r <= OP_XORIF;
-        else if (fetch_ir[15:9] == 7'b1011000)        op_r <= OP_BZ;
-        else if (fetch_ir[15:9] == 7'b1011001)        op_r <= OP_BNZ;
-        else if (fetch_ir[15:9] == 7'b1011010)        op_r <= OP_BLTZ;
-        else if (fetch_ir[15:9] == 7'b1011011)        op_r <= OP_BGEZ;
-        else if (fetch_ir[15:12] == 4'b0100)          op_r <= OP_J;
-        else if (fetch_ir[15:12] == 4'b0101)          op_r <= OP_JAL;
-        else if (fetch_ir[15:13] == 3'b000)           op_r <= OP_LUI;
-        else if (fetch_ir[15:13] == 3'b001)           op_r <= OP_AUIPC;
-        else if (fetch_ir[15:12] == 4'b0110)        op_r <= OP_LB;
-        else if (fetch_ir[15:12] == 4'b0111)        op_r <= OP_LBU;
-        else if (fetch_ir[15:12] == 4'b1001)        op_r <= OP_SB;
-        else                                        op_r <= OP_NOP;
-        // LUI/AUIPC capture imm10[9:6]; JR/JALR uses rs; others use rs1
+        else if (fetch_ir[15:12] == 4'b0111) begin
+          op_r <= OP_LBU;
+          off6_r[2:0] <= fetch_ir[11:9];  // S-format override
+        end
+        else if (fetch_ir[15:12] == 4'b1000) begin
+          op_r <= OP_LW;
+          off6_r[2:0] <= fetch_ir[11:9];  // S-format override
+        end
+        else if (fetch_ir[15:12] == 4'b1001) begin
+          op_r <= OP_SB;
+          off6_r[2:0] <= fetch_ir[11:9];  // S-format override
+        end
+        else if (fetch_ir[15:12] == 4'b1010) begin
+          op_r <= OP_SW;
+          off6_r[2:0] <= fetch_ir[11:9];  // S-format override
+        end
+        // ISA group 111: EPCR → group 010, rest → group 000
+        else if (fetch_ir[14:12] == 3'b111) begin
+          if (fetch_ir[11:9] == 3'b110)
+            op_r <= OP_EPCR;                    // → group 010
+          else
+            op_r <= {3'b000, fetch_ir[11:9]};   // System → group 000
+        end
+        // EPCW explicit remap (1 comparator)
+        else if (fetch_ir[14:9] == 6'b101_101)
+          op_r <= OP_EPCW;
+        // Direct mapping (groups 011-110, everything else with bit 15=1)
+        else if (fetch_ir[15])
+          op_r <= fetch_ir[14:9];
+        else
+          op_r <= OP_NOP;
+
+        // --- base_sel_r: LUI/AUIPC capture imm10[9:6]; J/JAL capture off12[11:9] ---
         if (fetch_ir[15:14] == 2'b00)
-          base_sel_r <= fetch_ir[12:9];
-        else if (fetch_ir[15:9] == 7'b1011100 || fetch_ir[15:9] == 7'b1011101)
-          base_sel_r <= {1'b0, fetch_ir[2:0]};
+          base_sel_r <= fetch_ir[12:9];          // imm10[9:6] for LUI/AUIPC
+        else if (fetch_ir[15:14] == 2'b01)
+          base_sel_r <= {1'b0, fetch_ir[11:9]};  // off12[11:9] for J/JAL
         else
-          base_sel_r <= {1'b0, fetch_ir[11:9]};
-        off6_r       <= fetch_ir[8:3];
+          base_sel_r <= {1'b0, fetch_ir[5:3]};   // don't-care for others
+
         rd_rs2_sel_r <= fetch_ir[2:0];
-        // Pre-register regfile read select for first cycle of execution
-        if (fetch_ir[15:12] == 4'b1100 ||
-            fetch_ir[15:9] == 7'b1101000 ||
-            fetch_ir[15:9] == 7'b1101001)
-          r_sel_r <= fetch_ir[5:3];          // ALU/shift rs1
-        else if (fetch_ir[15:12] == 4'b0110 ||    // LB
-                 fetch_ir[15:12] == 4'b0111 ||    // LBU
-                 fetch_ir[15:12] == 4'b1000 ||    // LW
-                 fetch_ir[15:12] == 4'b1001 ||    // SB
-                 fetch_ir[15:12] == 4'b1010)      // SW
-          r_sel_r <= fetch_ir[11:9];         // rs1 (base register)
+
+        // --- r_sel_r: I-format uses [2:0], R-format/S-format use [5:3] ---
+        // Compact instructions: fetch_ir[15:12] >= 1011 (direct-mapped region).
+        // I-format: grp != 011 AND NOT (grp == 100 with sub[2]=0)
+        // R-format: ALU-RR (grp 011), shift-RR (grp 100, sub[2]=0)
+        // Everything else defaults to [5:3] (S-format, U-format, J-format)
+        if (fetch_ir[15:12] >= 4'b1011 &&
+            fetch_ir[14:12] != 3'b011 &&
+            !(fetch_ir[14:12] == 3'b100 && !fetch_ir[11]))
+          r_sel_r <= fetch_ir[2:0];   // I-format override
         else
-          r_sel_r <= fetch_ir[2:0];          // rd/rs2/rs
-        // Right shifts read hi byte first; everything else starts with lo.
-        r_hi_r <= (fetch_ir[15:9] == 7'b1101000 ||    // SRL
-                   fetch_ir[15:9] == 7'b1101001 ||    // SRA
-                   fetch_ir[15:7] == 9'b111101101 ||  // SRLI
-                   fetch_ir[15:7] == 9'b111101110)    // SRAI
+          r_sel_r <= fetch_ir[5:3];   // default: R-format, S-format, wide
+
+        // --- r_hi_r: right shifts read hi byte first ---
+        r_hi_r <= (fetch_ir[15] && fetch_ir[14:12] == 3'b100 && fetch_ir[10])
                   ? 1'b1 : 1'b0;
+
         // All instructions start in E_EXEC_LO
         state <= E_EXEC_LO;
       end
