@@ -3928,6 +3928,24 @@ def _encode_bnz(rs, off6):
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
+def _encode_bltz(rs, off6):
+    """Encode BLTZ rs, off6 -> 16-bit little-endian bytes. [1011010][off6:6][rs:3]"""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
+    assert 0 <= rs <= 7
+    off6 &= 0x3F
+    insn = (0b1011010 << 9) | (off6 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_bgez(rs, off6):
+    """Encode BGEZ rs, off6 -> 16-bit little-endian bytes. [1011011][off6:6][rs:3]"""
+    assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
+    assert 0 <= rs <= 7
+    off6 &= 0x3F
+    insn = (0b1011011 << 9) | (off6 << 3) | rs
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
 # ---------------------------------------------------------------------------
 # Test: LUI positive
 # ---------------------------------------------------------------------------
@@ -4182,6 +4200,211 @@ async def test_bnz_high_byte(dut):
     dut._log.info(f"BNZ high byte result = {val:#06x} (expected 0x001F)")
     assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
     dut._log.info("PASS [bnz_high_byte]")
+
+
+# ---------------------------------------------------------------------------
+# Test: BLTZ taken (negative value)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_bltz_taken(dut):
+    """BLTZ on -1 (0xFFFF) -> taken (sign bit set)."""
+    dut._log.info("Test: BLTZ taken")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Load -1 into R1
+    _place(prog, 0x0000, _encode_li(rd=1, imm6=-1))
+    # BLTZ R1, +2 -> branch to 0x0004+2*2 = 0x0008
+    _place(prog, 0x0002, _encode_bltz(rs=1, off6=2))
+    # 0x0004: LI R2, 1 (poison - should be skipped)
+    _place(prog, 0x0004, _encode_li(rd=2, imm6=1))
+    # 0x0006: NOP
+    _place(prog, 0x0006, _encode_li(rd=3, imm6=0))
+    # 0x0008: LI R2, 31 (marker: branch taken)
+    _place(prog, 0x0008, _encode_li(rd=2, imm6=31))
+    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"BLTZ taken result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [bltz_taken]")
+
+
+# ---------------------------------------------------------------------------
+# Test: BLTZ not taken (positive value)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_bltz_not_taken_positive(dut):
+    """BLTZ on +1 -> not taken (sign bit clear)."""
+    dut._log.info("Test: BLTZ not taken positive")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    _place(prog, 0x0000, _encode_li(rd=1, imm6=1))
+    # BLTZ R1, +3 -> should NOT branch since R1 > 0
+    _place(prog, 0x0002, _encode_bltz(rs=1, off6=3))
+    # If not taken, execute this: LI R2, 7 (marker)
+    _place(prog, 0x0004, _encode_li(rd=2, imm6=7))
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"BLTZ not taken result = {val:#06x} (expected 0x0007)")
+    assert val == 0x0007, f"Expected 0x0007, got {val:#06x}"
+    dut._log.info("PASS [bltz_not_taken_positive]")
+
+
+# ---------------------------------------------------------------------------
+# Test: BLTZ not taken (zero)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_bltz_not_taken_zero(dut):
+    """BLTZ on 0 -> not taken (0 is not < 0)."""
+    dut._log.info("Test: BLTZ not taken zero")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # R0 is zero after reset
+    # BLTZ R0, +3 -> should NOT branch since R0 == 0
+    _place(prog, 0x0000, _encode_bltz(rs=0, off6=3))
+    # If not taken: LI R1, 7 (marker)
+    _place(prog, 0x0002, _encode_li(rd=1, imm6=7))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"BLTZ not taken zero result = {val:#06x} (expected 0x0007)")
+    assert val == 0x0007, f"Expected 0x0007, got {val:#06x}"
+    dut._log.info("PASS [bltz_not_taken_zero]")
+
+
+# ---------------------------------------------------------------------------
+# Test: BGEZ taken (positive value)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_bgez_taken_positive(dut):
+    """BGEZ on +1 -> taken (sign bit clear)."""
+    dut._log.info("Test: BGEZ taken positive")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    _place(prog, 0x0000, _encode_li(rd=1, imm6=1))
+    # BGEZ R1, +2 -> branch to 0x0004+2*2 = 0x0008
+    _place(prog, 0x0002, _encode_bgez(rs=1, off6=2))
+    # 0x0004: LI R2, 1 (poison - should be skipped)
+    _place(prog, 0x0004, _encode_li(rd=2, imm6=1))
+    # 0x0006: NOP
+    _place(prog, 0x0006, _encode_li(rd=3, imm6=0))
+    # 0x0008: LI R2, 31 (marker: branch taken)
+    _place(prog, 0x0008, _encode_li(rd=2, imm6=31))
+    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"BGEZ taken positive result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [bgez_taken_positive]")
+
+
+# ---------------------------------------------------------------------------
+# Test: BGEZ taken (zero)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_bgez_taken_zero(dut):
+    """BGEZ on 0 -> taken (0 >= 0)."""
+    dut._log.info("Test: BGEZ taken zero")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # R0 is zero after reset
+    # BGEZ R0, +2 -> branch to 0x0002+2*2 = 0x0006
+    _place(prog, 0x0000, _encode_bgez(rs=0, off6=2))
+    # 0x0002: LI R1, 1 (poison - should be skipped)
+    _place(prog, 0x0002, _encode_li(rd=1, imm6=1))
+    # 0x0004: NOP
+    _place(prog, 0x0004, _encode_li(rd=3, imm6=0))
+    # 0x0006: LI R1, 31 (marker: branch taken)
+    _place(prog, 0x0006, _encode_li(rd=1, imm6=31))
+    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"BGEZ taken zero result = {val:#06x} (expected 0x001F)")
+    assert val == 0x001F, f"Expected 0x001F, got {val:#06x}"
+    dut._log.info("PASS [bgez_taken_zero]")
+
+
+# ---------------------------------------------------------------------------
+# Test: BGEZ not taken (negative value)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_bgez_not_taken(dut):
+    """BGEZ on -1 (0xFFFF) -> not taken (sign bit set)."""
+    dut._log.info("Test: BGEZ not taken")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    _place(prog, 0x0000, _encode_li(rd=1, imm6=-1))
+    # BGEZ R1, +3 -> should NOT branch since R1 < 0
+    _place(prog, 0x0002, _encode_bgez(rs=1, off6=3))
+    # If not taken: LI R2, 7 (marker)
+    _place(prog, 0x0004, _encode_li(rd=2, imm6=7))
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=20))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"BGEZ not taken result = {val:#06x} (expected 0x0007)")
+    assert val == 0x0007, f"Expected 0x0007, got {val:#06x}"
+    dut._log.info("PASS [bgez_not_taken]")
 
 
 # ===========================================================================

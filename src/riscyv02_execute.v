@@ -8,7 +8,7 @@
 // ============================================================================
 // Execute unit: FSM + ALU + register file.
 //
-// Handles LW, SW, LB, LBU, SB, JR, JALR, J, JAL, AUIPC, LUI, LI, BZ, BNZ,
+// Handles LW, SW, LB, LBU, SB, JR, JALR, J, JAL, AUIPC, LUI, LI, BZ, BNZ, BLTZ, BGEZ,
 // RETI, SEI, CLI, BRK, EPCR, EPCW, ADD, SUB, AND, OR, XOR, SLT, SLTU,
 // SLL, SRL, SRA, ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF,
 // SLLI, SRLI, SRAI
@@ -110,12 +110,15 @@ module riscyv02_execute (
   // Group 101 — Control flow & misc two-cycle ([0] distinguishes pairs)
   localparam OP_BZ     = 6'b101_000;  // 40
   localparam OP_BNZ    = 6'b101_001;  // 41
-  localparam OP_J      = 6'b101_010;  // 42
-  localparam OP_JAL    = 6'b101_011;  // 43
+  localparam OP_BLTZ   = 6'b101_010;  // 42
+  localparam OP_BGEZ   = 6'b101_011;  // 43
   localparam OP_LI     = 6'b101_100;  // 44
   localparam OP_LUI    = 6'b101_101;  // 45
   localparam OP_EPCR   = 6'b101_110;  // 46
   localparam OP_EPCW   = 6'b101_111;  // 47
+  // Group 110 — Unconditional jumps
+  localparam OP_J      = 6'b110_000;  // 48
+  localparam OP_JAL    = 6'b110_001;  // 49
 
   localparam LINK_REG = 3'd6;  // R6 is the link register for JAL/JALR
   localparam T0_REG   = 3'd2;  // R2 is t0 for fixed-destination IF-type ops
@@ -224,13 +227,14 @@ module riscyv02_execute (
   wire is_right_shift = is_shift && op_r[1];
   wire is_arith_shift = is_shift && op_r[0];
   // Control flow
-  wire is_branch   = op_r[5:1] == 5'b10100;   // BZ, BNZ
-  wire is_jump_imm = op_r[5:1] == 5'b10101;   // J, JAL
+  wire is_branch      = op_r[5:2] == 4'b1010;     // BZ, BNZ, BLTZ, BGEZ
+  wire is_sign_branch = is_branch && op_r[1];      // BLTZ, BGEZ (sign-bit test)
+  wire is_jump_imm    = op_r[5:3] == 3'b110;       // J, JAL (group 110)
   // Sub-opcode properties (named to avoid raw bit tests in behavioral code)
   wire is_linking    = (is_jump_imm || is_jr_jalr) && op_r[0]; // JAL, JALR save return addr
   wire is_byte_store = is_store && op_r[0];     // SB (vs SW)
   wire op_unsigned   = op_r[1]; // Unsigned variant: SLTU/SLTIUF/LBU (vs SLT/SLTIF/LB)
-  wire branch_nz     = op_r[0]; // Within is_branch: BNZ(1) vs BZ(0) condition
+  wire branch_inv    = op_r[0]; // Branch inversion: BNZ/BGEZ invert condition
   wire is_two_cycle  = |op_r[5:3]; // Non-system group → needs E_EXEC_HI
   reg  nz_lo_r;  // Latched |rs_lo| for branch zero check
 
@@ -498,11 +502,7 @@ module riscyv02_execute (
             alu_a      = pc[15:8];
             alu_b      = {8{off6_r[5]}};
             alu_new_op = 1'b0;
-            if (!branch_nz && !nz_lo_r && r == 8'h00) begin  // BZ
-              jump    = 1'b1;
-              next_pc = {alu_result, tmp[7:0]};
-            end
-            if (branch_nz && (nz_lo_r || r != 8'h00)) begin  // BNZ
+            if ((is_sign_branch ? r[7] : !nz_lo_r && r == 8'h00) ^ branch_inv) begin
               jump    = 1'b1;
               next_pc = {alu_result, tmp[7:0]};
             end
@@ -692,6 +692,8 @@ module riscyv02_execute (
         else if (fetch_ir[15:9] == 7'b1110101)         op_r <= OP_XORIF;
         else if (fetch_ir[15:9] == 7'b1011000)        op_r <= OP_BZ;
         else if (fetch_ir[15:9] == 7'b1011001)        op_r <= OP_BNZ;
+        else if (fetch_ir[15:9] == 7'b1011010)        op_r <= OP_BLTZ;
+        else if (fetch_ir[15:9] == 7'b1011011)        op_r <= OP_BGEZ;
         else if (fetch_ir[15:12] == 4'b0100)          op_r <= OP_J;
         else if (fetch_ir[15:12] == 4'b0101)          op_r <= OP_JAL;
         else if (fetch_ir[15:13] == 3'b000)           op_r <= OP_LUI;

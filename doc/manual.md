@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTIF**, **SLTIUF**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **SEI**, **CLI**, **BRK**, **WAI**, **STP**, **EPCR**, and **EPCW**. IRQ and NMI interrupt handling is supported. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **BLTZ**, **BGEZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTIF**, **SLTIUF**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **SEI**, **CLI**, **BRK**, **WAI**, **STP**, **EPCR**, and **EPCW**. IRQ and NMI interrupt handling is supported. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -12,12 +12,12 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 
 | Metric | RISCY-V02 | Arlet 6502 |
 |---|---|---|
-| Clock period | 16 ns | 16 ns |
-| fMax (slow corner) | 62.5 MHz | 62.5 MHz |
-| Utilization | 60.7% | 48.4% |
-| Transistor count (synth) | 16,712 | 13,082 |
+| Clock period | 17 ns | 16 ns |
+| fMax (slow corner) | 58.8 MHz | 62.5 MHz |
+| Utilization | 62.0% | 48.4% |
+| Transistor count (synth) | 16,870 | 13,082 |
 
-RISCY-V02 now supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. The total is ~28% above the 6502 (~3.7% SRAM-adjusted), matching its 62.5 MHz clock, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 now supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. The total is ~29% above the 6502 (~4.9% SRAM-adjusted) at 58.8 MHz, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -211,6 +211,30 @@ Branches to a PC-relative target if the source register is zero. The 6-bit signe
 `if rs != 0: PC = PC + sext(off6) * 2`
 
 Branches to a PC-relative target if the source register is non-zero. Encoding and offset handling are identical to BZ. Pairs with SLT/SLTU for compare-and-branch patterns: `SLT t, a, b; BNZ t, target` (branch if less than).
+
+**Cycle count:** 2 (not taken, overlapped fetch) / 4 (taken: 2 execute + 2 fetch after redirect)
+
+### BLTZ — Branch if Less Than Zero
+
+```
+[1011010][off6:6][rs:3]
+```
+
+`if rs < 0: PC = PC + sext(off6) * 2`
+
+Branches to a PC-relative target if the source register is negative (sign bit set). The 6-bit signed offset is scaled by 2, giving a range of ±64 bytes from the next instruction address. Tests only the sign bit (rs[15]), so the branch decision is faster than a full zero check. Useful for loop termination on signed counters and sign-dependent control flow.
+
+**Cycle count:** 2 (not taken, overlapped fetch) / 4 (taken: 2 execute + 2 fetch after redirect)
+
+### BGEZ — Branch if Greater or Equal to Zero
+
+```
+[1011011][off6:6][rs:3]
+```
+
+`if rs >= 0: PC = PC + sext(off6) * 2`
+
+Branches to a PC-relative target if the source register is non-negative (sign bit clear). Encoding and offset handling are identical to BLTZ. Zero is considered non-negative (sign bit = 0), so BGEZ branches on both zero and positive values.
 
 **Cycle count:** 2 (not taken, overlapped fetch) / 4 (taken: 2 execute + 2 fetch after redirect)
 
@@ -652,6 +676,8 @@ Bits 15..9   Instruction   Format
 ──────────────────────────────────────────────
 1011000      BZ            [off6:6][rs:3]
 1011001      BNZ           [off6:6][rs:3]
+1011010      BLTZ          [off6:6][rs:3]
+1011011      BGEZ          [off6:6][rs:3]
 1011100      JR            [off6:6][rs:3]
 1011101      JALR          [off6:6][rs:3]
 1100000      ADD           [rs2:3][rs1:3][rd:3]
@@ -707,8 +733,8 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | Instruction | Cycles | Notes |
 |---|---|---|
 | NOP/SEI/CLI/AUIPC/LUI/LI/EPCR/EPCW/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTIF/SLTIUF/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
-| BZ/BNZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
-| BZ/BNZ (taken) | 4 | 2 execute + 2 fetch after redirect |
+| BZ/BNZ/BLTZ/BGEZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
+| BZ/BNZ/BLTZ/BGEZ (taken) | 4 | 2 execute + 2 fetch after redirect |
 | LB/LBU | 4 | 2 address + 1 byte read + 1 extension |
 | SB | 3 | 2 address + 1 byte written (overlapped fetch) |
 | LW/SW | 4 | 4 execute (address computation overlaps with fetch) |
