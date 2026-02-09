@@ -14,10 +14,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 17 ns | 16 ns |
 | fMax (slow corner) | 58.8 MHz | 62.5 MHz |
-| Utilization | 62.0% | 48.4% |
-| Transistor count (synth) | 16,870 | 13,082 |
+| Utilization | 59.6% | 48.4% |
+| Transistor count (synth) | 16,282 | 13,082 |
+| SRAM-adjusted | 13,132 | 13,082 |
 
-RISCY-V02 now supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. The total is ~29% above the 6502 (~4.9% SRAM-adjusted) at 58.8 MHz, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. The SRAM-adjusted total is within 0.4% of the 6502 at 58.8 MHz, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -116,7 +117,16 @@ R6 serves as the link register. JAL and JALR write the return address (PC+2) to 
 
 ## Instruction Set
 
-All instructions are 16 bits. Opcodes occupy the upper bits and determine the interpretation of all remaining bits.
+All instructions are 16 bits. Bits [15:12] form the **opcode**, which determines the instruction format:
+
+| Opcode | Format | Field layout | Instructions |
+|---|---|---|---|
+| 0000..0011 | **U** | `[prefix:3][imm10:10][rd:3]` | LUI, AUIPC |
+| 0100..0101 | **J** | `[prefix:4][off12:12]` | J, JAL |
+| 0110..1010 | **S** | `[prefix:4][off6[2:0]:3][off6[5:3]:3][rs1:3][rd/rs2:3]` | LB, LBU, LW, SB, SW |
+| 1011..1111 | **C** | `[1][grp:3][sub:3][payload:6][rd:3]` | All others |
+
+U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. All other formats use the full 4-bit opcode. Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction. S-format scrambles the immediate so rs1 stays at [5:3] across all formats.
 
 ### LW — Load Word
 
@@ -656,76 +666,82 @@ Any instruction not matching the above is executed as a NOP: the PC advances pas
 
 ## Instruction Encoding Reference
 
-### Instruction Formats
+### Opcode and Formats
+
+Bits [15:12] form the **opcode** and determine the instruction format. Four formats exist:
 
 ```
-R-format: [1][grp:3][sub:3][rs2:3][rs1:3][rd:3]         ALU RR, shifts (reg-reg)
-I-format: [1][grp:3][sub:3][imm6:6][rd:3]                ALU imm, branches, LI, JR, JALR, EPCW
-S-format: [prefix:4][off6[2:0]:3][off6[5:3]:3][rs1:3][rd/rs2:3]  loads, stores
-U-format: [prefix:3][imm10:10][rd:3]                     LUI, AUIPC
-J-format: [prefix:4][off12:12]                            J, JAL
+Format  Opcode range   Layout                                           Instructions
+U       0000..0011     [prefix:3][imm10:10][rd:3]                       LUI, AUIPC
+J       0100..0101     [prefix:4][off12:12]                             J, JAL
+S       0110..1010     [prefix:4][off6[2:0]:3][off6[5:3]:3][rs1:3][rd/rs2:3]   loads, stores
+C       1011..1111     [1][grp:3][sub:3][payload:6][rd:3]               all others
 ```
 
-S-format uses RISC-V-style immediate scrambling: off6 is split so rs1 stays at [5:3].
+U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. S-format scrambles the immediate so rs1 stays at [5:3] across all formats.
+
+Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction. The 6-bit payload is rs2+rs1 for R-type operations or imm6 for I-type operations. The hardware reads `op_r = {grp, sub}` directly from the instruction word.
 
 ### Encoding Table
 
 ```
-─── Wide payload (S/U/J formats, individually dispatched) ───
-Bits 15..13  Instruction   Format
-000          LUI           [imm10:10][rd:3]
-001          AUIPC         [imm10:10][rd:3]
+─── U-format (opcode 0000..0011): upper immediate ───
+Opcode  Instruction   Payload
+000     LUI           [imm10:10][rd:3]
+001     AUIPC         [imm10:10][rd:3]
 
-Bits 15..12  Instruction   Format
-0100         J             [off12:12]
-0101         JAL           [off12:12]
-0110         LB            [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
-0111         LBU           [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
-1000         LW            [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
-1001         SB            [off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
-1010         SW            [off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
+─── J-format (opcode 0100..0101): PC-relative jump ───
+Opcode  Instruction   Payload
+0100    J             [off12:12]
+0101    JAL           [off12:12]
 
-─── Direct-mapped: op_r = fetch_ir[14:9] ───
-Bits 15..9   Instruction   Format
-1011000      ADD           [rs2:3][rs1:3][rd:3]
-1011001      SUB           [rs2:3][rs1:3][rd:3]
-1011010      AND           [rs2:3][rs1:3][rd:3]
-1011011      OR            [rs2:3][rs1:3][rd:3]
-1011100      XOR           [rs2:3][rs1:3][rd:3]
-1011101      SLT           [rs2:3][rs1:3][rd:3]
-1011110      SLTU          [rs2:3][rs1:3][rd:3]
-1100000      SLL           [rs2:3][rs1:3][rd:3]
-1100010      SRL           [rs2:3][rs1:3][rd:3]
-1100011      SRA           [rs2:3][rs1:3][rd:3]
-1100100      SLLI          [00][imm4:4][rd:3]
-1100110      SRLI          [00][imm4:4][rd:3]
-1100111      SRAI          [00][imm4:4][rd:3]
-1101000      BZ            [off6:6][rs:3]
-1101001      BNZ           [off6:6][rs:3]
-1101010      BLTZ          [off6:6][rs:3]
-1101011      BGEZ          [off6:6][rs:3]
-1101100      LI            [imm6:6][rd:3]
-1101101      EPCW          [000000][rs:3]
-1101110      JR            [off6:6][rs:3]
-1101111      JALR          [off6:6][rs:3]
-1110000      ADDI          [imm6:6][rd:3]
-1110010      ANDI          [imm6:6][rd:3]
-1110011      ORI           [imm6:6][rd:3]
-1110100      XORI          [imm6:6][rd:3]
-1110101      SLTIF         [imm6:6][rs:3]
-1110110      SLTIUF        [imm6:6][rs:3]
-1110111      XORIF         [imm6:6][rs:3]
+─── S-format (opcode 0110..1010): load/store ───
+Opcode  Instruction   Payload
+0110    LB            [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+0111    LBU           [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+1000    LW            [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+1001    SB            [off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
+1010    SW            [off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
 
-─── ISA group 111 (system + EPCR, remapped at dispatch) ───
-1111001      SEI           [000000000]
-1111010      CLI           [000000000]
-1111011      RETI          [000000000]
-1111100      BRK           [000000000]
-1111101      WAI           [000000000]
-1111110      EPCR          [000000][rd:3]
-1111111      STP           [000000000]
+─── C-format (opcode 1011..1111): compact ───
+Opcode  grp  sub  Instruction   Payload
+1011    011  000  ADD           [rs2:3][rs1:3][rd:3]
+1011    011  001  SUB           [rs2:3][rs1:3][rd:3]
+1011    011  010  AND           [rs2:3][rs1:3][rd:3]
+1011    011  011  OR            [rs2:3][rs1:3][rd:3]
+1011    011  100  XOR           [rs2:3][rs1:3][rd:3]
+1011    011  101  SLT           [rs2:3][rs1:3][rd:3]
+1011    011  110  SLTU          [rs2:3][rs1:3][rd:3]
+1100    100  000  SLL           [rs2:3][rs1:3][rd:3]
+1100    100  010  SRL           [rs2:3][rs1:3][rd:3]
+1100    100  011  SRA           [rs2:3][rs1:3][rd:3]
+1100    100  100  SLLI          [00][imm4:4][rd:3]
+1100    100  110  SRLI          [00][imm4:4][rd:3]
+1100    100  111  SRAI          [00][imm4:4][rd:3]
+1101    101  000  BZ            [off6:6][rs:3]
+1101    101  001  BNZ           [off6:6][rs:3]
+1101    101  010  BLTZ          [off6:6][rs:3]
+1101    101  011  BGEZ          [off6:6][rs:3]
+1101    101  100  LI            [imm6:6][rd:3]
+1101    101  101  EPCW          [000000][rs:3]
+1101    101  110  JR            [off6:6][rs:3]
+1101    101  111  JALR          [off6:6][rs:3]
+1110    110  000  ADDI          [imm6:6][rd:3]
+1110    110  010  ANDI          [imm6:6][rd:3]
+1110    110  011  ORI           [imm6:6][rd:3]
+1110    110  100  XORI          [imm6:6][rd:3]
+1110    110  101  SLTIF         [imm6:6][rs:3]
+1110    110  110  SLTIUF        [imm6:6][rs:3]
+1110    110  111  XORIF         [imm6:6][rs:3]
+1111    111  001  SEI           [000000000]
+1111    111  010  CLI           [000000000]
+1111    111  011  RETI          [000000000]
+1111    111  100  BRK           [000000000]
+1111    111  101  WAI           [000000000]
+1111    111  110  EPCR          [000000][rd:3]
+1111    111  111  STP           [000000000]
 
-All other    NOP           (ignored)
+All other encodings execute as NOP (2-cycle no-op).
 ```
 
 ## Pipeline and Timing
