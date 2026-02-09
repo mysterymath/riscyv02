@@ -121,7 +121,7 @@ def main():
     # See doc/sram_analysis.md for full design and justification.
     REGFILE_STDCELL_TX = 4674   # exact, from standalone synthesis
     REGFILE_SRAM_TX    = 1524   # 8T SRAM design (128x8T + peripherals)
-    ARLET_6502_TX      = 13082  # comparison baseline
+    ARLET_6502_TX      = 12198  # comparison baseline (decode consolidation)
 
     discount = REGFILE_STDCELL_TX - REGFILE_SRAM_TX
     adjusted_tx = total_tx - discount
