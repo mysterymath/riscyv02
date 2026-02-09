@@ -19,14 +19,15 @@
 // ISA encoding — fixed register positions
 // -----------------------------------------
 // Registers always at fixed bit positions: rd=[2:0], rs1=[5:3], rs2=[8:6].
-// Bits [15:12] form the "opcode" and determine the instruction format:
+// Bits [15:12] form the "opcode" and determine the instruction format.
+// Sign bit at inst[8] for I and C formats; at inst[11-12] for U, J, S.
 //
 //   Opcode       Format   Registers            Immediate
 //   0000..0011   U        rd=[2:0]             imm10=[12:3]
 //   0100..0101   J        —                    imm12=[11:0]
-//   0110..1000   I        rd=[2:0], rs1=[5:3]  imm6=[11:6]     (loads)
-//   1001..1010   S        rs1=[5:3], rs2=[8:6] imm6=[11:9,2:0] (stores)
-//   1011..1111   C        (see below)          (see below)
+//   0110..1000   I        rd=[2:0], rs1=[5:3]  imm6: [11:9]=[2:0], [8:6]=[5:3] (loads, sign@[8])
+//   1001..1010   S        rs1=[5:3], rs2=[8:6] imm6=[11:9,2:0] (stores, sign@[11])
+//   1011..1111   C        (see below)          (see below, sign@[8])
 //
 // C-format sub-types (bits [14:12]=group, [11:9]=sub, op_r={group,sub}):
 //   R-type:  rd=[2:0], rs1=[5:3], rs2=[8:6]  (ALU-RR, shift-RR)
@@ -686,7 +687,7 @@ module riscyv02_execute (
       // Format determines immediate extraction:
       //   U (0000..0011)  — imm10 at [12:3]
       //   J (0100..0101)  — imm12 at [11:0]
-      //   I (0110..1000)  — imm6 contiguous at [11:6] (loads)
+      //   I (0110..1000)  — imm6: [11:9]=imm[2:0], [8:6]=imm[5:3] (loads, sign@[8])
       //   S (1001..1010)  — imm6 split [11:9]/[2:0], rs2 at [8:6] (stores)
       //   C (1011..1111)  — op_r = {group, sub} direct from [14:9]
       // ---------------------------------------------------------------------
@@ -717,21 +718,18 @@ module riscyv02_execute (
           op_r <= OP_JAL;
           imm6_r[2:0] <= fetch_ir[5:3];
         end
-        // I-format loads: imm6 contiguous at [11:6], rs1 at [5:3], rd at [2:0]
+        // I-format loads: imm6 scrambled [11:9]=[2:0], [8:6]=[5:3], rs1 at [5:3], rd at [2:0]
         else if (opcode == 4'b0110) begin
           op_r <= OP_LB;
-          imm6_r[5:3] <= fetch_ir[11:9];
-          imm6_r[2:0] <= fetch_ir[8:6];
+          imm6_r[2:0] <= fetch_ir[11:9];
         end
         else if (opcode == 4'b0111) begin
           op_r <= OP_LBU;
-          imm6_r[5:3] <= fetch_ir[11:9];
-          imm6_r[2:0] <= fetch_ir[8:6];
+          imm6_r[2:0] <= fetch_ir[11:9];
         end
         else if (opcode == 4'b1000) begin
           op_r <= OP_LW;
-          imm6_r[5:3] <= fetch_ir[11:9];
-          imm6_r[2:0] <= fetch_ir[8:6];
+          imm6_r[2:0] <= fetch_ir[11:9];
         end
         // S-format stores: imm6 split [11:9]/[2:0], rs2 at [8:6]
         else if (opcode == 4'b1001) begin

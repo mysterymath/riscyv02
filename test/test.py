@@ -28,8 +28,10 @@ def _read_ram(dut, addr):
 
 
 def _encode_i_format(prefix, imm6, rs1, rd):
-    """Encode I-format load: [prefix:4][imm6:6][rs1:3][rd:3]."""
-    insn = (prefix << 12) | (imm6 << 6) | (rs1 << 3) | rd
+    """Encode I-format load: [prefix:4][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]. Sign at inst[8]."""
+    imm6_lo = imm6 & 0x7         # imm6[2:0]
+    imm6_hi = (imm6 >> 3) & 0x7  # imm6[5:3]
+    insn = (prefix << 12) | (imm6_lo << 9) | (imm6_hi << 6) | (rs1 << 3) | rd
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
@@ -2989,7 +2991,7 @@ async def test_cycle_count_sb(dut):
 
 
 def _encode_auipc(rd, imm10):
-    """Encode AUIPC rd, imm10 -> 16-bit little-endian bytes."""
+    """Encode AUIPC rd, imm10 -> 16-bit little-endian bytes. [001][imm10:10][rd:3]"""
     assert -512 <= imm10 <= 511, f"imm10 out of range: {imm10}"
     assert 0 <= rd <= 7
     imm10 &= 0x3FF

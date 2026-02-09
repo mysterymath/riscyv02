@@ -14,11 +14,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 16 ns | 16 ns |
 | fMax (slow corner) | 62.5 MHz | 62.5 MHz |
-| Utilization | 60.1% | 48.4% |
-| Transistor count (synth) | 16,426 | 13,082 |
-| SRAM-adjusted | 13,276 | 13,082 |
+| Utilization | 60.5% | 48.4% |
+| Transistor count (synth) | 16,552 | 13,082 |
+| SRAM-adjusted | 13,402 | 13,082 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. The SRAM-adjusted total is within 1.5% of the 6502 at 62.5 MHz, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. The SRAM-adjusted total is within 2.4% of the 6502 at 62.5 MHz, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -123,16 +123,16 @@ All instructions are 16 bits. Registers are at fixed bit positions across all fo
 |---|---|---|---|
 | 0000..0011 | **U** | `[prefix:3][imm10:10][rd:3]` | LUI, AUIPC |
 | 0100..0101 | **J** | `[prefix:4][imm12:12]` | J, JAL |
-| 0110..1000 | **I** | `[prefix:4][imm6:6][rs1:3][rd:3]` | LB, LBU, LW |
+| 0110..1000 | **I** | `[prefix:4][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]` | LB, LBU, LW |
 | 1001..1010 | **S** | `[prefix:4][imm6[5:3]:3][rs2:3][rs1:3][imm6[2:0]:3]` | SB, SW |
 | 1011..1111 | **C** | `[1][grp:3][sub:3][payload:6][rd:3]` | All others |
 
-U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. All other formats use the full 4-bit opcode. I-format has a contiguous 6-bit immediate at [11:6]. S-format splits the immediate so rs2 stays at [8:6]. Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction; the 6-bit payload has three sub-types: **R-type** (rs2+rs1 for register-register ops), **U6-type** (contiguous imm6 for ALU-immediate/shift-immediate/LI), and **B-type** (imm6 split as [8:6]/[2:0] with rs at [5:3] for branches, JR/JALR, and IF-ops). The hardware reads `op_r = {grp, sub}` directly from the instruction word.
+U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. All other formats use the full 4-bit opcode. I-format swaps imm6[5:3] and imm6[2:0] so the sign bit lands at inst[8], matching C-format's default. S-format splits the immediate so rs2 stays at [8:6]. Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction; the 6-bit payload has three sub-types: **R-type** (rs2+rs1 for register-register ops), **U6-type** (contiguous imm6 for ALU-immediate/shift-immediate/LI), and **B-type** (imm6 split as [8:6]/[2:0] with rs at [5:3] for branches, JR/JALR, and IF-ops). The hardware reads `op_r = {grp, sub}` directly from the instruction word.
 
 ### LW — Load Word
 
 ```
-[1000][imm6:6][rs1:3][rd:3]
+[1000][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
 ```
 
 `rd = MEM[rs1 + sext(imm6) * 2]`
@@ -156,7 +156,7 @@ Stores a 16-bit word to memory. The offset encoding is identical to LW. The low 
 ### LB — Load Byte (Sign-Extend)
 
 ```
-[0110][imm6:6][rs1:3][rd:3]
+[0110][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
 ```
 
 `rd = sext(MEM[rs1 + sext(imm6)])`
@@ -168,7 +168,7 @@ Loads a single byte from memory and sign-extends it to 16 bits. The 6-bit signed
 ### LBU — Load Byte (Zero-Extend)
 
 ```
-[0111][imm6:6][rs1:3][rd:3]
+[0111][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
 ```
 
 `rd = zext(MEM[rs1 + sext(imm6)])`
@@ -675,33 +675,33 @@ Bits [15:12] form the **opcode** and determine the instruction format. Registers
 Format  Opcode range   Layout                                                    Instructions
 U       0000..0011     [prefix:3][imm10:10][rd:3]                                LUI, AUIPC
 J       0100..0101     [prefix:4][imm12:12]                                      J, JAL
-I       0110..1000     [prefix:4][imm6:6][rs1:3][rd:3]                           LB, LBU, LW
+I       0110..1000     [prefix:4][imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]        LB, LBU, LW
 S       1001..1010     [prefix:4][imm6[5:3]:3][rs2:3][rs1:3][imm6[2:0]:3]       SB, SW
 C       1011..1111     [1][grp:3][sub:3][payload:6][rd:3]                        all others
 ```
 
-U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. I-format has a contiguous 6-bit immediate at [11:6]. S-format splits the immediate so rs2 stays at [8:6] and rs1 at [5:3].
+U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. I-format swaps imm6[5:3] and imm6[2:0] so the sign bit lands at inst[8]. S-format splits the immediate so rs2 stays at [8:6] and rs1 at [5:3].
 
 Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction. The 6-bit payload has three sub-types: **R-type** (rs2[8:6]+rs1[5:3] for register-register ops), **U6-type** (contiguous imm6[8:3] for ALU-immediate, shift-immediate, and LI), and **B-type** (imm6 split as [8:6]/[2:0] with rs at [5:3] for branches, JR/JALR, and IF-ops). The hardware reads `op_r = {grp, sub}` directly from the instruction word.
 
 ### Encoding Table
 
 ```
-─── U-format (opcode 0000..0011): upper immediate ───
+─── U-format (opcode 0000..0011): upper immediate (sign at inst[12]) ───
 Opcode  Instruction   Payload
-000     LUI           [imm10:10][rd:3]
-001     AUIPC         [imm10:10][rd:3]
+000     LUI           [imm10[9:0]:10][rd:3]
+001     AUIPC         [imm10[9:0]:10][rd:3]
 
-─── J-format (opcode 0100..0101): PC-relative jump ───
+─── J-format (opcode 0100..0101): PC-relative jump (sign at inst[11]) ───
 Opcode  Instruction   Payload
-0100    J             [imm12:12]
-0101    JAL           [imm12:12]
+0100    J             [imm12[11:0]:12]
+0101    JAL           [imm12[11:0]:12]
 
-─── I-format (opcode 0110..1000): loads ───
+─── I-format (opcode 0110..1000): loads (sign at inst[8]) ───
 Opcode  Instruction   Payload
-0110    LB            [imm6:6][rs1:3][rd:3]
-0111    LBU           [imm6:6][rs1:3][rd:3]
-1000    LW            [imm6:6][rs1:3][rd:3]
+0110    LB            [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
+0111    LBU           [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
+1000    LW            [imm6[2:0]:3][imm6[5:3]:3][rs1:3][rd:3]
 
 ─── S-format (opcode 1001..1010): stores ───
 Opcode  Instruction   Payload
