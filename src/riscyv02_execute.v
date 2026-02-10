@@ -580,6 +580,7 @@ module riscyv02_execute (
           w_we          = !is_store;
       end
 
+      default: ;
     endcase
 
     case (state)
@@ -587,6 +588,7 @@ module riscyv02_execute (
         dout = r2;  // rs2 via port 2 (low-fanout path to uio_out)
         rwb  = !is_store;
       end
+      default: ;
     endcase
 
     // Flush: interrupts or instruction jump (JR, RETI, BRK).
