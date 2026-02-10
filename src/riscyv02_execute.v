@@ -86,7 +86,7 @@ module riscyv02_execute (
   localparam OP_CLI    = 6'b000_010;  // 2
   localparam OP_RETI   = 6'b000_011;  // 3
   localparam OP_WAI    = 6'b000_101;  // 5
-  localparam OP_INT_SAVE = 6'b000_110; // 6 — synthetic: save return addr to banked R6
+  localparam OP_INT = 6'b000_110; // 6 — software/hardware interrupt
   localparam OP_STP    = 6'b000_111;  // 7
   // Group 001 — Memory (loads, stores, AUIPC)
   localparam OP_LW     = 6'b001_000;  // 8
@@ -146,7 +146,7 @@ module riscyv02_execute (
     else if (ir[15:12] == 4'b1000)                         op = OP_LW;
     else if (ir[15:12] == 4'b1001)                         op = OP_SB;
     else if (ir[15:12] == 4'b1010)                         op = OP_SW;
-    else if (ir[14:12] == 3'b111 && ir[11:9] == 3'b100)   op = OP_INT_SAVE;
+    else if (ir[14:12] == 3'b111 && ir[11:9] == 3'b100)   op = OP_INT;
     else if (ir[14:12] == 3'b111)                          op = {3'b000, ir[11:9]};
     else if (ir[15])                                       op = ir[14:9];
     else                                                   op = OP_NOP;
@@ -269,7 +269,7 @@ module riscyv02_execute (
   wire is_byte_store = is_store && op[0];     // SB (vs SW)
   wire op_unsigned   = op[1]; // Unsigned variant: SLTU/SLTIUF/LBU (vs SLT/SLTIF/LB)
   wire branch_inv    = op[0]; // Branch inversion: BNZ/BGEZ invert condition
-  wire is_int_save   = (op == OP_INT_SAVE); // Synthetic interrupt save op
+  wire is_int   = (op == OP_INT); // INT instruction (BRK / hw interrupt)
   wire is_two_cycle  = |op[5:3]; // Non-system group → needs E_EXEC_HI
 
   // -------------------------------------------------------------------------
@@ -372,7 +372,7 @@ module riscyv02_execute (
         if (op == OP_RETI) begin
           // Read banked R6 low byte (r_sel=6, r_hi=0, i_bit=1)
           // Captured into tmp[7:0] at negedge
-        end else if (is_int_save) begin
+        end else if (is_int) begin
           w_data = pc[7:0];          // Return addr low byte (i_bit in bit 0)
           w_hi   = 1'b0;
           w_we   = 1'b1;
@@ -499,7 +499,7 @@ module riscyv02_execute (
             // Hi byte from current read (r_sel=6, r_hi=1), lo from tmp
             jump    = 1'b1;
             next_pc = {r, tmp[7:1], 1'b0};
-          end else if (is_int_save) begin
+          end else if (is_int) begin
             w_data  = pc[15:8];
             w_hi    = 1'b1;
             w_we    = 1'b1;
@@ -666,8 +666,8 @@ module riscyv02_execute (
             tmp[7:0] <= alu_result;
           if (is_branch) tmp[8] <= |r;  // nz_lo
           if (is_shift) tmp[7:0] <= r;
-          // RETI and INT_SAVE are two-cycle (system group, not is_two_cycle)
-          if (op == OP_RETI || is_int_save || is_two_cycle)
+          // RETI and INT are two-cycle (system group, not is_two_cycle)
+          if (op == OP_RETI || is_int || is_two_cycle)
             state <= E_EXEC_HI;
           else
             state <= E_IDLE;
@@ -699,8 +699,8 @@ module riscyv02_execute (
       endcase
 
       // ---------------------------------------------------------------------
-      // Interrupt entry: synthesize an INT_SAVE pseudo-instruction in ir.
-      // ir = {7'b1111100, vector_id[5:0], 3'd6} decodes as INT_SAVE with
+      // Interrupt entry: synthesize an INT instruction in ir.
+      // ir = {7'b1111100, vector_id[5:0], 3'd6} decodes as OP_INT with
       // off6 = vector_id and write dest = R6 (banked).
       // ---------------------------------------------------------------------
       if (take_nmi || take_irq) begin
@@ -712,7 +712,7 @@ module riscyv02_execute (
 
       // ---------------------------------------------------------------------
       // Instruction dispatch: load ir from fetch and advance PC.
-      // BRK is detected and synthesized as INT_SAVE with vector 3.
+      // INT instructions (including BRK) set I=1 and stash old I in pc[0].
       // ---------------------------------------------------------------------
       if (ir_accept) begin
         pc <= pc + 16'd2;
