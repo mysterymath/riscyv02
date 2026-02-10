@@ -28,10 +28,10 @@ def _read_ram(dut, addr):
 
 
 def _encode_s_format(prefix, off6, rs1, rd_rs2):
-    """Encode S-format: [prefix:4][off6[2:0]:3][off6[5:3]:3][rs1:3][rd/rs2:3]."""
+    """Encode S-format: [prefix:4][rs1:3][off6[5:3]:3][off6[2:0]:3][rd/rs2:3]."""
     off6_lo = off6 & 0x7        # off6[2:0]
     off6_hi = (off6 >> 3) & 0x7 # off6[5:3]
-    insn = (prefix << 12) | (off6_lo << 9) | (off6_hi << 6) | (rs1 << 3) | rd_rs2
+    insn = (prefix << 12) | (rs1 << 9) | (off6_hi << 6) | (off6_lo << 3) | rd_rs2
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 

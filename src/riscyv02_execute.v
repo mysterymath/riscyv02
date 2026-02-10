@@ -23,7 +23,7 @@
 //   Opcode       Format   Description
 //   0000..0011   U        Upper immediate (LUI, AUIPC; 3-bit prefix)
 //   0100..0101   J        PC-relative jump (J, JAL)
-//   0110..1010   S        Load/store (LB, LBU, LW, SB, SW; scrambled imm)
+//   0110..1010   S        Load/store (LB, LBU, LW, SB, SW; rs1 at [11:9])
 //   1011..1111   C        Compact (ALU, shift, branch, control, system)
 //
 // U-format uses a 3-bit prefix [15:13], gaining one extra immediate bit.
@@ -31,7 +31,7 @@
 //
 // Within C-format, bits [14:12] = group and [11:9] = sub identify the
 // specific instruction, with op_r = {group, sub} read directly from the
-// instruction word. S-format scrambles the immediate so rs1 stays at [5:3].
+// instruction word. S-format places rs1 at [11:9], off6 at [8:3].
 // ============================================================================
 
 module riscyv02_execute (
@@ -718,27 +718,16 @@ module riscyv02_execute (
         // J-format: 4-bit opcode determines instruction
         else if (opcode == 4'b0100)          op_r <= OP_J;
         else if (opcode == 4'b0101)          op_r <= OP_JAL;
-        // S-format: 4-bit opcode determines instruction; off6 from scrambled imm
-        else if (opcode == 4'b0110) begin
-          op_r <= OP_LB;
-          off6_r[2:0] <= fetch_ir[11:9];
-        end
-        else if (opcode == 4'b0111) begin
-          op_r <= OP_LBU;
-          off6_r[2:0] <= fetch_ir[11:9];
-        end
-        else if (opcode == 4'b1000) begin
-          op_r <= OP_LW;
-          off6_r[2:0] <= fetch_ir[11:9];
-        end
+        // S-format: 4-bit opcode determines instruction; off6 at [8:3], rs1 at [11:9]
+        else if (opcode == 4'b0110)          op_r <= OP_LB;
+        else if (opcode == 4'b0111)          op_r <= OP_LBU;
+        else if (opcode == 4'b1000)          op_r <= OP_LW;
         else if (opcode == 4'b1001) begin
           op_r <= OP_SB;
-          off6_r[2:0] <= fetch_ir[11:9];
           r2_sel_r <= fetch_ir[2:0];
         end
         else if (opcode == 4'b1010) begin
           op_r <= OP_SW;
-          off6_r[2:0] <= fetch_ir[11:9];
           r2_sel_r <= fetch_ir[2:0];
         end
         // C-format: direct-mapped, with system group remapping
@@ -766,14 +755,16 @@ module riscyv02_execute (
         rd_rs2_sel_r <= fetch_ir[2:0];
 
         // --- r_sel_r: format-dependent register select ---
-        // C-format I-type: rs/rd at [2:0]. R-type: rs1 at [5:3].
-        // S/U/J formats: rs1 at [5:3] (or don't-care).
+        // C-format I-type: rs/rd at [2:0]. C R-type/U/J: rs1 at [5:3].
+        // S-format: rs1 at [11:9].
         if (is_fmt_c &&
             fetch_ir[14:12] != 3'b011 &&
             !(fetch_ir[14:12] == 3'b100 && !fetch_ir[11]))
           r_sel_r <= fetch_ir[2:0];   // C-format I-type
+        else if (is_fmt_c || is_fmt_u || is_fmt_j)
+          r_sel_r <= fetch_ir[5:3];   // C-format R-type, U, J
         else
-          r_sel_r <= fetch_ir[5:3];   // C-format R-type, S, U, J
+          r_sel_r <= fetch_ir[11:9];  // S-format: rs1 at [11:9]
 
         // --- r_hi_r: right shifts read hi byte first ---
         r_hi_r <= (is_fmt_c && fetch_ir[14:12] == 3'b100 && fetch_ir[10])

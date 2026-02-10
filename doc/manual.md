@@ -14,11 +14,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 58.0% | 45.3% |
-| Transistor count (synth) | 15,892 | 12,112 |
-| SRAM-adjusted | 12,920 | 12,112 |
+| Utilization | 58.5% | 45.3% |
+| Transistor count (synth) | 16,042 | 12,112 |
+| SRAM-adjusted | 13,070 | 12,112 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. R6 is automatically banked during interrupt handling (I=1), so the interrupt handler sees a separate R6 containing the return address while the interrupted code's R6 is preserved. The SRAM-adjusted total is within 6.7% of the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. R6 is automatically banked during interrupt handling (I=1), so the interrupt handler sees a separate R6 containing the return address while the interrupted code's R6 is preserved. The SRAM-adjusted total is within 7.1% of the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -129,15 +129,15 @@ All instructions are 16 bits. Bits [15:12] form the **opcode**, which determines
 |---|---|---|---|
 | 0000..0011 | **U** | `[prefix:3][imm10:10][rd:3]` | LUI, AUIPC |
 | 0100..0101 | **J** | `[prefix:4][off12:12]` | J, JAL |
-| 0110..1010 | **S** | `[prefix:4][off6[2:0]:3][off6[5:3]:3][rs1:3][rd/rs2:3]` | LB, LBU, LW, SB, SW |
+| 0110..1010 | **S** | `[prefix:4][rs1:3][off6:6][rd/rs2:3]` | LB, LBU, LW, SB, SW |
 | 1011..1111 | **C** | `[1][grp:3][sub:3][payload:6][rd:3]` | All others |
 
-U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. All other formats use the full 4-bit opcode. Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction. S-format scrambles the immediate so rs1 stays at [5:3] across all formats.
+U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. All other formats use the full 4-bit opcode. Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction. S-format places rs1 at [11:9] and the 6-bit offset at [8:3].
 
 ### LW — Load Word
 
 ```
-[1000][off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+[1000][rs1:3][off6:6][rd:3]
 ```
 
 `rd = MEM[rs1 + sext(off6) * 2]`
@@ -149,7 +149,7 @@ Loads a 16-bit word from memory. The 6-bit signed offset is scaled by 2, giving 
 ### SW — Store Word
 
 ```
-[1010][off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
+[1010][rs1:3][off6:6][rs2:3]
 ```
 
 `MEM[rs1 + sext(off6) * 2] = rs2`
@@ -161,7 +161,7 @@ Stores a 16-bit word to memory. The offset encoding is identical to LW. The low 
 ### LB — Load Byte (Sign-Extend)
 
 ```
-[0110][off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+[0110][rs1:3][off6:6][rd:3]
 ```
 
 `rd = sext(MEM[rs1 + sext(off6)])`
@@ -173,7 +173,7 @@ Loads a single byte from memory and sign-extends it to 16 bits. The 6-bit signed
 ### LBU — Load Byte (Zero-Extend)
 
 ```
-[0111][off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
+[0111][rs1:3][off6:6][rd:3]
 ```
 
 `rd = zext(MEM[rs1 + sext(off6)])`
@@ -185,7 +185,7 @@ Loads a single byte from memory and zero-extends it to 16 bits. The high byte of
 ### SB — Store Byte
 
 ```
-[1001][off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
+[1001][rs1:3][off6:6][rs2:3]
 ```
 
 `MEM[rs1 + sext(off6)] = rs2[7:0]`
@@ -656,11 +656,11 @@ Bits [15:12] form the **opcode** and determine the instruction format. Four form
 Format  Opcode range   Layout                                           Instructions
 U       0000..0011     [prefix:3][imm10:10][rd:3]                       LUI, AUIPC
 J       0100..0101     [prefix:4][off12:12]                             J, JAL
-S       0110..1010     [prefix:4][off6[2:0]:3][off6[5:3]:3][rs1:3][rd/rs2:3]   loads, stores
+S       0110..1010     [prefix:4][rs1:3][off6:6][rd/rs2:3]                      loads, stores
 C       1011..1111     [1][grp:3][sub:3][payload:6][rd:3]               all others
 ```
 
-U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. S-format scrambles the immediate so rs1 stays at [5:3] across all formats.
+U-format uses a 3-bit prefix (bits [15:13]), gaining one extra immediate bit. S-format places rs1 at [11:9] and the 6-bit offset contiguously at [8:3].
 
 Within C-format, `grp` (bits [14:12]) and `sub` (bits [11:9]) identify the specific instruction. The 6-bit payload is rs2+rs1 for R-type operations or imm6 for I-type operations. The hardware reads `op_r = {grp, sub}` directly from the instruction word.
 
@@ -679,11 +679,11 @@ Opcode  Instruction   Payload
 
 ─── S-format (opcode 0110..1010): load/store ───
 Opcode  Instruction   Payload
-0110    LB            [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
-0111    LBU           [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
-1000    LW            [off6[2:0]:3][off6[5:3]:3][rs1:3][rd:3]
-1001    SB            [off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
-1010    SW            [off6[2:0]:3][off6[5:3]:3][rs1:3][rs2:3]
+0110    LB            [rs1:3][off6:6][rd:3]
+0111    LBU           [rs1:3][off6:6][rd:3]
+1000    LW            [rs1:3][off6:6][rd:3]
+1001    SB            [rs1:3][off6:6][rs2:3]
+1010    SW            [rs1:3][off6:6][rs2:3]
 
 ─── C-format (opcode 1011..1111): compact ───
 Opcode  grp  sub  Instruction   Payload
