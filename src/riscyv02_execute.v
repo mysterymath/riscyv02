@@ -157,6 +157,8 @@ module riscyv02_execute (
   //               E_EXEC_HI to determine branch condition.
   //   tmp[7:0]    ALU result / branch target lo / shift carry / mem address lo
   //               (written at E_EXEC_LO, read at E_EXEC_HI and E_MEM_LO/HI)
+  //   tmp[2:0]    Also used for J-format lower offset bits (off12[2:0]):
+  //               written at dispatch, read at E_EXEC_LO for jump target alu_b.
 
   // ==========================================================================
   // Shared Infrastructure
@@ -419,7 +421,7 @@ module riscyv02_execute (
           alu_new_op = 1'b1;
         end else if (is_jump_imm) begin
           alu_a      = pc[7:0];
-          alu_b      = {off6_r[3:0], rd_rs2_sel_r, 1'b0};
+          alu_b      = {off6_r[3:0], tmp[2:0], 1'b0};
           alu_new_op = 1'b1;
           if (is_linking) begin                          // JAL
             w_data = pc[7:0];
@@ -752,12 +754,13 @@ module riscyv02_execute (
         else
           op_r <= OP_NOP;
 
-        // --- tmp[11:8] (base_sel): format-dependent upper bits ---
+        // --- tmp: format-dependent upper/lower bits ---
         if (is_fmt_u)
           tmp[11:8] <= fetch_ir[12:9];           // U: imm10[9:6]
-        else if (is_fmt_j)
+        else if (is_fmt_j) begin
           tmp[11:8] <= {1'b0, fetch_ir[11:9]};   // J: off12[11:9]
-        else
+          tmp[2:0]  <= fetch_ir[2:0];             // J: off12[2:0]
+        end else
           tmp[11:8] <= {1'b0, fetch_ir[5:3]};    // S/C: don't-care
 
         rd_rs2_sel_r <= fetch_ir[2:0];
