@@ -504,7 +504,7 @@ module riscyv02_execute (
             w_hi    = 1'b1;
             w_we    = 1'b1;
             jump    = 1'b1;
-            next_pc = {12'b0, off6[1:0], 2'b00};  // Vector address
+            next_pc = {12'b0, off6[1:0] + 2'd1, 2'b00};  // Vector address (skip reset at 0)
           end else begin
           // Execute high byte (ALU, shift, branch, jump, LI, LUI)
           insn_completing = 1'b1;
@@ -704,7 +704,7 @@ module riscyv02_execute (
       // off6 = vector_id and write dest = R6 (banked).
       // ---------------------------------------------------------------------
       if (take_nmi || take_irq) begin
-        ir    <= {7'b1111100, take_nmi ? 6'd2 : 6'd1, 3'd6};
+        ir    <= {7'b1111100, 5'b00000, take_nmi, 3'd6};  // IRQ=0, NMI=1
         pc[0] <= i_bit;            // Stash old I flag in pc bit 0
         i_bit <= 1'b1;
         state <= E_EXEC_LO;
@@ -716,13 +716,11 @@ module riscyv02_execute (
       // ---------------------------------------------------------------------
       if (ir_accept) begin
         pc <= pc + 16'd2;
+        ir <= fetch_ir;
         if (fetch_ir[15:9] == 7'b1111100) begin
-          // BRK: synthesize INT_SAVE with vector 3, dest = banked R6
-          ir    <= {7'b1111100, 6'd3, 3'd6};
           pc[0] <= i_bit;         // Stash I flag
           i_bit <= 1'b1;
-        end else
-          ir <= fetch_ir;
+        end
         state <= E_EXEC_LO;
       end
     end

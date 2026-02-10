@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **BLTZ**, **BGEZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTIF**, **SLTIUF**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **SEI**, **CLI**, **BRK**, **WAI**, and **STP**. IRQ and NMI interrupt handling is supported with banked R6 for automatic return address save/restore. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **BLTZ**, **BGEZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTIF**, **SLTIUF**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling is supported with banked R6 for automatic return address save/restore. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -62,26 +62,30 @@ RISCY-V02 supports maskable IRQ and non-maskable NMI interrupts.
 
 **Vector table** (4-byte spacing for two-instruction trampolines):
 
-| Vector | Address | Trigger |
+| Vector ID | Address | Trigger |
 |---|---|---|
 | RESET | $0000 | RESB rising edge |
-| IRQ | $0004 | IRQB low, level-sensitive, masked by I=1 |
-| NMI | $0008 | NMIB falling edge, non-maskable |
-| BRK | $000C | BRK instruction, unconditional |
+| 0 (IRQ) | $0004 | IRQB low, level-sensitive, masked by I=1 |
+| 1 (NMI) | $0008 | NMIB falling edge, non-maskable |
+| 2 (BRK) | $000C | BRK instruction, unconditional |
 
-Each vector has room for a two-instruction trampoline (LW + JR) to reach the actual handler.
+Vector addresses are computed as `(vector_id + 1) * 4`. Each vector has room for a two-instruction trampoline (LW + JR) to reach the actual handler.
+
+**Instruction synthesis:** All interrupt entry (IRQ, NMI, BRK) uses the same mechanism. The hardware writes a synthetic INT instruction into the instruction register (ir) encoding the vector ID and destination register (R6). This synthetic instruction then executes through the normal decode path — no special-case interrupt logic in the execute unit. IRQ and NMI are *internal opcodes*: they use instruction encodings that differ by a single bit (ir[3]), synthesized by the interrupt controller rather than fetched from memory. BRK is the software-accessible form of the same instruction family. Since all three share the same encoding format, software can also trigger IRQ/NMI vectors directly by encoding the corresponding INT instruction.
 
 **IRQ entry (when IRQB=0 and I=0):**
 1. Complete the current instruction
-2. Save banked R6 = (next_PC | I) — return address with I bit in bit 0
-3. Set I = 1 — disable further interrupts
-4. Jump to $0004
+2. Synthesize INT instruction with vector 0 into ir
+3. Save banked R6 = (next_PC | I) — return address with I bit in bit 0
+4. Set I = 1 — disable further interrupts
+5. Jump to $0004
 
 **NMI entry (on NMIB falling edge, regardless of I):**
 1. Complete the current instruction
-2. Save banked R6 = (next_PC | I) — overwrites any previous banked R6
-3. Set I = 1 — disable IRQs
-4. Jump to $0008
+2. Synthesize INT instruction with vector 1 into ir
+3. Save banked R6 = (next_PC | I) — overwrites any previous banked R6
+4. Set I = 1 — disable IRQs
+5. Jump to $0008
 
 **BRK entry (unconditional, regardless of I):**
 1. Save banked R6 = (PC+2 | I) — return address with I bit in bit 0
@@ -602,17 +606,21 @@ Enables interrupts by clearing the I bit. After CLI, a pending IRQ (IRQB=0) will
 
 **Cycle count:** 2
 
-### BRK — Software Interrupt
+### INT — Software Interrupt
 
 ```
-[1111100][000000000]
+[1111100][vector:6][rd:3]
 ```
 
-`banked_R6 = (PC+2 | I); I = 1; PC = $000C`
+`banked_rd = (PC+2 | I); I = 1; PC = (vector[1:0] + 1) * 4`
 
-Triggers a software interrupt. Saves the return address with I bit to banked R6, disables interrupts, and vectors to the BRK handler at $000C. Useful for system calls. BRK is unconditional — it fires regardless of the I bit. RETI restores the previous I state.
+Triggers a software interrupt. Saves the return address (with I bit in bit 0) to the banked destination register, disables interrupts, and vectors to the handler address determined by the vector ID. The vector field is 6 bits; only the low 2 bits select the handler address.
 
-**Warning:** BRK overwrites banked R6 like any interrupt entry. If an NMI interrupts a BRK handler before it saves R6, the return address is lost.
+BRK is the conventional name for `INT 2, R6` (vector 2 → $000C). Software can also trigger IRQ and NMI vectors: `INT 0, R6` (→ $0004) and `INT 1, R6` (→ $0008). The rd field should always be R6 for correct banking behavior. INT is unconditional — it fires regardless of the I bit.
+
+Hardware IRQ and NMI entry synthesize exactly the same instruction encoding into the instruction register, with vectors 0 and 1 respectively. The synthetic instructions differ by a single bit (ir[3]). This is the same mechanism — the only difference is that hardware interrupts don't advance the PC (so RETI returns to the interrupted instruction), while software INT advances PC+2 (so RETI returns past the INT instruction).
+
+**Warning:** INT overwrites banked R6 like any interrupt entry. If an NMI interrupts an INT handler before it saves R6, the return address is lost.
 
 **Cycle count:** 4 (2 execute + 2 fetch after redirect)
 
@@ -717,7 +725,7 @@ Opcode  grp  sub  Instruction   Payload
 1111    111  001  SEI           [000000000]
 1111    111  010  CLI           [000000000]
 1111    111  011  RETI          [000000000]
-1111    111  100  BRK           [000000000]
+1111    111  100  INT           [vector:6][rd:3]    (BRK = vector 2, rd = R6)
 1111    111  101  WAI           [000000000]
 1111    111  111  STP           [000000000]
 
@@ -743,7 +751,7 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | JR/JALR | 4 | 2 execute + 2 fetch after redirect |
 | J/JAL | 4 | 2 execute + 2 fetch after redirect |
 | RETI | 4 | 2 execute + 2 fetch after redirect |
-| BRK | 4 | 2 execute + 2 fetch after redirect |
+| INT (BRK) | 4 | 2 execute + 2 fetch after redirect |
 | WAI (wake) | 2 | 1 execute + 1 overlapped fetch (if interrupt pending) |
 | WAI (halt) | — | Halted until interrupt arrives |
 | STP | 1 | Dispatch directly to halt (no execute cycle) |

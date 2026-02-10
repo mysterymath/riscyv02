@@ -383,8 +383,8 @@ def _encode_cli():
 
 
 def _encode_brk():
-    """Encode BRK -> 16-bit little-endian bytes. [1111100][000000000]"""
-    insn = (0b1111100 << 9)
+    """Encode BRK -> 16-bit little-endian bytes. [1111100][000010][110] (vector 2, R6)"""
+    insn = (0b1111100 << 9) | (2 << 3) | 6
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
