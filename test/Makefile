@@ -45,7 +45,7 @@ COCOTB_TEST_MODULES = test
 include $(shell cocotb-config --makefiles)/Makefile.sim
 
 PROJECT_DIR = $(CURDIR)/..
-CLOCK_PERIOD ?= 16
+CLOCK_PERIOD ?= 17
 TT_VENV ?= $(HOME)/ttsetup/venv
 
 .PHONY: harden metrics

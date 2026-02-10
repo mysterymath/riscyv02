@@ -2,7 +2,13 @@
  * Copyright (c) 2024 mysterymath
  * SPDX-License-Identifier: Apache-2.0
  *
- * Two-phase latch register file: 8 x 16-bit GP registers with 8-bit interface.
+ * Two-phase latch register file: 8 x 16-bit GP registers with 8-bit interface,
+ * plus a banked R6 for interrupt context.
+ *
+ * When i_bit=1, register 6 reads/writes map to a separate physical register
+ * (regs_int) instead of the normal regs[6]. This provides automatic save/restore
+ * of R6 across interrupt entry/exit — the interrupt handler sees banked R6
+ * (containing the return address), while the interrupted code's R6 is preserved.
  *
  * Leader latches (sg13g2_dlhrq_1, transparent-high) capture w_data,
  * w_sel, w_hi, and w_we at the falling clock edge.  Follower latches
@@ -24,6 +30,7 @@
 module riscyv02_regfile (
     input  wire        clk,
     input  wire        rst_n,
+    input  wire        i_bit,      // Interrupt mode: bank R6 when high
 
     // Write port (8-bit)
     input  wire [2:0]  w_sel,
@@ -49,6 +56,7 @@ module riscyv02_regfile (
   wire [2:0] w_sel_held;
   wire       w_hi_held;
   wire       w_we_held;
+  wire       i_bit_held;
 
   generate
     genvar li;
@@ -84,6 +92,13 @@ module riscyv02_regfile (
     .Q(w_we_held)
   );
 
+  sg13g2_dlhrq_1 u_leader_ibit (
+    .D(i_bit),
+    .GATE(clk),
+    .RESET_B(rst_n),
+    .Q(i_bit_held)
+  );
+
   // Phase 2 — Follower latches (sg13g2_dlhrq_1): transparent when GATE=1,
   // i.e. when ~clk & write_enable. Selected register byte passes leader's
   // captured value during clk=0; all others hold.
@@ -97,7 +112,9 @@ module riscyv02_regfile (
     genvar gi, bi;
     for (gi = 0; gi < 8; gi = gi + 1) begin : gen_reg
       // Register selected for write?
-      wire wen = w_we_held && (w_sel_held == gi[2:0]);
+      // For register 6, only write when NOT in interrupt mode (normal R6).
+      wire wen = w_we_held && (w_sel_held == gi[2:0]) &&
+                 ((gi != 6) || !i_bit_held);
       // Byte-select: which byte of this register to write
       wire write_lo = wen & ~w_hi_held;
       wire write_hi = wen & w_hi_held;
@@ -123,12 +140,53 @@ module riscyv02_regfile (
     end
   endgenerate
 
-  // Read port 1: 8:1 register mux, then 2:1 hi/lo byte mux
-  wire [15:0] r_full = regs[r_sel];
+  // Banked R6 (interrupt context): written when w_sel==6 AND i_bit_held
+  wire [15:0] regs_int;
+  wire wen_int = w_we_held && (w_sel_held == 3'd6) && i_bit_held;
+  wire write_int_lo = wen_int & ~w_hi_held;
+  wire write_int_hi = wen_int & w_hi_held;
+  wire gate_int_lo = clk_n & write_int_lo;
+  wire gate_int_hi = clk_n & write_int_hi;
+
+  generate
+    for (bi = 0; bi < 8; bi = bi + 1) begin : gen_int_lo
+      sg13g2_dlhrq_1 u_follower (
+        .D(w_data_held[bi]),
+        .GATE(gate_int_lo),
+        .RESET_B(rst_n),
+        .Q(regs_int[bi])
+      );
+    end
+    for (bi = 0; bi < 8; bi = bi + 1) begin : gen_int_hi
+      sg13g2_dlhrq_1 u_follower (
+        .D(w_data_held[bi]),
+        .GATE(gate_int_hi),
+        .RESET_B(rst_n),
+        .Q(regs_int[bi+8])
+      );
+    end
+  endgenerate
+
+  // Read ports: banking via extended 9-entry array with 4-bit select.
+  // Putting banking on the select path (computed in parallel with mux tree)
+  // rather than the data path (serial with mux tree) avoids adding delay
+  // to the critical regfile→dout→uio_out timing path.
+  wire [15:0] regs_ext [0:8];
+  generate
+    for (gi = 0; gi < 8; gi = gi + 1) begin : gen_ext
+      assign regs_ext[gi] = regs[gi];
+    end
+  endgenerate
+  assign regs_ext[8] = regs_int;
+
+  // Port 1: 9:1 mux with banking folded into select
+  wire [3:0] r_sel_ext = (r_sel == 3'd6 && i_bit) ? 4'd8 : {1'b0, r_sel};
+  wire [15:0] r_full = regs_ext[r_sel_ext];
   assign r = r_hi ? r_full[15:8] : r_full[7:0];
 
-  // Read port 2: same structure as port 1
-  wire [15:0] r2_full = regs[r2_sel];
+  // Port 2: 9:1 mux with banking folded into select
+  wire [3:0] r2_sel_ext = (r2_sel == 3'd6 && i_bit) ? 4'd8 : {1'b0, r2_sel};
+  wire [15:0] r2_full = regs_ext[r2_sel_ext];
   assign r2 = r2_hi ? r2_full[15:8] : r2_full[7:0];
 
 endmodule

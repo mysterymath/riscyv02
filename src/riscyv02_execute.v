@@ -72,7 +72,6 @@ module riscyv02_execute (
 
   // Interrupt and PC state
   reg [15:0] pc;        // Program counter (next instruction to fetch; advanced at dispatch)
-  reg [15:0] epc;       // Exception PC (bit 0 used for I flag on save)
   reg        i_bit;     // Interrupt disable flag (0=enabled, 1=disabled)
 
   // Decoded instruction state (latched at ir_accept)
@@ -82,8 +81,8 @@ module riscyv02_execute (
   localparam OP_SEI    = 6'b000_001;  // 1
   localparam OP_CLI    = 6'b000_010;  // 2
   localparam OP_RETI   = 6'b000_011;  // 3
-  localparam OP_BRK    = 6'b000_100;  // 4
   localparam OP_WAI    = 6'b000_101;  // 5
+  localparam OP_INT_SAVE = 6'b000_110; // 6 — synthetic: save return addr to banked R6
   localparam OP_STP    = 6'b000_111;  // 7
   // Group 001 — Memory (loads, stores, AUIPC)
   localparam OP_LW     = 6'b001_000;  // 8
@@ -92,12 +91,10 @@ module riscyv02_execute (
   localparam OP_AUIPC  = 6'b001_011;  // 11
   localparam OP_SW     = 6'b001_100;  // 12
   localparam OP_SB     = 6'b001_101;  // 13
-  // Group 010 — Wide two-cycle (J, JAL, LUI, EPCR, EPCW)
+  // Group 010 — Wide two-cycle (J, JAL, LUI)
   localparam OP_J      = 6'b010_000;  // 16
   localparam OP_JAL    = 6'b010_001;  // 17
   localparam OP_LUI    = 6'b010_100;  // 20
-  localparam OP_EPCR   = 6'b010_101;  // 21
-  localparam OP_EPCW   = 6'b010_110;  // 22
   // Group 011 — ALU RR (direct-mapped, sub = alu function)
   localparam OP_ADD    = 6'b011_000;  // 24
   localparam OP_SUB    = 6'b011_001;  // 25
@@ -183,6 +180,7 @@ module riscyv02_execute (
   riscyv02_regfile u_regfile (
     .clk    (clk),
     .rst_n  (rst_n),
+    .i_bit  (i_bit),
     .w_sel  (w_sel_mux),
     .w_hi   (w_hi),
     .w_data (w_data),
@@ -267,6 +265,7 @@ module riscyv02_execute (
   wire is_byte_store = is_store && op_r[0];     // SB (vs SW)
   wire op_unsigned   = op_r[1]; // Unsigned variant: SLTU/SLTIUF/LBU (vs SLT/SLTIF/LB)
   wire branch_inv    = op_r[0]; // Branch inversion: BNZ/BGEZ invert condition
+  wire is_int_save   = (op_r == OP_INT_SAVE); // Synthetic interrupt save op
   wire is_two_cycle  = |op_r[5:3]; // Non-system group → needs E_EXEC_HI
   // nz_lo (|rs_lo| for branch zero check) is stored in tmp[8]; see tmp layout above
 
@@ -333,14 +332,12 @@ module riscyv02_execute (
 
       E_EXEC_LO: begin
         if (op_r == OP_RETI) begin
-          insn_completing = 1'b1;
-          jump      = 1'b1;
-          next_pc   = {epc[15:1], 1'b0};
-        end else if (op_r == OP_EPCR) begin
-          w_data = epc[7:0];
+          // Read banked R6 low byte (r_sel=6, r_hi=0, i_bit=1)
+          // Captured into tmp[7:0] at negedge
+        end else if (is_int_save) begin
+          w_data = pc[7:0];          // Return addr low byte (i_bit in bit 0)
           w_hi   = 1'b0;
           w_we   = 1'b1;
-        end else if (op_r == OP_EPCW) begin
         end else if (is_mem_addr) begin
           // Address computation low byte (loads, stores, AUIPC)
           alu_new_op = 1'b1;
@@ -429,9 +426,7 @@ module riscyv02_execute (
             w_we   = 1'b1;
           end
         end else begin
-          if (op_r == OP_BRK)
-            jump = 1'b1;
-          else if (op_r != OP_WAI && op_r != OP_STP)
+          if (op_r != OP_WAI && op_r != OP_STP)
             insn_completing = 1'b1;
         end
       end
@@ -462,13 +457,20 @@ module riscyv02_execute (
             w_we   = 1'b1;
           end
         end else begin
-          // Execute high byte (ALU, shift, branch, jump, LI, LUI, EPC)
+          if (op_r == OP_RETI) begin
+            // Hi byte from current read (r_sel=6, r_hi=1), lo from tmp
+            jump    = 1'b1;
+            next_pc = {r, tmp[7:1], 1'b0};
+          end else if (is_int_save) begin
+            w_data  = pc[15:8];
+            w_hi    = 1'b1;
+            w_we    = 1'b1;
+            jump    = 1'b1;
+            next_pc = {12'b0, off6_r[1:0], 2'b00};  // Vector address
+          end else begin
+          // Execute high byte (ALU, shift, branch, jump, LI, LUI)
           insn_completing = 1'b1;
-          if (op_r == OP_EPCR) begin
-            w_data = epc[15:8];
-            w_hi   = 1'b1;
-            w_we   = 1'b1;
-          end else if (is_alu_rr) begin
+          if (is_alu_rr) begin
             alu_b      = r2;
             alu_new_op = 1'b0;
             w_data     = alu_result;
@@ -552,7 +554,8 @@ module riscyv02_execute (
               w_we   = 1'b1;
             end
           end
-        end
+          end // inner else (insn_completing path)
+        end // outer else (not mem, not jr_jalr)
       end
 
       E_MEM_LO: begin
@@ -605,7 +608,6 @@ module riscyv02_execute (
       r2_sel_r         <= 3'b000;
       r_hi_r           <= 1'b0;
       pc               <= 16'h0000;
-      epc              <= 16'h0000;
       i_bit            <= 1'b1;  // Interrupts disabled after reset
       nmi_ack          <= 1'b0;
     end else begin
@@ -617,7 +619,7 @@ module riscyv02_execute (
       // ---------------------------------------------------------------------
       // State machine: transitions and per-state effects.
       // Ordered before interrupt entry and dispatch so their overrides
-      // (state, epc, i_bit, pc, op_r) take priority via last-NBA-wins.
+      // (state, i_bit, pc, op_r) take priority via last-NBA-wins.
       // ---------------------------------------------------------------------
       case (state)
         E_IDLE: ;
@@ -625,21 +627,16 @@ module riscyv02_execute (
         E_EXEC_LO: begin
           if (op_r == OP_SEI) i_bit <= 1'b1;
           if (op_r == OP_CLI) i_bit <= 1'b0;
-          if (op_r == OP_RETI) begin
-            i_bit <= epc[0];
-            pc    <= next_pc;
-          end
-          if (op_r == OP_EPCW) epc[7:0] <= r;
-          if (op_r == OP_BRK) begin
-            epc   <= next_pc | {15'b0, i_bit};
-            i_bit <= 1'b1;
-            pc    <= 16'h000C;
-          end
+          if (op_r == OP_RETI) tmp[7:0] <= r;   // Capture banked R6 low byte
           if (is_branch || is_jump_imm || is_mem_addr || is_jr_jalr)
             tmp[7:0] <= alu_result;
           if (is_branch) tmp[8] <= |r;  // nz_lo: branches don't use tmp[11:8] (base_sel)
           if (is_shift) tmp[7:0] <= r;
-          if (is_two_cycle) begin
+          // RETI and INT_SAVE are two-cycle (system group, not is_two_cycle)
+          if (op_r == OP_RETI || is_int_save) begin
+            state  <= E_EXEC_HI;
+            r_hi_r <= 1'b1;
+          end else if (is_two_cycle) begin
             state  <= E_EXEC_HI;
             r_hi_r <= is_right_shift ? 1'b0 : 1'b1;
           end else
@@ -657,7 +654,7 @@ module riscyv02_execute (
             pc    <= next_pc;
             state <= E_IDLE;
           end else begin
-            if (op_r == OP_EPCW) epc[15:8] <= r;
+            if (op_r == OP_RETI) i_bit <= tmp[0];
             if (jump) pc <= next_pc;
             state <= E_IDLE;
           end
@@ -675,15 +672,17 @@ module riscyv02_execute (
       endcase
 
       // ---------------------------------------------------------------------
-      // Interrupt entry (overrides state, epc, i_bit from case block)
+      // Interrupt entry (overrides state, i_bit, pc, op_r from case block)
+      // Stash i_bit into pc[0], then save pc (with i_bit) to banked R6
+      // via the OP_INT_SAVE synthetic two-cycle op.
       // ---------------------------------------------------------------------
       if (take_nmi || take_irq) begin
-        epc   <= next_pc | {15'b0, i_bit};
-        i_bit <= 1'b1;
-        op_r  <= OP_NOP;
-        state <= E_IDLE;
-        if (take_nmi) pc <= 16'h0008;
-        else          pc <= 16'h0004;
+        pc[0]        <= i_bit;            // Stash old I flag in pc bit 0
+        i_bit        <= 1'b1;
+        op_r         <= OP_INT_SAVE;
+        rd_rs2_sel_r <= 3'd6;            // Write dest = banked R6
+        off6_r       <= take_nmi ? 6'd2 : 6'd1;  // Vector ID (NMI=2→$0008, IRQ=1→$0004)
+        state        <= E_EXEC_LO;
       end
 
       // ---------------------------------------------------------------------
@@ -737,16 +736,14 @@ module riscyv02_execute (
           off6_r[2:0] <= fetch_ir[11:9];
           r2_sel_r <= fetch_ir[2:0];
         end
-        // C-format: direct-mapped, with two remapping exceptions
+        // C-format: direct-mapped, with system group remapping
         else if (fetch_ir[14:12] == 3'b111) begin
-          // System group: EPCR remapped to wide group, rest to group 000
-          if (fetch_ir[11:9] == 3'b110)
-            op_r <= OP_EPCR;
+          // System group: BRK remapped to INT_SAVE, rest to group 000
+          if (fetch_ir[11:9] == 3'b100)
+            op_r <= OP_INT_SAVE;               // BRK → save to banked R6
           else
             op_r <= {3'b000, fetch_ir[11:9]};
         end
-        else if (fetch_ir[14:9] == 6'b101_101)
-          op_r <= OP_EPCW;                       // EPCW remap
         else if (fetch_ir[15])
           op_r <= fetch_ir[14:9];                // direct: op_r = {group, sub}
         else
@@ -775,6 +772,18 @@ module riscyv02_execute (
         // --- r_hi_r: right shifts read hi byte first ---
         r_hi_r <= (is_fmt_c && fetch_ir[14:12] == 3'b100 && fetch_ir[10])
                   ? 1'b1 : 1'b0;
+
+        // --- System group overrides (RETI, BRK) ---
+        if (fetch_ir[14:12] == 3'b111) begin
+          if (fetch_ir[11:9] == 3'b011)
+            r_sel_r <= 3'd6;               // RETI: read banked R6
+          else if (fetch_ir[11:9] == 3'b100) begin
+            rd_rs2_sel_r <= 3'd6;          // BRK: write dest = banked R6
+            off6_r       <= 6'd3;          // Vector 3 → 0x000C
+            pc[0]        <= i_bit;         // Stash I flag
+            i_bit        <= 1'b1;
+          end
+        end
 
         // All instructions start in E_EXEC_LO
         state <= E_EXEC_LO;

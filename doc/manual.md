@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **BLTZ**, **BGEZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTIF**, **SLTIUF**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **SEI**, **CLI**, **BRK**, **WAI**, **STP**, **EPCR**, and **EPCW**. IRQ and NMI interrupt handling is supported. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **BLTZ**, **BGEZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTIF**, **SLTIUF**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **SEI**, **CLI**, **BRK**, **WAI**, and **STP**. IRQ and NMI interrupt handling is supported with banked R6 for automatic return address save/restore. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -12,13 +12,13 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 
 | Metric | RISCY-V02 | Arlet 6502 |
 |---|---|---|
-| Clock period | 16 ns | 16 ns |
-| fMax (slow corner) | 62.5 MHz | 62.5 MHz |
-| Utilization | 60.6% | 48.4% |
-| Transistor count (synth) | 16,604 | 13,082 |
-| SRAM-adjusted | 13,454 | 13,082 |
+| Clock period | 17 ns | 16 ns |
+| fMax (slow corner) | 58.8 MHz | 62.5 MHz |
+| Utilization | 57.7% | 48.4% |
+| Transistor count (synth) | 15,770 | 12,198 |
+| SRAM-adjusted | 12,798 | 12,198 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. The SRAM-adjusted total is within 2.8% of the 6502 at 62.5 MHz, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. R6 is automatically banked during interrupt handling (I=1), so the interrupt handler sees a separate R6 containing the return address while the interrupted code's R6 is preserved. The SRAM-adjusted total is within 4.9% of the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -73,30 +73,30 @@ Each vector has room for a two-instruction trampoline (LW + JR) to reach the act
 
 **IRQ entry (when IRQB=0 and I=0):**
 1. Complete the current instruction
-2. Save EPC = (next_PC | I) — return address with I bit in bit 0
+2. Save banked R6 = (next_PC | I) — return address with I bit in bit 0
 3. Set I = 1 — disable further interrupts
 4. Jump to $0004
 
 **NMI entry (on NMIB falling edge, regardless of I):**
 1. Complete the current instruction
-2. Save EPC = (next_PC | I) — overwrites any previous EPC
+2. Save banked R6 = (next_PC | I) — overwrites any previous banked R6
 3. Set I = 1 — disable IRQs
 4. Jump to $0008
 
 **BRK entry (unconditional, regardless of I):**
-1. Save EPC = (PC+2 | I) — return address with I bit in bit 0
+1. Save banked R6 = (PC+2 | I) — return address with I bit in bit 0
 2. Set I = 1 — disable IRQs
 3. Jump to $000C
 
 NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low does not re-trigger. NMIB must return high and fall again for a new NMI. NMI has priority over IRQ; if both are pending simultaneously, NMI is taken first, and the subsequent I=1 masks the IRQ.
 
-**Warning:** RETI from an NMI handler is undefined behavior. NMI overwrites EPC unconditionally, so if an NMI interrupts an IRQ handler before it saves EPC, the IRQ's return address is lost. NMI handlers typically reset, halt, or spin.
+**Warning:** RETI from an NMI handler is undefined behavior. NMI overwrites banked R6 unconditionally, so if an NMI interrupts an IRQ handler before it saves R6, the IRQ's return address is lost. NMI handlers typically reset, halt, or spin.
 
 **Interrupt return (RETI instruction):**
-1. Restore I = EPC[0]
-2. Jump to EPC & $FFFE
+1. Restore I = banked_R6[0]
+2. Jump to banked_R6 & $FFFE
 
-**Interrupt latency:** 2 cycles from instruction completion to first handler instruction fetch. NMI edge detection is combinational — if the falling edge arrives on the same cycle that the FSM is ready, the NMI is taken immediately with no additional detection delay.
+**Interrupt latency:** 4 cycles from instruction completion to first handler instruction fetch (2 cycles to save banked R6 + 2 fetch). NMI edge detection is combinational — if the falling edge arrives on the same cycle that the FSM is ready, the NMI is taken immediately with no additional detection delay.
 
 ### Register Naming Convention
 
@@ -111,9 +111,15 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | R6 | ra | Return address (link register) |
 | R7 | sp | Stack pointer |
 
-### Link Register (R6)
+### Link Register (R6) and Banking
 
 R6 serves as the link register. JAL and JALR write the return address (PC+2) to R6. Subroutine return is `JR R6, 0`. Since R6 is a regular GPR, it can be saved/restored with normal load/store instructions — no special LRR/LRW instructions needed. R6 is callee-saved: any function that makes calls must save R6 on entry and restore it before returning.
+
+**R6 banking:** When the I (interrupt disable) flag is set, R6 maps to a separate physical register (banked R6) instead of the normal R6. On interrupt entry (IRQ, NMI, or BRK), the hardware saves `{return_addr[15:1], old_I_flag}` into banked R6 and sets I=1. The interrupted code's normal R6 is automatically preserved — no save/restore needed.
+
+Inside the interrupt handler (where I=1), all R6 accesses (reads and writes) operate on the banked copy. RETI reads the banked R6 to obtain the return address and restores the I flag from bit 0. Writing to R6 in the handler modifies the return destination; for example, `LW R6, new_addr(R0); RETI` redirects the return.
+
+When RETI restores I=0, subsequent R6 accesses revert to the normal (non-banked) R6, which was untouched during the handler.
 
 ## Instruction Set
 
@@ -566,11 +572,11 @@ Shifts rd right by a 4-bit immediate (0–15). Vacated bits are filled with copi
 [1111011][000000000]
 ```
 
-`I = EPC[0]; PC = EPC & $FFFE`
+`I = banked_R6[0]; PC = banked_R6 & $FFFE`
 
-Restores the interrupt enable state from the saved EPC and returns to the interrupted code. The I bit is restored from EPC bit 0, and PC is set to EPC with bit 0 cleared (ensuring word alignment).
+Restores the interrupt enable state from the banked R6 and returns to the interrupted code. The I bit is restored from banked R6 bit 0, and PC is set to banked R6 with bit 0 cleared (ensuring word alignment). Reads banked R6 in two cycles (low byte then high byte).
 
-**Cycle count:** 2 (fetch + redirect)
+**Cycle count:** 4 (2 execute + 2 fetch after redirect)
 
 ### SEI — Set Interrupt Disable
 
@@ -602,13 +608,13 @@ Enables interrupts by clearing the I bit. After CLI, a pending IRQ (IRQB=0) will
 [1111100][000000000]
 ```
 
-`EPC = (PC+2 | I); I = 1; PC = $000C`
+`banked_R6 = (PC+2 | I); I = 1; PC = $000C`
 
-Triggers a software interrupt. Saves the return address with I bit to EPC, disables interrupts, and vectors to the BRK handler at $000C. Useful for system calls. BRK is unconditional — it fires regardless of the I bit. RETI restores the previous I state.
+Triggers a software interrupt. Saves the return address with I bit to banked R6, disables interrupts, and vectors to the BRK handler at $000C. Useful for system calls. BRK is unconditional — it fires regardless of the I bit. RETI restores the previous I state.
 
-**Warning:** BRK overwrites EPC like any interrupt entry. If an NMI interrupts a BRK handler before it saves EPC, the return address is lost.
+**Warning:** BRK overwrites banked R6 like any interrupt entry. If an NMI interrupts a BRK handler before it saves R6, the return address is lost.
 
-**Cycle count:** 3 (1 execute + 2 fetch after redirect)
+**Cycle count:** 4 (2 execute + 2 fetch after redirect)
 
 ### WAI — Wait for Interrupt
 
@@ -635,30 +641,6 @@ If an interrupt is already pending when WAI executes, it is serviced immediately
 Halts the processor permanently. No interrupt (IRQ or NMI) can wake it. Only a hardware reset recovers execution. Both WAI and STP halt via internal clock gating — the CPU clock stops entirely, reducing dynamic power to zero.
 
 **Cycle count:** 1 (execute then halt)
-
-### EPCR — Read EPC
-
-```
-[1111110][000000][rd:3]
-```
-
-`rd = EPC`
-
-Reads the Exception Program Counter (including the I bit in bit 0) into a general-purpose register. Used in interrupt handlers to save EPC before re-enabling interrupts for nested interrupt support.
-
-**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
-
-### EPCW — Write EPC
-
-```
-[1101101][000000][rs:3]
-```
-
-`EPC = rs`
-
-Writes a general-purpose register to the Exception Program Counter. Bit 0 of the source register sets the I bit that will be restored by the next RETI. Used to restore EPC after handling a nested interrupt.
-
-**Cycle count:** 2 (1 low byte + 1 high byte, overlapped fetch)
 
 ### All Other Opcodes
 
@@ -723,7 +705,6 @@ Opcode  grp  sub  Instruction   Payload
 1101    101  010  BLTZ          [off6:6][rs:3]
 1101    101  011  BGEZ          [off6:6][rs:3]
 1101    101  100  LI            [imm6:6][rd:3]
-1101    101  101  EPCW          [000000][rs:3]
 1101    101  110  JR            [off6:6][rs:3]
 1101    101  111  JALR          [off6:6][rs:3]
 1110    110  000  ADDI          [imm6:6][rd:3]
@@ -738,7 +719,6 @@ Opcode  grp  sub  Instruction   Payload
 1111    111  011  RETI          [000000000]
 1111    111  100  BRK           [000000000]
 1111    111  101  WAI           [000000000]
-1111    111  110  EPCR          [000000][rd:3]
 1111    111  111  STP           [000000000]
 
 All other encodings execute as NOP (2-cycle no-op).
@@ -754,7 +734,7 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| NOP/SEI/CLI/AUIPC/LUI/LI/EPCR/EPCW/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTIF/SLTIUF/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
+| NOP/SEI/CLI/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTIF/SLTIUF/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ/BLTZ/BGEZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ/BLTZ/BGEZ (taken) | 4 | 2 execute + 2 fetch after redirect |
 | LB/LBU | 4 | 2 address + 1 byte read + 1 extension |
@@ -762,13 +742,13 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | LW/SW | 4 | 4 execute (address computation overlaps with fetch) |
 | JR/JALR | 4 | 2 execute + 2 fetch after redirect |
 | J/JAL | 4 | 2 execute + 2 fetch after redirect |
-| RETI | 3 | 1 execute + 2 fetch after redirect |
-| BRK | 3 | 1 execute + 2 fetch after redirect |
+| RETI | 4 | 2 execute + 2 fetch after redirect |
+| BRK | 4 | 2 execute + 2 fetch after redirect |
 | WAI (wake) | 2 | 1 execute + 1 overlapped fetch (if interrupt pending) |
 | WAI (halt) | — | Halted until interrupt arrives |
 | STP | 1 | Dispatch directly to halt (no execute cycle) |
-| IRQ entry | 2 | Redirect at instruction boundary |
-| NMI entry | 2 | Redirect at instruction boundary |
+| IRQ entry | 4 | 2 execute (save banked R6) + 2 fetch |
+| NMI entry | 4 | 2 execute (save banked R6) + 2 fetch |
 
 Instructions that redirect (JR, JALR, J, JAL, RETI) flush the speculative fetch and must wait for new instruction bytes. Non-redirecting instructions benefit from fetch/execute overlap.
 

@@ -119,8 +119,8 @@ def main():
     # The register file (riscyv02_regfile) is a regular 8x16-bit 2R1W array.
     # In a real chip this would be 8T SRAM, not standard cell latches.
     # See doc/sram_analysis.md for full design and justification.
-    REGFILE_STDCELL_TX = 4674   # exact, from standalone synthesis
-    REGFILE_SRAM_TX    = 1524   # 8T SRAM design (128x8T + peripherals)
+    REGFILE_STDCELL_TX = 4674   # TODO: update from standalone synthesis of 9-entry regfile
+    REGFILE_SRAM_TX    = 1702   # 8T SRAM design (144x8T + peripherals, 9-entry with banking)
     ARLET_6502_TX      = 12198  # comparison baseline (decode consolidation)
 
     discount = REGFILE_STDCELL_TX - REGFILE_SRAM_TX

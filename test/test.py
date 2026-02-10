@@ -400,17 +400,6 @@ def _encode_stp():
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
-def _encode_epcr(rd):
-    """Encode EPCR rd -> 16-bit little-endian bytes. [1111110][000000][rd:3]"""
-    insn = (0b1111110 << 9) | rd
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
-
-
-def _encode_epcw(rs):
-    """Encode EPCW rs -> 16-bit little-endian bytes. [1101101][000000][rs:3]"""
-    insn = (0b1101101 << 9) | rs
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
-
 
 # ---------------------------------------------------------------------------
 # Test 6: Reset I state (interrupts disabled after reset)
@@ -1125,21 +1114,21 @@ async def test_cycle_count_cli(dut):
 
 @cocotb.test()
 async def test_cycle_count_reti(dut):
-    """RETI takes 3 cycles (1 execute + 2 fetch after redirect)."""
+    """RETI takes 4 cycles (2 execute + 2 fetch after redirect)."""
     dut._log.info("Test: RETI cycle count")
 
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     prog = {}
-    # Simple approach: RETI at 0x0000, returns to EPC (0x0000 after reset)
+    # RETI at 0x0000, returns to banked R6 (0x0000 after reset)
     # Creates an infinite RETI loop - we measure one iteration
     # 0x0000: RETI (returns to 0x0000, creating a loop)
     _place(prog, 0x0000, _encode_reti())
 
-    # RETI redirects, so throughput = 1 (E_EXEC) + 2 (fetch) = 3 cycles
-    cycles = await _measure_instruction_cycles(dut, prog, 3, "RETI")
-    assert cycles == 3, f"RETI: expected 3 cycles, got {cycles}"
+    # RETI redirects, so throughput = 2 (E_EXEC) + 2 (fetch) = 4 cycles
+    cycles = await _measure_instruction_cycles(dut, prog, 4, "RETI")
+    assert cycles == 4, f"RETI: expected 4 cycles, got {cycles}"
     dut._log.info("PASS [cycle_count_reti]")
 
 
@@ -2309,11 +2298,11 @@ async def test_brk_masks_irq(dut):
 
 
 # ---------------------------------------------------------------------------
-# Test 35: BRK cycle count — 2 cycles (same as RETI: execute + redirect)
+# Test 35: BRK cycle count — 4 cycles (2 INT_SAVE exec + 2 fetch)
 # ---------------------------------------------------------------------------
 @cocotb.test()
 async def test_cycle_count_brk(dut):
-    """BRK takes 3 cycles: 1 execute + 2 fetch after redirect."""
+    """BRK takes 4 cycles: 2 execute (INT_SAVE) + 2 fetch after redirect."""
     dut._log.info("Test 35: BRK cycle count")
 
     clock = Clock(dut.clk, 10, unit="us")
@@ -2353,9 +2342,9 @@ async def test_cycle_count_brk(dut):
             got_sync = True
             break
 
-    dut._log.info(f"BRK: {cycles} cycles to handler (expected 3)")
+    dut._log.info(f"BRK: {cycles} cycles to handler (expected 4)")
     assert got_sync, "Never reached handler SYNC"
-    assert cycles == 3, f"BRK: expected 3 cycles, got {cycles}"
+    assert cycles == 4, f"BRK: expected 4 cycles, got {cycles}"
     dut._log.info("PASS [cycle_count_brk]")
 
 
@@ -2438,13 +2427,13 @@ async def test_brk_restores_i(dut):
 
 
 # ---------------------------------------------------------------------------
-# EPCR / EPCW tests
+# Banked R6 tests (replaced EPCR/EPCW)
 # ---------------------------------------------------------------------------
 
 @cocotb.test()
-async def test_epcr_basic(dut):
-    """EPCR reads EPC (with I bit) into a GP register after IRQ entry."""
-    dut._log.info("Test: EPCR basic")
+async def test_banked_r6_read(dut):
+    """In IRQ handler, SW R6 stores banked R6 (return_addr | i_bit) to memory."""
+    dut._log.info("Test: Banked R6 read")
 
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
@@ -2455,12 +2444,12 @@ async def test_epcr_basic(dut):
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
-    # IRQ handler at $0004: EPCR R2, store R2 to memory, spin
-    _place(prog, 0x0004, _encode_epcr(rd=2))                  # R2 = EPC
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = R2
-    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))            # spin at $0008
+    # IRQ handler at $0004: store banked R6 to memory, spin
+    _place(prog, 0x0004, _encode_sw(rs2=6, rs1=0, off6=24))   # MEM[$18] = banked R6
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))            # spin at $0006
 
-    # NMI vector at $0008 — shared with spin above (no NMI in this test)
+    # NMI vector at $0008: unused (no NMI in this test)
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
     # Continue at $0020: CLI, then spin (IRQ will fire immediately)
     _place(prog, 0x0020, _encode_cli())
@@ -2483,32 +2472,29 @@ async def test_epcr_basic(dut):
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
 
-    await ClockCycles(dut.clk, 200)
+    await ClockCycles(dut.clk, 300)
 
-    # EPC should be: return address ($0022) | I bit (0, since CLI cleared it)
-    # CLI at $0020 advances PC to $0022, then IRQ fires. EPC = $0022 | 0 = $0022
+    # Banked R6 should be: return address ($0022) | I bit (0, since CLI cleared it)
+    # CLI at $0020 advances PC to $0022, then IRQ fires. Banked R6 = $0022 | 0 = $0022
     lo = _read_ram(dut, 0x0018)
     hi = _read_ram(dut, 0x0019)
     val = lo | (hi << 8)
-    dut._log.info(f"EPCR result = {val:#06x} (expected 0x0022)")
-    assert val == 0x0022, f"EPCR did not read correct EPC! Got {val:#06x}"
-    dut._log.info("PASS [epcr_basic]")
+    dut._log.info(f"Banked R6 = {val:#06x} (expected 0x0022)")
+    assert val == 0x0022, f"Banked R6 did not contain correct return addr! Got {val:#06x}"
+    dut._log.info("PASS [banked_r6_read]")
 
 
 @cocotb.test()
-async def test_epcw_basic(dut):
-    """EPCW writes a register to EPC; RETI jumps to that address."""
-    dut._log.info("Test: EPCW basic")
+async def test_banked_r6_redirect(dut):
+    """In BRK handler, LW R6 then RETI jumps to loaded address."""
+    dut._log.info("Test: Banked R6 redirect")
 
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     prog = {}
 
-    # Data: 0x0A=jump($0020), 0x12=EPCW target($0030), 0x14=DEAD, 0x16=AAAA
-    # Markers: 0x18=orig-return, 0x1A=target
-
-    # Main code: jump past vectors, CLI, BRK to enter handler
+    # Main code: jump past vectors, CLI, BRK
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))   # R1 = MEM[$0A] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
@@ -2518,15 +2504,14 @@ async def test_epcw_basic(dut):
     # NMI at $0008: unused
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
 
-    # BRK handler at $000C: load target addr into R3, EPCW R3, RETI
-    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, off6=18))    # R3 = MEM[$12] = $0030
-    _place(prog, 0x000E, _encode_epcw(rs=3))                  # EPC = R3 = $0030
-    _place(prog, 0x0010, _encode_reti())                       # jump to $0030, I = EPC[0] = 0
+    # BRK handler at $000C: load redirect target into R6 (banked), RETI
+    _place(prog, 0x000C, _encode_lw(rd=6, rs1=0, off6=18))    # R6 = MEM[$12] = $0030
+    _place(prog, 0x000E, _encode_reti())                       # jump to $0030 (from banked R6)
 
     # Data
     prog[0x000A] = 0x20  # initial jump target
     prog[0x000B] = 0x00
-    prog[0x0012] = 0x30  # EPCW target address $0030
+    prog[0x0012] = 0x30  # RETI redirect target $0030 (bit 0=0 → I=0)
     prog[0x0013] = 0x00
     prog[0x0014] = 0xAD  # DEAD marker value
     prog[0x0015] = 0xDE
@@ -2536,12 +2521,12 @@ async def test_epcw_basic(dut):
     # Continue at $0020: CLI, BRK
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_brk())
-    # $0024: should NOT reach here (EPCW redirected RETI)
+    # $0024: should NOT reach here (R6 redirect to $0030)
     _place(prog, 0x0024, _encode_lw(rd=4, rs1=0, off6=20))   # R4 = MEM[$14] = 0xDEAD
     _place(prog, 0x0026, _encode_sw(rs2=4, rs1=0, off6=24))  # MEM[$18] = 0xDEAD
     _place(prog, 0x0028, _encode_jr(rs=0, off6=20))           # spin at $0028
 
-    # EPCW target at $0030: write AAAA marker, spin
+    # Redirect target at $0030: write AAAA marker, spin
     _place(prog, 0x0030, _encode_lw(rd=5, rs1=0, off6=22))   # R5 = MEM[$16] = 0xAAAA
     _place(prog, 0x0032, _encode_sw(rs2=5, rs1=0, off6=26))  # MEM[$1A] = 0xAAAA
     _place(prog, 0x0034, _encode_jr(rs=0, off6=26))           # spin at $0034
@@ -2574,42 +2559,38 @@ async def test_epcw_basic(dut):
     orig_marker = lo | (hi << 8)
     dut._log.info(f"Original return marker = {orig_marker:#06x} (expected 0x0000)")
 
-    assert target_marker == 0xAAAA, f"RETI did not jump to EPCW target! Got {target_marker:#06x}"
+    assert target_marker == 0xAAAA, f"RETI did not jump to banked R6 target! Got {target_marker:#06x}"
     assert orig_marker == 0x0000, f"Original return point executed! Got {orig_marker:#06x}"
-    dut._log.info("PASS [epcw_basic]")
+    dut._log.info("PASS [banked_r6_redirect]")
 
 
 @cocotb.test()
-async def test_epcw_restores_i(dut):
-    """EPCW with bit 0 = 0 clears I on RETI; IRQ fires after return."""
-    dut._log.info("Test: EPCW restores I bit")
+async def test_banked_r6_i_bit(dut):
+    """In BRK handler, LW R6 with bit 0 clear → RETI restores I=0, IRQ fires."""
+    dut._log.info("Test: Banked R6 I bit restore")
 
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     prog = {}
 
-    # Data: 0x0A=jump($0020), 0x12=EPCW target($0030), 0x14=CCCC value
-    # Marker: 0x18=IRQ marker
-
     # Main code: jump past vectors
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))   # R1 = MEM[$0A] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
     # IRQ handler at $0004: write IRQ marker, spin
-    _place(prog, 0x0004, _encode_lw(rd=6, rs1=0, off6=20))   # R6 = MEM[$14] = 0xCCCC
-    _place(prog, 0x0006, _encode_sw(rs2=6, rs1=0, off6=24))  # MEM[$18] = 0xCCCC
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))   # R2 = MEM[$14] = 0xCCCC
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))  # MEM[$18] = 0xCCCC
     _place(prog, 0x0008, _encode_jr(rs=0, off6=4))            # spin at $0008
 
-    # BRK handler at $000C: EPCW with I=0 in bit 0, then RETI
-    _place(prog, 0x000C, _encode_lw(rd=3, rs1=0, off6=18))    # R3 = MEM[$12] = $0030
-    _place(prog, 0x000E, _encode_epcw(rs=3))                  # EPC = $0030 (bit 0 = 0 → I=0)
-    _place(prog, 0x0010, _encode_reti())                       # PC=$0030, I=0
+    # BRK handler at $000C: load target with I=0 into banked R6, then RETI
+    _place(prog, 0x000C, _encode_lw(rd=6, rs1=0, off6=18))    # R6 = MEM[$12] = $0030
+    _place(prog, 0x000E, _encode_reti())                       # PC=$0030, I=0 (bit 0 of R6)
 
     # Data
     prog[0x000A] = 0x20  # initial jump target
     prog[0x000B] = 0x00
-    prog[0x0012] = 0x30  # EPCW target: $0030, bit 0 = 0 (I=0)
+    prog[0x0012] = 0x30  # banked R6 target: $0030, bit 0 = 0 (I=0)
     prog[0x0013] = 0x00
     prog[0x0014] = 0xCC  # IRQ marker value
     prog[0x0015] = 0xCC
@@ -2618,7 +2599,7 @@ async def test_epcw_restores_i(dut):
     _place(prog, 0x0020, _encode_brk())
     _place(prog, 0x0022, _encode_jr(rs=0, off6=17))           # spin (unreachable)
 
-    # EPCW target at $0030: spin — I=0, so if IRQB=0, IRQ should fire
+    # Target at $0030: spin — I=0, so if IRQB=0, IRQ should fire
     _place(prog, 0x0030, _encode_jr(rs=0, off6=24))           # spin at $0030
 
     # Clear marker
@@ -2636,52 +2617,14 @@ async def test_epcw_restores_i(dut):
 
     await ClockCycles(dut.clk, 300)
 
-    # After BRK handler → EPCW sets EPC=$0030 (I=0) → RETI sets I=0 and jumps to $0030
+    # After BRK → banked R6 loaded with $0030 (I=0) → RETI sets I=0, jumps to $0030
     # With IRQB=0 and I=0, IRQ should fire → handler writes 0xCCCC to $0018
     lo = _read_ram(dut, 0x0018)
     hi = _read_ram(dut, 0x0019)
     irq_marker = lo | (hi << 8)
     dut._log.info(f"IRQ marker = {irq_marker:#06x} (expected 0xCCCC)")
-    assert irq_marker == 0xCCCC, f"EPCW did not restore I=0! IRQ didn't fire. Got {irq_marker:#06x}"
-    dut._log.info("PASS [epcw_restores_i]")
-
-
-@cocotb.test()
-async def test_cycle_count_epcr(dut):
-    """EPCR takes 2 cycles throughput."""
-    dut._log.info("Test: EPCR cycle count")
-
-    clock = Clock(dut.clk, 10, unit="us")
-    cocotb.start_soon(clock.start())
-
-    prog = {}
-    # 0x0000: EPCR R0
-    _place(prog, 0x0000, _encode_epcr(rd=0))
-    # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
-
-    cycles = await _measure_instruction_cycles(dut, prog, 2, "EPCR")
-    assert cycles == 2, f"EPCR: expected 2 cycles, got {cycles}"
-    dut._log.info("PASS [cycle_count_epcr]")
-
-
-@cocotb.test()
-async def test_cycle_count_epcw(dut):
-    """EPCW takes 2 cycles throughput."""
-    dut._log.info("Test: EPCW cycle count")
-
-    clock = Clock(dut.clk, 10, unit="us")
-    cocotb.start_soon(clock.start())
-
-    prog = {}
-    # 0x0000: EPCW R0
-    _place(prog, 0x0000, _encode_epcw(rs=0))
-    # 0x0002: JR R0, 1 (spin)
-    _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
-
-    cycles = await _measure_instruction_cycles(dut, prog, 2, "EPCW")
-    assert cycles == 2, f"EPCW: expected 2 cycles, got {cycles}"
-    dut._log.info("PASS [cycle_count_epcw]")
+    assert irq_marker == 0xCCCC, f"Banked R6 did not restore I=0! IRQ didn't fire. Got {irq_marker:#06x}"
+    dut._log.info("PASS [banked_r6_i_bit]")
 
 
 # ---------------------------------------------------------------------------

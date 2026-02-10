@@ -1,6 +1,6 @@
 # Register File SRAM Analysis
 
-RISCY-V02's register file is an 8-word x 16-bit regular array with 2 read ports and 1 write port (2R1W). Standard cell synthesis implements it using latches and mux trees, but a real chip would use SRAM — the array is perfectly regular and far too large for individual register cells.
+RISCY-V02's register file is a 9-word x 16-bit regular array with 2 read ports and 1 write port (2R1W). Eight words are general-purpose registers (R0–R7), and the 9th word is the banked R6 (interrupt context). When I=1, R6 accesses are redirected to the banked register. Standard cell synthesis implements it using latches and mux trees, but a real chip would use SRAM — the array is perfectly regular and far too large for individual register cells.
 
 This document designs an equivalent 8T SRAM register file from first principles, counts every transistor, and computes the SRAM-adjusted transistor count for fair comparison with the Arlet 6502.
 
@@ -46,9 +46,9 @@ Tx/cell counts are from the PDK's CDL SPICE netlist (one M-line = one MOSFET), t
 
 ### Functional Breakdown
 
-- **128 follower latches** (8 regs x 16 bits): pure storage array, perfectly regular
-- **13 leader latches**: write pipeline (captures w_data, w_sel, w_hi, w_we at negedge)
-- **264 combinational cells**: write decode (3-to-8 + enable + byte select) and 2 read mux trees (8:1 x 16 bits x 2 ports, then 2:1 byte select)
+- **144 follower latches** (8 regs x 16 bits + 1 banked R6 x 16 bits): pure storage array, perfectly regular
+- **14 leader latches**: write pipeline (captures w_data, w_sel, w_hi, w_we, i_bit at negedge)
+- **~280 combinational cells**: write decode (3-to-8 + banking + enable + byte select) and 2 read mux trees (8:1 x 16 bits x 2 ports, then banking mux, then 2:1 byte select)
 
 ## 8T SRAM Register File Design
 
@@ -76,21 +76,26 @@ The read-only port connects N6's gate to QB (complement of stored value), so the
 
 ### Storage Array
 
-8 rows x 16 columns = 128 cells x 8T = **1,024T**
+9 rows x 16 columns = 144 cells x 8T = **1,152T**
 
 ### Write Path
 
 Writes occur during clk=0 through the RW port. We write 8 bits at a time (one byte of one register), requiring row decode, write enable, byte select, and data drivers.
 
-#### Row Decoder (w_sel -> 8 one-hot lines)
+#### Row Decoder (w_sel -> 8 one-hot lines + banking)
 
-A 3-to-8 decoder using the 3 address bits and their complements:
+A 3-to-8 decoder using the 3 address bits and their complements, plus banking logic for row 6 (normal R6 vs banked R6):
 
 | Component | Count | Tx/each | Transistors |
 |---|---|---|---|
 | INV (complement inputs) | 3 | 2 | 6 |
 | AND3 (NAND3 + INV, one per row) | 8 | 8 | 64 |
-| **Subtotal** | | | **70** |
+| INV (~i_bit) | 1 | 2 | 2 |
+| AND2 (row6_normal = row[6] AND ~i_bit) | 1 | 6 | 6 |
+| AND2 (row6_banked = row[6] AND i_bit) | 1 | 6 | 6 |
+| **Subtotal** | | | **84** |
+
+Row 6's decode output is split: row6_normal drives the normal R6, row6_banked drives the banked R6 (9th entry). Rows 0–5 and 7 use the unmodified decode output.
 
 #### Write Enable + Byte Select
 
@@ -105,13 +110,15 @@ Precompute two control signals that gate the write word lines:
 
 #### Word Line Gating
 
-Each decoded row line is ANDed with the byte-select control:
+Each decoded row line (including both row 6 variants) is ANDed with the byte-select control:
 
 | Component | Purpose | Count | Tx/each | Transistors |
 |---|---|---|---|---|
-| AND2 | WL_lo[i] = row[i] AND write_lo | 8 | 6 | 48 |
-| AND2 | WL_hi[i] = row[i] AND write_hi | 8 | 6 | 48 |
-| **Subtotal** | | | | **96** |
+| AND2 | WL_lo[i] = row[i] AND write_lo | 9 | 6 | 54 |
+| AND2 | WL_hi[i] = row[i] AND write_hi | 9 | 6 | 54 |
+| **Subtotal** | | | | **108** |
+
+(9 rows: 8 original with row 6 replaced by row6_normal, plus row6_banked)
 
 #### Write Drivers
 
@@ -122,47 +129,51 @@ Generate complementary data for the bit lines. The same 8 data/complement pairs 
 | INV | ~w_data[i] (complement) | 8 | 2 | 16 |
 | **Subtotal** | | | | **16** |
 
-**Write path total: 196T**
+**Write path total: 222T**
 
 ### Read Path 1 (RW Port, Differential)
 
-During clk=1, the RW port reads r_sel. Differential bit lines (BL/BLB) give correct polarity directly.
+During clk=1, the RW port reads r_sel. Differential bit lines (BL/BLB) give correct polarity directly. Row 6's read word line is split for banking (sharing the ~i_bit INV from the write path).
 
 | Component | Purpose | Count | Tx/each | Transistors |
 |---|---|---|---|---|
 | INV | complement r_sel inputs | 3 | 2 | 6 |
 | AND3 | row decode (one per row) | 8 | 8 | 64 |
+| AND2 | row6_normal = row[6] AND ~i_bit | 1 | 6 | 6 |
+| AND2 | row6_banked = row[6] AND i_bit | 1 | 6 | 6 |
 | PMOS | precharge BL[0..15] | 16 | 1 | 16 |
 | PMOS | precharge BLB[0..15] | 16 | 1 | 16 |
 | PMOS | equalize BL=BLB | 16 | 1 | 16 |
 | MUX2 | byte select (r_hi) | 8 | 6 | 48 |
 | INV | ~r_hi | 1 | 2 | 2 |
-| **Subtotal** | | | | **168** |
+| **Subtotal** | | | | **180** |
 
-For an 8-deep array the bit-line swing is large and fast — no sense amplifiers are needed. Direct bit-line sensing through the byte mux is sufficient.
+For a 9-deep array the bit-line swing is large and fast — no sense amplifiers are needed. Direct bit-line sensing through the byte mux is sufficient.
 
 ### Read Path 2 (R-Only Port, Single-Ended)
 
-The 8T cell's dedicated read port: N5 (access, gated by read word line) in series with N6 (driver, gated by QB). Read bit line (RBL) is pulled high by a keeper; selected cell conditionally discharges it.
+The 8T cell's dedicated read port: N5 (access, gated by read word line) in series with N6 (driver, gated by QB). Read bit line (RBL) is pulled high by a keeper; selected cell conditionally discharges it. Row 6 banking splits share the ~i_bit INV from the write path.
 
 | Component | Purpose | Count | Tx/each | Transistors |
 |---|---|---|---|---|
 | INV | complement r2_sel inputs | 3 | 2 | 6 |
 | AND3 | row decode (one per row) | 8 | 8 | 64 |
+| AND2 | row6_normal = row[6] AND ~i_bit | 1 | 6 | 6 |
+| AND2 | row6_banked = row[6] AND i_bit | 1 | 6 | 6 |
 | PMOS | pull-up keeper RBL[0..15] | 16 | 1 | 16 |
 | MUX2 | byte select (r2_hi) | 8 | 6 | 48 |
 | INV | ~r2_hi | 1 | 2 | 2 |
-| **Subtotal** | | | | **136** |
+| **Subtotal** | | | | **148** |
 
 ### Grand Total
 
 | Component | Transistors | % |
 |---|---|---|
-| Storage array (128 x 8T) | 1,024 | 67.2% |
-| Write path (decode + enable + byte + drivers) | 196 | 12.9% |
-| Read path 1 (RW, differential) | 168 | 11.0% |
-| Read path 2 (R, single-ended) | 136 | 8.9% |
-| **Total** | **1,524** | **100%** |
+| Storage array (144 x 8T) | 1,152 | 67.7% |
+| Write path (decode + enable + byte + drivers) | 222 | 13.0% |
+| Read path 1 (RW, differential) | 180 | 10.6% |
+| Read path 2 (R, single-ended) | 148 | 8.7% |
+| **Total** | **1,702** | **100%** |
 
 ### Gate Transistor Counts Used
 
@@ -182,22 +193,18 @@ All counts use standard CMOS complementary logic:
 
 | | Standard Cell | 8T SRAM |
 |---|---|---|
-| Storage | 141 latches x 20T = 2,820 | 128 cells x 8T = 1,024 |
-| Peripherals | 264 combo cells = 1,854 | Decode + drivers + mux = 500 |
-| **Total** | **4,674** | **1,524** |
-| **Discount** | | **-3,150** |
+| Storage | 157 latches x 20T = 3,140 | 144 cells x 8T = 1,152 |
+| Peripherals | ~264 combo cells = ~1,854 | Decode + drivers + mux = 550 |
+| **Total** | **~TBD** | **1,702** |
+| **Discount** | | **TBD** |
+
+(Standard cell totals will be updated after standalone synthesis of the new regfile.)
 
 The SRAM saves on both storage (8T vs 20T per bit) and peripherals (word-line decode replaces explicit mux trees — asserting one word line selects all 16 bits of one register, eliminating the 8:1 mux per bit that standard cells require).
 
 ## SRAM-Adjusted Figures
 
-| Metric | Standard Cell | SRAM-Adjusted | Arlet 6502 |
-|---|---|---|---|
-| Transistors | 16,330 | **13,180** | 13,082 |
-| vs 6502 | +24.8% | **+0.7%** | baseline |
-| Synthesis area (est.) | 25,023 um² | ~20,601 um² | — |
-
-Area estimate uses average transistor density from the full design (0.653 tx/um²) to convert the 3,150 transistor discount to ~4,822 um² of area savings. This is conservative — SRAM cells are denser than standard cells, so actual area savings would be larger.
+SRAM-adjusted figures will be updated after hardening the new design. The REGFILE_STDCELL_TX and REGFILE_SRAM_TX (1,702) constants in `transistor_count.py` should be updated with values from standalone synthesis of the new regfile.
 
 ## Methodology Notes
 
