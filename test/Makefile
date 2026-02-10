@@ -45,14 +45,14 @@ COCOTB_TEST_MODULES = test
 include $(shell cocotb-config --makefiles)/Makefile.sim
 
 PROJECT_DIR = $(CURDIR)/..
-CLOCK_PERIOD ?= 17
+CLOCK_PERIOD ?= 14
 TT_VENV ?= $(HOME)/ttsetup/venv
 
 .PHONY: harden metrics
 
 harden:
 	cd $(PROJECT_DIR) && \
-	  python3 -c "import json; c=json.load(open('src/config.json')); c['CLOCK_PERIOD']=$(CLOCK_PERIOD); json.dump(c,open('src/config.json','w'),indent=2)" && \
+	  python3 -c "import json; c=json.load(open('src/config.json')); c['CLOCK_PERIOD']=$(CLOCK_PERIOD); c['PNR_SDC_FILE']='dir::timing.sdc'; c['SIGNOFF_SDC_FILE']='dir::timing.sdc'; json.dump(c,open('src/config.json','w'),indent=2)" && \
 	  . $(TT_VENV)/bin/activate && \
 	  python ./tt/tt_tool.py --ihp --create-user-config && \
 	  python ./tt/tt_tool.py --ihp --harden ; \

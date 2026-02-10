@@ -143,6 +143,7 @@ module riscyv02_execute (
   reg [2:0]  r_sel_r;         // Registered regfile read select (set at state transitions)
   reg [2:0]  r2_sel_r;        // Port 2 read select (set at dispatch, stable through execution)
   reg        r_hi_r;          // Registered regfile read hi/lo (set at state transitions)
+  reg        bus_active_r;    // Registered bus_active for E_MEM_HI (set at E_MEM_LO transition)
 
   // tmp[15:0] layout — cycle-to-cycle temporary with overlaid fields:
   //
@@ -570,14 +571,13 @@ module riscyv02_execute (
       E_MEM_HI: begin
         insn_completing = 1'b1;
         w_hi            = 1'b1;
+        bus_active      = bus_active_r;
+        ab              = {tmp[15:8] + {7'b0, ~|tmp[7:0]}, tmp[7:0]};
         if (is_byte_load) begin
           w_data        = op_unsigned ? 8'h00 : {8{r[7]}}; // LBU : LB
           w_we          = 1'b1;
-        end else begin
-          bus_active    = 1'b1;
-          ab            = {tmp[15:8] + {7'b0, ~|tmp[7:0]}, tmp[7:0]};
+        end else
           w_we          = !is_store;
-        end
       end
 
     endcase
@@ -661,9 +661,10 @@ module riscyv02_execute (
         end
 
         E_MEM_LO: begin
-          r_hi_r    <= is_byte_load ? 1'b0 : 1'b1;
-          tmp[7:0]  <= tmp[7:0] + 8'd1;  // Increment for E_MEM_HI address
-          state     <= is_byte_store ? E_IDLE : E_MEM_HI;
+          r_hi_r       <= is_byte_load ? 1'b0 : 1'b1;
+          bus_active_r <= !is_byte_load;
+          tmp[7:0]     <= tmp[7:0] + 8'd1;  // Increment for E_MEM_HI address
+          state        <= is_byte_store ? E_IDLE : E_MEM_HI;
         end
 
         E_MEM_HI: state <= E_IDLE;

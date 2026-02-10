@@ -167,9 +167,9 @@ module tt_um_riscyv02 (
   // -----------------------------------------------------------------------
   // Bus arbitration
   // -----------------------------------------------------------------------
-  wire [15:0] AB  = exec_bus_active ? exec_ab  : fetch_ab;
-  wire        RWB = exec_bus_active ? exec_rwb : 1'b1;
-  wire [7:0]  DO  = exec_dout;
+  (* keep *) wire [15:0] AB  = exec_bus_active ? exec_ab  : fetch_ab;
+  (* keep *) wire        RWB = exec_bus_active ? exec_rwb : 1'b1;
+  (* keep *) wire [7:0]  DO  = exec_dout;
 
   // -----------------------------------------------------------------------
   // SYNC: instruction boundary indicator.
@@ -184,7 +184,7 @@ module tt_um_riscyv02 (
     if (!rst_n) sync_r <= 1'b0;
     else        sync_r <= exec_ir_accept;
 
-  wire SYNC = sync_r;
+  (* keep *) wire SYNC = sync_r;
 
   // -----------------------------------------------------------------------
   // Output muxes (identical protocol to 6502 wrapper)
