@@ -384,8 +384,8 @@ def _encode_cli():
 
 
 def _encode_brk():
-    """Encode BRK -> 16-bit little-endian bytes. [1111100][000010][110] (vector 2, R6)"""
-    insn = (0b1111100 << 9) | (2 << 3) | 6
+    """Encode BRK -> 16-bit little-endian bytes. [1111100][000001][110] (vector 1, R6)"""
+    insn = (0b1111100 << 9) | (1 << 3) | 6
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
@@ -419,13 +419,13 @@ async def test_reset_i_state(dut):
     # 0x0000: JR R0, 0  ; spin at 0x0000
     _place(prog, 0x0000, _encode_jr(rs=0, off6=0))
 
-    # IRQ handler at 0x0004: write marker and spin
-    # 0x0004: LW R1, 16(R0)  ; R1 = 0xDEAD from 0x20
-    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))
-    # 0x0006: SW R1, 24(R0)  ; MEM[0x30] = 0xDEAD (marker)
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=24))
-    # 0x0008: JR R0, 4  ; spin at 0x0008
-    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+    # IRQ handler at 0x0006: write marker and spin
+    # 0x0006: LW R1, 16(R0)  ; R1 = 0xDEAD from 0x10
+    _place(prog, 0x0006, _encode_lw(rd=1, rs1=0, off6=16))
+    # 0x0008: SW R1, 24(R0)  ; MEM[0x18] = 0xDEAD (marker)
+    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, off6=24))
+    # 0x000A: JR R0, 5  ; spin at 0x000A
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))
 
     # Data: marker value
     prog[0x0010] = 0xAD
@@ -476,13 +476,13 @@ async def test_cli_enables_irq(dut):
     # 0x0002: JR R0, 1  ; spin at 0x0002
     _place(prog, 0x0002, _encode_jr(rs=0, off6=1))
 
-    # IRQ handler at 0x0004: write marker and spin
-    # 0x0004: LW R1, 16(R0)  ; R1 = 0xBEEF from 0x20
-    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))
-    # 0x0006: SW R1, 24(R0)  ; MEM[0x30] = 0xBEEF (marker)
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=24))
-    # 0x0008: JR R0, 4  ; spin at 0x0008
-    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+    # IRQ handler at 0x0006: write marker and spin
+    # 0x0006: LW R1, 16(R0)  ; R1 = 0xBEEF from 0x10
+    _place(prog, 0x0006, _encode_lw(rd=1, rs1=0, off6=16))
+    # 0x0008: SW R1, 24(R0)  ; MEM[0x18] = 0xBEEF (marker)
+    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, off6=24))
+    # 0x000A: JR R0, 5  ; spin at 0x000A
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))
 
     # Data: marker value
     prog[0x0010] = 0xEF
@@ -559,10 +559,10 @@ async def test_sei_disables_irq(dut):
     # 0x0002: JR R1, 0      ; jump to 0x0010
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
-    # IRQ handler at 0x0004
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))  # R2 = MEM[0x28] = 0xDEAD
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24)) # MEM[0x30] = R2
-    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))          # spin at 0x0008
+    # IRQ handler at 0x0006
+    _place(prog, 0x0006, _encode_lw(rd=2, rs1=0, off6=20))  # R2 = MEM[0x14] = 0xDEAD
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=24)) # MEM[0x18] = R2
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))          # spin at 0x000A
 
     # Data: jump target
     prog[0x000A] = 0x10
@@ -629,10 +629,10 @@ async def test_reti(dut):
     # 0x0002: JR R1, 0      ; jump to 0x0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
-    # IRQ handler at 0x0004: write marker, RETI
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA (IRQ marker)
-    _place(prog, 0x0008, _encode_reti())                    # return from interrupt
+    # IRQ handler at 0x0006: write marker, RETI
+    _place(prog, 0x0006, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x18] = 0xAAAA
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x1C] = 0xAAAA (IRQ marker)
+    _place(prog, 0x000A, _encode_reti())                    # return from interrupt
 
     # Data: jump target at 0x0A
     prog[0x000A] = 0x20
@@ -717,12 +717,12 @@ async def test_i_bit_masking(dut):
     # 0x0002: JR R1, 0
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
-    # IRQ handler at 0x0004: write fixed marker, NO RETI (spin forever)
+    # IRQ handler at 0x0006: write fixed marker, NO RETI (spin forever)
     # If nested interrupts fired, we'd see different behavior
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xCAFE
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xCAFE
+    _place(prog, 0x0006, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x18] = 0xCAFE
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x1C] = 0xCAFE
     # Spin without RETI - keep IRQB asserted, but I=1 should prevent re-entry
-    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))          # spin at 0x0008
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))          # spin at 0x000A
 
     # Data
     prog[0x000A] = 0x20
@@ -787,9 +787,9 @@ async def test_irq_during_multicycle(dut):
     # 0x0002: JR R1, 0
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
 
-    # IRQ handler at 0x0004: write R5 to marker (R5 set by main code's LW)
-    _place(prog, 0x0004, _encode_sw(rs2=5, rs1=0, off6=30)) # MEM[0x3C] = R5
-    _place(prog, 0x0006, _encode_reti())
+    # IRQ handler at 0x0006: write R5 to marker (R5 set by main code's LW)
+    _place(prog, 0x0006, _encode_sw(rs2=5, rs1=0, off6=30)) # MEM[0x1E] = R5
+    _place(prog, 0x0008, _encode_reti())
 
     # Data
     prog[0x000A] = 0x20
@@ -883,7 +883,7 @@ async def test_irq_interrupts_jr(dut):
     # Program layout:
     # 0x0000: CLI              ; Enable interrupts
     # 0x0002: JR R0, 16        ; Jump to 0x0020 (R0=0, offset=16, addr=0+16*2=0x20)
-    # 0x0004: IRQ vector       ; Handler writes marker, RETI
+    # 0x0006: IRQ vector       ; Handler writes marker, RETI
     #
     # 0x0020: JR target        ; SW marker to prove we got here, then spin
     #
@@ -893,13 +893,13 @@ async def test_irq_interrupts_jr(dut):
     _place(prog, 0x0000, _encode_cli())
     _place(prog, 0x0002, _encode_jr(rs=0, off6=16))  # JR to 0x0020
 
-    # IRQ handler at 0x0004: write 0xBEEF to marker at 0x003C, then RETI
+    # IRQ handler at 0x0006: write 0xBEEF to marker, then RETI
     # First load 0xBEEF into R1
     prog[0x0010] = 0xEF
     prog[0x0011] = 0xBE
-    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))   # R1 = MEM[0x10] = 0xBEEF
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=30)) # MEM[0x3C] = 0xBEEF
-    _place(prog, 0x0008, _encode_reti())
+    _place(prog, 0x0006, _encode_lw(rd=1, rs1=0, off6=16))   # R1 = MEM[0x10] = 0xBEEF
+    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, off6=30)) # MEM[0x1E] = 0xBEEF
+    _place(prog, 0x000A, _encode_reti())
 
     # JR target at 0x0020: write 0xCAFE to marker at 0x0038, then spin
     prog[0x001A] = 0xFE
@@ -1022,10 +1022,10 @@ async def test_cli_atomicity(dut):
     _place(prog, 0x0000, _encode_cli())
     _place(prog, 0x0002, _encode_jr(rs=0, off6=1))  # spin at 0x0002
 
-    # IRQ handler at 0x0004: write marker and spin
-    _place(prog, 0x0004, _encode_lw(rd=1, rs1=0, off6=16))   # R1 = MEM[0x10] = 0xBEEF
-    _place(prog, 0x0006, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[0x18] = 0xBEEF
-    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))          # spin at 0x0008
+    # IRQ handler at 0x0006: write marker and spin
+    _place(prog, 0x0006, _encode_lw(rd=1, rs1=0, off6=16))   # R1 = MEM[0x10] = 0xBEEF
+    _place(prog, 0x0008, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[0x18] = 0xBEEF
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))          # spin at 0x000A
 
     # Data: marker value
     prog[0x0010] = 0xEF
@@ -1215,7 +1215,7 @@ async def test_nmi_basic(dut):
     """NMI fires on falling edge of NMIB, even with I=1 (non-maskable).
 
     After reset I=1, so IRQ would be masked, but NMI ignores I.
-    Handler at $0008 writes a marker to prove it ran.
+    Handler at $0002 writes a marker to prove it ran.
     """
     dut._log.info("Test: NMI basic")
 
@@ -1227,13 +1227,10 @@ async def test_nmi_basic(dut):
     # Main code at $0000: spin loop (I=1 after reset, no CLI)
     _place(prog, 0x0000, _encode_jr(rs=0, off6=0))  # spin at $0000
 
-    # IRQ vector at $0004: spin (should NOT be reached)
-    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))  # spin at $0004
-
-    # NMI handler at $0008: write marker and spin
-    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=16))  # R1 = MEM[$20] = 0xBEEF
-    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[$30] = 0xBEEF
-    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))           # spin at $000C
+    # NMI handler at $0002: write marker and spin
+    _place(prog, 0x0002, _encode_lw(rd=1, rs1=0, off6=16))  # R1 = MEM[$10] = 0xBEEF
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[$18] = 0xBEEF
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))           # spin at $0006
 
     # Data
     prog[0x0010] = 0xEF
@@ -1289,20 +1286,15 @@ async def test_nmi_edge_triggered(dut):
     # Main code: spin at $0000
     _place(prog, 0x0000, _encode_jr(rs=0, off6=0))
 
-    # IRQ vector at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
-
-    # NMI handler at $0008: load marker, store marker+1 (count entries), RETI
-    # First: load current count from $0030
-    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=24))  # R1 = MEM[$30]
-    # Store 0xAAAA as marker (proves handler ran)
-    _place(prog, 0x000A, _encode_lw(rd=2, rs1=0, off6=20))  # R2 = MEM[$28] = 0xAAAA
-    _place(prog, 0x000C, _encode_sw(rs2=2, rs1=0, off6=24)) # MEM[$30] = 0xAAAA
-    # Spin in handler (no RETI — if NMI re-fires we'd jump to $0008 again
+    # NMI handler at $0002: load marker, store marker, write to two locations
+    _place(prog, 0x0002, _encode_lw(rd=1, rs1=0, off6=24))  # R1 = MEM[$18]
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))  # R2 = MEM[$14] = 0xAAAA
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24)) # MEM[$18] = 0xAAAA
+    # Spin in handler (no RETI — if NMI re-fires we'd jump to $0002 again
     # and overwrite marker with something different, but since we write the
     # same value, let's use a different approach: write to TWO locations)
-    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=26)) # MEM[$34] = 0xAAAA (second write)
-    _place(prog, 0x0010, _encode_jr(rs=0, off6=8))           # spin at $0010
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=26)) # MEM[$1A] = 0xAAAA (second write)
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))           # spin at $000A
 
     # Data
     prog[0x0014] = 0xAA
@@ -1347,10 +1339,10 @@ async def test_nmi_edge_triggered(dut):
 
 @cocotb.test()
 async def test_nmi_priority_over_irq(dut):
-    """When both NMI and IRQ are pending, NMI is taken (handler at $0008).
+    """When both NMI and IRQ are pending, NMI is taken (handler at $0002).
 
     CLI enables IRQ, then both NMIB falling edge and IRQB=0 are asserted
-    simultaneously. NMI handler at $0008 should run, not IRQ at $0004.
+    simultaneously. NMI handler at $0002 should run, not IRQ at $0006.
     After NMI entry sets I=1, IRQ stays masked.
     """
     dut._log.info("Test: NMI priority over IRQ")
@@ -1360,40 +1352,27 @@ async def test_nmi_priority_over_irq(dut):
 
     prog = {}
 
-    # Main code: jump past vectors, CLI, spin
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=24))  # R1 = MEM[$18] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))           # JR to $0020
-
-    # IRQ handler at $0004: write IRQ marker
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))   # R2 = MEM[$28] = 0x1111
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=28))  # MEM[$34] = 0x1111
-    # Spin in IRQ handler
-    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
-
-    # NMI handler at $0008 — WAIT, this conflicts with the JR spin above.
-    # Need to restructure: IRQ handler can't use $0008 since that's the NMI vector.
-    prog = {}
-
     # Main code: jump past vectors
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=16))           # JR to $0020
 
-    # IRQ handler at $0004: write IRQ marker, spin
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0x1111
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0x1111
+    # NMI trampoline at $0002: jump to NMI handler at $0030
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=24))           # JR R0, 24 → $0030
 
-    # NMI handler at $0008: write NMI marker, spin
-    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, off6=22))    # R3 = MEM[$2A] = 0x2222
-    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$32] = 0x2222
-    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))            # spin at $000C
+    # IRQ handler at $0006: write IRQ marker
+    _place(prog, 0x0006, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$14] = 0x1111
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$18] = 0x1111
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))            # spin at $000A
 
     # Continue at $0020: CLI, then spin
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_jr(rs=0, off6=17))           # spin at $0022
 
+    # NMI handler at $0030: write NMI marker, spin
+    _place(prog, 0x0030, _encode_lw(rd=3, rs1=0, off6=22))    # R3 = MEM[$16] = 0x2222
+    _place(prog, 0x0032, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$1A] = 0x2222
+    _place(prog, 0x0034, _encode_jr(rs=0, off6=26))           # spin at $0034
+
     # Data
-    prog[0x001E] = 0x20
-    prog[0x001F] = 0x00
     prog[0x0014] = 0x11
     prog[0x0015] = 0x11
     prog[0x0016] = 0x22
@@ -1450,16 +1429,12 @@ async def test_nmi_during_multicycle(dut):
 
     prog = {}
 
-    # Main code: jump past vectors, then LW, then SW to prove LW completed
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
+    # Main code: jump past vectors
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=16))           # JR to $0020
 
-    # IRQ at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
-
-    # NMI handler at $0008: write R5 to marker (R5 was loaded by main code's LW)
-    _place(prog, 0x0008, _encode_sw(rs2=5, rs1=0, off6=26))   # MEM[$1A] = R5
-    _place(prog, 0x000A, _encode_reti())
+    # NMI handler at $0002: write R5 to marker (R5 was loaded by main code's LW)
+    _place(prog, 0x0002, _encode_sw(rs2=5, rs1=0, off6=26))   # MEM[$1A] = R5
+    _place(prog, 0x0004, _encode_reti())
 
     # Continue at $0020: LW into R5, SW R5 to another marker, spin
     _place(prog, 0x0020, _encode_lw(rd=5, rs1=0, off6=24))    # R5 = MEM[$18] = 0x1234
@@ -1528,30 +1503,16 @@ async def test_nmi_second_edge(dut):
     # Main code: spin at $0000
     _place(prog, 0x0000, _encode_jr(rs=0, off6=0))
 
-    # IRQ at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
-
-    # NMI handler at $0008: increment marker word at $0030, then RETI
-    # Load current marker value, add 1 by storing a new known value each time.
-    # Simpler: first NMI writes 0xAAAA, handler always writes same value.
-    # To detect two entries: write to $0030 first time, $0032 second time.
-    # But we can't branch in the handler... simpler approach:
-    # Handler loads counter from $0030, stores 0x0001 to $0030 (first call
-    # changes 0→1), then on second call changes 1→1 (same). That doesn't work.
-    #
-    # Better approach: handler writes 0xAAAA to MEM[R4], then R4 += 2.
-    # But we don't have ADDI yet... Use a different approach:
-    # Handler reads $0030, writes it to $0032, then writes 0xBBBB to $0030.
-    # First NMI: $0030 goes from 0x0000→0xBBBB, $0032 gets 0x0000
-    # Second NMI: $0030 goes from 0xBBBB→0xBBBB, $0032 gets 0xBBBB
-    # Check: $0032 == 0xBBBB proves second NMI ran.
-
-    # NMI handler at $0008:
-    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=24))    # R1 = MEM[$30] (current)
-    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, off6=26))   # MEM[$32] = R1 (copy previous)
-    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=22))    # R2 = MEM[$2C] = 0xBBBB
-    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xBBBB
-    _place(prog, 0x0010, _encode_reti())
+    # NMI handler at $0002:
+    # Handler reads $0018, writes it to $001A, then writes 0xBBBB to $0018.
+    # First NMI: $0018 goes from 0x0000→0xBBBB, $001A gets 0x0000
+    # Second NMI: $0018 goes from 0xBBBB→0xBBBB, $001A gets 0xBBBB
+    # Check: $001A == 0xBBBB proves second NMI ran.
+    _place(prog, 0x0002, _encode_lw(rd=1, rs1=0, off6=24))    # R1 = MEM[$18] (current)
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=26))   # MEM[$1A] = R1 (copy previous)
+    _place(prog, 0x0006, _encode_lw(rd=2, rs1=0, off6=22))    # R2 = MEM[$16] = 0xBBBB
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$18] = 0xBBBB
+    _place(prog, 0x000A, _encode_reti())
 
     # Data
     prog[0x0016] = 0xBB
@@ -1625,13 +1586,10 @@ async def test_nmi_during_rdy_low(dut):
     # Main code at $0000: spin loop
     _place(prog, 0x0000, _encode_jr(rs=0, off6=0))  # spin at $0000
 
-    # IRQ vector at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
-
-    # NMI handler at $0008: write marker and spin
-    _place(prog, 0x0008, _encode_lw(rd=1, rs1=0, off6=16))  # R1 = MEM[$20] = 0xBEEF
-    _place(prog, 0x000A, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[$30] = 0xBEEF
-    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))           # spin at $000C
+    # NMI handler at $0002: write marker and spin
+    _place(prog, 0x0002, _encode_lw(rd=1, rs1=0, off6=16))  # R1 = MEM[$10] = 0xBEEF
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=24)) # MEM[$18] = 0xBEEF
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))           # spin at $0006
 
     # Data
     prog[0x0010] = 0xEF
@@ -1701,13 +1659,10 @@ async def test_wai_irq(dut):
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
-    # IRQ handler at $0004: write marker, RETI
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0xAAAA
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xAAAA
-    _place(prog, 0x0008, _encode_reti())
-
-    # NMI vector at $0008 — conflicts with RETI above. That's fine since
-    # we're not triggering NMI in this test.
+    # IRQ handler at $0006: write marker, RETI
+    _place(prog, 0x0006, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$14] = 0xAAAA
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$18] = 0xAAAA
+    _place(prog, 0x000A, _encode_reti())
 
     # Continue at $0020: CLI, WAI, then post-WAI marker
     _place(prog, 0x0020, _encode_cli())
@@ -1779,16 +1734,12 @@ async def test_wai_nmi(dut):
     prog = {}
 
     # Main code: jump past vectors, WAI (I=1 from reset), then post-WAI marker
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))    # R1 = MEM[$1E] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=16))            # JR to $0020
 
-    # IRQ vector at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
-
-    # NMI handler at $0008: write marker, RETI
-    _place(prog, 0x0008, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0xAAAA
-    _place(prog, 0x000A, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xAAAA
-    _place(prog, 0x000C, _encode_reti())
+    # NMI handler at $0002: write marker, RETI
+    _place(prog, 0x0002, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$14] = 0xAAAA
+    _place(prog, 0x0004, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$18] = 0xAAAA
+    _place(prog, 0x0006, _encode_reti())
 
     # Continue at $0020: WAI (I=1, only NMI or masked IRQ can wake)
     _place(prog, 0x0020, _encode_wai())
@@ -1866,12 +1817,9 @@ async def test_wai_masked_irq_wakes(dut):
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))    # R1 = MEM[$1E] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
 
-    # IRQ handler at $0004: write IRQ marker (should NOT happen)
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$28] = 0xDEAD
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$30] = 0xDEAD
-
-    # NMI vector at $0008: unused
-    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+    # IRQ handler at $0006: write IRQ marker (should NOT happen)
+    _place(prog, 0x0006, _encode_lw(rd=2, rs1=0, off6=20))    # R2 = MEM[$14] = 0xDEAD
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$18] = 0xDEAD
 
     # Continue at $0020: WAI (I=1 from reset)
     _place(prog, 0x0020, _encode_wai())
@@ -1940,18 +1888,21 @@ async def test_stp(dut):
     # Data layout: 0x0E=jump target, 0x10=DEAD, 0x12=BEEF, 0x14=1111, 0x16=2222
     # Markers: 0x18=IRQ, 0x1A=NMI, 0x1C=pre-STP, 0x1E=post-STP
 
-    # Main code: jump past vectors, write pre-STP marker, STP
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=14))    # R1 = MEM[$0E] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))             # JR to $0020
+    # Main code: jump past vectors
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=16))             # JR R0, 16 → $0020
 
-    # IRQ handler at $0004: write IRQ marker (should NOT happen)
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=16))    # R2 = MEM[$10] = 0xDEAD
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))   # MEM[$18] = 0xDEAD
+    # NMI trampoline at $0002 (should NOT fire)
+    _place(prog, 0x0002, _encode_jr(rs=0, off6=24))             # JR R0, 24 → $0030
 
-    # NMI handler at $0008: write NMI marker (should NOT happen)
-    _place(prog, 0x0008, _encode_lw(rd=3, rs1=0, off6=18))    # R3 = MEM[$12] = 0xBEEF
-    _place(prog, 0x000A, _encode_sw(rs2=3, rs1=0, off6=26))   # MEM[$1A] = 0xBEEF
-    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
+    # IRQ handler at $0006: write IRQ marker (should NOT happen)
+    _place(prog, 0x0006, _encode_lw(rd=2, rs1=0, off6=16))     # R2 = MEM[$10] = 0xDEAD
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=24))    # MEM[$18] = 0xDEAD
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))              # spin at $000A
+
+    # NMI handler at $0030: write NMI marker (should NOT happen)
+    _place(prog, 0x0030, _encode_lw(rd=3, rs1=0, off6=18))     # R3 = MEM[$12] = 0xBEEF
+    _place(prog, 0x0032, _encode_sw(rs2=3, rs1=0, off6=26))    # MEM[$1A] = 0xBEEF
+    _place(prog, 0x0034, _encode_jr(rs=0, off6=26))             # spin at $0034
 
     # Continue at $0020: CLI (enable IRQ), write pre-STP marker, STP
     _place(prog, 0x0020, _encode_cli())
@@ -1963,8 +1914,6 @@ async def test_stp(dut):
     _place(prog, 0x002A, _encode_sw(rs2=5, rs1=0, off6=30))   # MEM[$1E] = 0x2222
 
     # Data
-    prog[0x000E] = 0x20
-    prog[0x000F] = 0x00
     prog[0x0010] = 0xAD
     prog[0x0011] = 0xDE
     prog[0x0012] = 0xEF
@@ -2147,11 +2096,11 @@ async def test_cycle_count_stp(dut):
 
 
 # ---------------------------------------------------------------------------
-# Test 33: BRK basic — vectors to $000C, saves EPC, sets I=1
+# Test 33: BRK basic — vectors to $0004, saves EPC, sets I=1
 # ---------------------------------------------------------------------------
 @cocotb.test()
 async def test_brk_basic(dut):
-    """BRK saves EPC = PC+2, sets I=1, and vectors to $000C."""
+    """BRK saves EPC = PC+2, sets I=1, and vectors to $0004."""
     dut._log.info("Test 33: BRK basic")
 
     clock = Clock(dut.clk, 10, unit="us")
@@ -2159,19 +2108,13 @@ async def test_brk_basic(dut):
 
     prog = {}
 
-    # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020 (jump target)
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
-    # 0x0002: JR R1, 0        ; jump past vectors to 0x0020
-    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
+    # 0x0000: JR R0, 16       ; jump past vectors to 0x0020
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=16))
 
-    # Data: jump target
-    prog[0x000A] = 0x20
-    prog[0x000B] = 0x00
-
-    # BRK handler at 0x000C: write marker, RETI
-    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
-    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA
-    _place(prog, 0x0010, _encode_reti())
+    # BRK handler at 0x0004: write marker, RETI
+    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x18] = 0xAAAA
+    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x1C] = 0xAAAA
+    _place(prog, 0x0008, _encode_reti())
 
     # 0x0020: CLI, then BRK
     _place(prog, 0x0020, _encode_cli())
@@ -2231,23 +2174,21 @@ async def test_brk_masks_irq(dut):
 
     prog = {}
 
-    # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
-    # 0x0002: JR R1, 0        ; jump to 0x0020
-    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
+    # 0x0000: JR R0, 16       ; jump to 0x0020
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=16))
 
-    # IRQ handler at 0x0004: write IRQ marker
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=26))  # R2 = MEM[0x34] = 0xCCCC
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=30)) # MEM[0x3C] = 0xCCCC
-    _place(prog, 0x0008, _encode_reti())
+    # BRK trampoline at 0x0004: jump to BRK handler at 0x0030
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=24))          # JR R0, 24 → $0030
 
-    prog[0x000A] = 0x20
-    prog[0x000B] = 0x00
+    # IRQ handler at 0x0006: write IRQ marker
+    _place(prog, 0x0006, _encode_lw(rd=2, rs1=0, off6=26))  # R2 = MEM[0x1A] = 0xCCCC
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=30)) # MEM[0x1E] = 0xCCCC
+    _place(prog, 0x000A, _encode_reti())
 
-    # BRK handler at 0x000C: write BRK marker, RETI
-    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
-    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA
-    _place(prog, 0x0010, _encode_reti())
+    # BRK handler at 0x0030: write BRK marker, RETI
+    _place(prog, 0x0030, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x18] = 0xAAAA
+    _place(prog, 0x0032, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x1C] = 0xAAAA
+    _place(prog, 0x0034, _encode_reti())
 
     # 0x0020: CLI, then BRK (with IRQB held low)
     _place(prog, 0x0020, _encode_cli())
@@ -2313,8 +2254,8 @@ async def test_cycle_count_brk(dut):
 
     # 0x0000: BRK (from reset, I=1, but BRK is unconditional)
     _place(prog, 0x0000, _encode_brk())
-    # BRK handler at 0x000C: spin
-    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))  # JR R0, 6 → spin at 0x000C
+    # BRK handler at 0x0004: spin
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))  # JR R0, 2 → spin at 0x0004
 
     _load_program(dut, prog)
 
@@ -2362,23 +2303,21 @@ async def test_brk_restores_i(dut):
 
     prog = {}
 
-    # 0x0000: LW R1, 5(R0)   ; R1 = MEM[0x0A] = 0x0020
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))
-    # 0x0002: JR R1, 0        ; jump to 0x0020 (past vectors)
-    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))
+    # 0x0000: JR R0, 16       ; jump to 0x0020 (past vectors)
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=16))
 
-    # IRQ handler at 0x0004: write IRQ marker (should NOT fire)
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=26))  # R2 = MEM[0x34] = 0xDEAD
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=30)) # MEM[0x3C] = 0xDEAD
-    _place(prog, 0x0008, _encode_reti())
+    # BRK trampoline at 0x0004: jump to BRK handler at 0x0030
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=24))          # JR R0, 24 → $0030
 
-    prog[0x000A] = 0x20
-    prog[0x000B] = 0x00
+    # IRQ handler at 0x0006: write IRQ marker (should NOT fire)
+    _place(prog, 0x0006, _encode_lw(rd=2, rs1=0, off6=26))  # R2 = MEM[0x1A] = 0xDEAD
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=30)) # MEM[0x1E] = 0xDEAD
+    _place(prog, 0x000A, _encode_reti())
 
-    # BRK handler at 0x000C: write BRK marker, RETI
-    _place(prog, 0x000C, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x30] = 0xAAAA
-    _place(prog, 0x000E, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x38] = 0xAAAA
-    _place(prog, 0x0010, _encode_reti())
+    # BRK handler at 0x0030: write BRK marker, RETI
+    _place(prog, 0x0030, _encode_lw(rd=2, rs1=0, off6=24))  # R2 = MEM[0x18] = 0xAAAA
+    _place(prog, 0x0032, _encode_sw(rs2=2, rs1=0, off6=28)) # MEM[0x1C] = 0xAAAA
+    _place(prog, 0x0034, _encode_reti())
 
     # 0x0020: BRK (I=1 from reset, never cleared)
     _place(prog, 0x0020, _encode_brk())
@@ -2445,12 +2384,9 @@ async def test_banked_r6_read(dut):
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=30))   # R1 = MEM[$1E] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
-    # IRQ handler at $0004: store banked R6 to memory, spin
-    _place(prog, 0x0004, _encode_sw(rs2=6, rs1=0, off6=24))   # MEM[$18] = banked R6
-    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))            # spin at $0006
-
-    # NMI vector at $0008: unused (no NMI in this test)
-    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+    # IRQ handler at $0006: store banked R6 to memory, spin
+    _place(prog, 0x0006, _encode_sw(rs2=6, rs1=0, off6=24))   # MEM[$18] = banked R6
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))            # spin at $0008
 
     # Continue at $0020: CLI, then spin (IRQ will fire immediately)
     _place(prog, 0x0020, _encode_cli())
@@ -2499,15 +2435,9 @@ async def test_banked_r6_redirect(dut):
     _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))   # R1 = MEM[$0A] = $0020
     _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
 
-    # IRQ at $0004: unused
-    _place(prog, 0x0004, _encode_jr(rs=0, off6=2))
-
-    # NMI at $0008: unused
-    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
-
-    # BRK handler at $000C: load redirect target into R6 (banked), RETI
-    _place(prog, 0x000C, _encode_lw(rd=6, rs1=0, off6=18))    # R6 = MEM[$12] = $0030
-    _place(prog, 0x000E, _encode_reti())                       # jump to $0030 (from banked R6)
+    # BRK handler at $0004: load redirect target into R6 (banked), RETI
+    _place(prog, 0x0004, _encode_lw(rd=6, rs1=0, off6=18))    # R6 = MEM[$12] = $0030
+    _place(prog, 0x0006, _encode_reti())                       # jump to $0030 (from banked R6)
 
     # Data
     prog[0x000A] = 0x20  # initial jump target
@@ -2576,21 +2506,17 @@ async def test_banked_r6_i_bit(dut):
     prog = {}
 
     # Main code: jump past vectors
-    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=10))   # R1 = MEM[$0A] = $0020
-    _place(prog, 0x0002, _encode_jr(rs=1, off6=0))            # JR to $0020
+    _place(prog, 0x0000, _encode_jr(rs=0, off6=16))             # JR R0, 16 → $0020
 
-    # IRQ handler at $0004: write IRQ marker, spin
-    _place(prog, 0x0004, _encode_lw(rd=2, rs1=0, off6=20))   # R2 = MEM[$14] = 0xCCCC
-    _place(prog, 0x0006, _encode_sw(rs2=2, rs1=0, off6=24))  # MEM[$18] = 0xCCCC
-    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))            # spin at $0008
+    # BRK trampoline at $0004: jump to BRK handler at $003C
+    _place(prog, 0x0004, _encode_jr(rs=0, off6=30))             # JR R0, 30 → $003C
 
-    # BRK handler at $000C: load target with I=0 into banked R6, then RETI
-    _place(prog, 0x000C, _encode_lw(rd=6, rs1=0, off6=18))    # R6 = MEM[$12] = $0030
-    _place(prog, 0x000E, _encode_reti())                       # PC=$0030, I=0 (bit 0 of R6)
+    # IRQ handler at $0006: write IRQ marker, spin
+    _place(prog, 0x0006, _encode_lw(rd=2, rs1=0, off6=20))     # R2 = MEM[$14] = 0xCCCC
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=24))    # MEM[$18] = 0xCCCC
+    _place(prog, 0x000A, _encode_jr(rs=0, off6=5))              # spin at $000A
 
     # Data
-    prog[0x000A] = 0x20  # initial jump target
-    prog[0x000B] = 0x00
     prog[0x0012] = 0x30  # banked R6 target: $0030, bit 0 = 0 (I=0)
     prog[0x0013] = 0x00
     prog[0x0014] = 0xCC  # IRQ marker value
@@ -2598,10 +2524,14 @@ async def test_banked_r6_i_bit(dut):
 
     # Continue at $0020: BRK (I=1 from reset, no CLI needed — BRK is unconditional)
     _place(prog, 0x0020, _encode_brk())
-    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))           # spin (unreachable)
+    _place(prog, 0x0022, _encode_jr(rs=0, off6=17))             # spin (unreachable)
 
     # Target at $0030: spin — I=0, so if IRQB=0, IRQ should fire
-    _place(prog, 0x0030, _encode_jr(rs=0, off6=24))           # spin at $0030
+    _place(prog, 0x0030, _encode_jr(rs=0, off6=24))             # spin at $0030
+
+    # BRK handler at $003C: load target with I=0 into banked R6, then RETI
+    _place(prog, 0x003C, _encode_lw(rd=6, rs1=0, off6=18))      # R6 = MEM[$12] = $0030
+    _place(prog, 0x003E, _encode_reti())                         # PC=$0030, I=0 (bit 0 of R6)
 
     # Clear marker
     prog[0x0018] = 0x00

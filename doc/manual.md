@@ -60,37 +60,37 @@ There is no vector fetch; code is placed directly at address $0000. Software mus
 
 RISCY-V02 supports maskable IRQ and non-maskable NMI interrupts.
 
-**Vector table** (4-byte spacing for two-instruction trampolines):
+**Vector table** (2-byte spacing; IRQ last for inline handler):
 
 | Vector ID | Address | Trigger |
 |---|---|---|
 | RESET | $0000 | RESB rising edge |
-| 0 (IRQ) | $0004 | IRQB low, level-sensitive, masked by I=1 |
-| 1 (NMI) | $0008 | NMIB falling edge, non-maskable |
-| 2 (BRK) | $000C | BRK instruction, unconditional |
+| 0 (NMI) | $0002 | NMIB falling edge, non-maskable |
+| 1 (BRK) | $0004 | BRK instruction, unconditional |
+| 2 (IRQ) | $0006 | IRQB low, level-sensitive, masked by I=1 |
 
-Vector addresses are computed as `(vector_id + 1) * 4`. Each vector has room for a two-instruction trampoline (LW + JR) to reach the actual handler.
+Vector addresses are computed as `(vector_id + 1) * 2`. Each vector slot is one instruction (2 bytes) — enough for a JR trampoline to reach the actual handler. IRQ is placed last so its handler can run inline without a jump, since nothing follows it.
 
 **Instruction synthesis:** All interrupt entry (IRQ, NMI, BRK) uses the same mechanism. The hardware writes a synthetic INT instruction into the instruction register (ir) encoding the vector ID and destination register (R6). This synthetic instruction then executes through the normal decode path — no special-case interrupt logic in the execute unit. IRQ and NMI are *internal opcodes*: they use instruction encodings that differ by a single bit (ir[3]), synthesized by the interrupt controller rather than fetched from memory. BRK is the software-accessible form of the same instruction family. Since all three share the same encoding format, software can also trigger IRQ/NMI vectors directly by encoding the corresponding INT instruction.
 
 **IRQ entry (when IRQB=0 and I=0):**
 1. Complete the current instruction
-2. Synthesize INT instruction with vector 0 into ir
+2. Synthesize INT instruction with vector 2 into ir
 3. Save banked R6 = (next_PC | I) — return address with I bit in bit 0
 4. Set I = 1 — disable further interrupts
-5. Jump to $0004
+5. Jump to $0006
 
 **NMI entry (on NMIB falling edge, regardless of I):**
 1. Complete the current instruction
-2. Synthesize INT instruction with vector 1 into ir
+2. Synthesize INT instruction with vector 0 into ir
 3. Save banked R6 = (next_PC | I) — overwrites any previous banked R6
 4. Set I = 1 — disable IRQs
-5. Jump to $0008
+5. Jump to $0002
 
 **BRK entry (unconditional, regardless of I):**
 1. Save banked R6 = (PC+2 | I) — return address with I bit in bit 0
 2. Set I = 1 — disable IRQs
-3. Jump to $000C
+3. Jump to $0004
 
 NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low does not re-trigger. NMIB must return high and fall again for a new NMI. NMI has priority over IRQ; if both are pending simultaneously, NMI is taken first, and the subsequent I=1 masks the IRQ.
 
@@ -612,13 +612,13 @@ Enables interrupts by clearing the I bit. After CLI, a pending IRQ (IRQB=0) will
 [1111100][vector:6][rd:3]
 ```
 
-`banked_rd = (PC+2 | I); I = 1; PC = (vector[1:0] + 1) * 4`
+`banked_rd = (PC+2 | I); I = 1; PC = (vector[1:0] + 1) * 2`
 
 Triggers a software interrupt. Saves the return address (with I bit in bit 0) to the banked destination register, disables interrupts, and vectors to the handler address determined by the vector ID. The vector field is 6 bits; only the low 2 bits select the handler address.
 
-BRK is the conventional name for `INT 2, R6` (vector 2 → $000C). Software can also trigger IRQ and NMI vectors: `INT 0, R6` (→ $0004) and `INT 1, R6` (→ $0008). The rd field should always be R6 for correct banking behavior. INT is unconditional — it fires regardless of the I bit.
+BRK is the conventional name for `INT 1, R6` (vector 1 → $0004). Software can also trigger NMI and IRQ vectors: `INT 0, R6` (→ $0002) and `INT 2, R6` (→ $0006). The rd field should always be R6 for correct banking behavior. INT is unconditional — it fires regardless of the I bit.
 
-Hardware IRQ and NMI entry synthesize exactly the same instruction encoding into the instruction register, with vectors 0 and 1 respectively. The synthetic instructions differ by a single bit (ir[3]). This is the same mechanism — the only difference is that hardware interrupts don't advance the PC (so RETI returns to the interrupted instruction), while software INT advances PC+2 (so RETI returns past the INT instruction).
+Hardware NMI and IRQ entry synthesize exactly the same instruction encoding into the instruction register, with vectors 0 and 2 respectively. This is the same mechanism — the only difference is that hardware interrupts don't advance the PC (so RETI returns to the interrupted instruction), while software INT advances PC+2 (so RETI returns past the INT instruction).
 
 **Warning:** INT overwrites banked R6 like any interrupt entry. If an NMI interrupts an INT handler before it saves R6, the return address is lost.
 
@@ -632,8 +632,8 @@ Hardware IRQ and NMI entry synthesize exactly the same instruction encoding into
 
 Halts execution until an interrupt signal arrives. The PC is advanced past WAI before halting, so the return address always points to the next instruction.
 
-- **NMI:** Taken immediately (vectors to $0008). RETI returns past WAI.
-- **IRQ with I=0:** Taken (vectors to $0004). RETI returns past WAI.
+- **NMI:** Taken immediately (vectors to $0002). RETI returns past WAI.
+- **IRQ with I=0:** Taken (vectors to $0006). RETI returns past WAI.
 - **IRQ with I=1:** WAI wakes and resumes at the next instruction without entering a handler (65C02-style hint behavior).
 
 If an interrupt is already pending when WAI executes, it is serviced immediately without entering the wait state.
@@ -726,7 +726,7 @@ Opcode  grp  sub  Instruction   Payload
 1111    111  001  SEI           [000000000]
 1111    111  010  CLI           [000000000]
 1111    111  011  RETI          [000000000]
-1111    111  100  INT           [vector:6][rd:3]    (BRK = vector 2, rd = R6)
+1111    111  100  INT           [vector:6][rd:3]    (BRK = vector 1, rd = R6)
 1111    111  101  WAI           [000000000]
 1111    111  111  STP           [000000000]
 

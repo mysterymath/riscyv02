@@ -188,9 +188,21 @@ module tt_um_riscyv02 (
 
   // -----------------------------------------------------------------------
   // Output muxes (identical protocol to 6502 wrapper)
+  //
+  // DO and AB are routed through bus_keep modules so that the (* keep *)
+  // net names are guaranteed to survive synthesis as real path waypoints.
+  // Without the hierarchy barrier, synthesis can invert or restructure
+  // logic so that the critical path bypasses the kept net, breaking the
+  // SDC false-path constraints that rely on those names.
   // -----------------------------------------------------------------------
-  assign uo_out  = mux_sel ? {6'b0, SYNC, RWB} : AB[7:0];
-  assign uio_out = mux_sel ? DO : AB[15:8];
+  wire [7:0] do_kept, ab_lo_kept, ab_hi_kept;
+
+  bus_keep u_do_keep    (.in(DO),       .out(do_kept));
+  bus_keep u_ab_lo_keep (.in(AB[7:0]),  .out(ab_lo_kept));
+  bus_keep u_ab_hi_keep (.in(AB[15:8]), .out(ab_hi_kept));
+
+  assign uo_out  = mux_sel ? {6'b0, SYNC, RWB} : ab_lo_kept;
+  assign uio_out = mux_sel ? do_kept            : ab_hi_kept;
 
   // uio_oe: tristate during mux_sel read cycles, drive otherwise
   always @(*) begin
@@ -203,4 +215,19 @@ module tt_um_riscyv02 (
   // Unused
   wire _unused = &{ena, ui_in[7:3], 1'b0};
 
+endmodule
+
+// =========================================================================
+// Bus keep — keep_hierarchy prevents synthesis from restructuring logic
+// across the port boundary, ensuring that (* keep *) net names (DO, AB)
+// in the parent module are always on the timing path.  This makes SDC
+// set_false_path -through constraints on those nets robust against
+// synthesis inversions or restructuring.
+// =========================================================================
+(* keep_hierarchy *)
+module bus_keep (
+    input  wire [7:0] in,
+    output wire [7:0] out
+);
+    assign out = in;
 endmodule

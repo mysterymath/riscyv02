@@ -71,11 +71,24 @@ def main():
     with open(stat_path) as f:
         stat = json.load(f)
 
-    # Use first module's cell counts
+    # Use top module's cell counts (prefer tt_um_* over sub-modules)
     modules = stat["modules"]
-    module_name = next(iter(modules))
+    top_modules = [m for m in modules if "tt_um_" in m]
+    module_name = top_modules[0] if top_modules else next(iter(modules))
     display_name = module_name.lstrip("\\")
-    cells_by_type = modules[module_name]["num_cells_by_type"]
+    cells_by_type = dict(modules[module_name]["num_cells_by_type"])
+
+    # Flatten sub-module references: replace sub-module entries with their cells
+    changed = True
+    while changed:
+        changed = False
+        for cell in list(cells_by_type):
+            sub_key = f"\\{cell}"
+            if cell not in cdl_counts and sub_key in modules:
+                count = cells_by_type.pop(cell)
+                for sub_cell, sub_count in modules[sub_key]["num_cells_by_type"].items():
+                    cells_by_type[sub_cell] = cells_by_type.get(sub_cell, 0) + count * sub_count
+                changed = True
 
     # Validate all cells exist in CDL
     missing = [c for c in cells_by_type if c not in cdl_counts]
