@@ -180,7 +180,7 @@ module riscyv02_execute (
   wire [2:0] w_sel_mux = is_linking ? LINK_REG :
                          is_fixed_dest ? T0_REG : ir[2:0];
 
-  reg  [2:0] r2_sel_r;  // Registered at dispatch; avoids ir decode on critical dout path
+  wire [2:0] r2_sel = ir[8:6];  // rs2 at fixed position in both S-format and C R-type
   reg        r2_hi_r;   // Registered; alternates 0/1 across states (lo then hi)
 
   riscyv02_regfile u_regfile (
@@ -194,7 +194,7 @@ module riscyv02_execute (
     .r_sel  (r_sel),
     .r_hi   (r_hi),
     .r      (r),
-    .r2_sel (r2_sel_r),
+    .r2_sel (r2_sel),
     .r2_hi  (r2_hi_r),
     .r2     (r2)
   );
@@ -355,8 +355,10 @@ module riscyv02_execute (
             w_data = alu_result;
             w_hi   = 1'b0;
             w_we   = 1'b1;
-          end else
-            alu_b = {{2{off6[5]}}, off6};            // unscaled byte offset
+          end else if (is_store)
+            alu_b = {{2{ir[5]}}, ir[5:0]};           // store off6 at [5:0]
+          else
+            alu_b = {{2{off6[5]}}, off6};             // load off6 at [8:3]
         end else if (is_jr_jalr) begin
           // JR/JALR address computation low byte
           alu_a      = r;
@@ -451,7 +453,7 @@ module riscyv02_execute (
             w_we            = 1'b1;
             insn_completing = 1'b1;
           end else
-            alu_b = {8{off6[5]}};  // sign extension
+            alu_b = {8{is_store ? ir[5] : off6[5]}};  // sign extension
         end else if (is_jr_jalr) begin
           // JR/JALR address computation high byte
           alu_b           = {8{off6[5]}};
@@ -691,10 +693,6 @@ module riscyv02_execute (
       if (ir_accept) begin
         pc <= pc + 16'd2;
         ir <= fetch_ir;
-        // Stores (SB=1001, SW=1010) have rs2 at [2:0]; all others at [8:6].
-        // Registered here to break ir decode → regfile → dout critical path.
-        r2_sel_r <= (fetch_ir[15:12] == 4'b1001 || fetch_ir[15:12] == 4'b1010) ?
-                    fetch_ir[2:0] : fetch_ir[8:6];
         r2_hi_r  <= 1'b0;
         if (fetch_ir[15:9] == 7'b1111100) begin
           pc[0] <= i_bit;         // Stash I flag

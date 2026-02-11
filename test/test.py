@@ -44,11 +44,12 @@ def _encode_lw(rd, rs1, off6):
 
 
 def _encode_sw(rs2, rs1, off6):
-    """Encode SW rs2, off6(rs1) -> 16-bit little-endian bytes. off6 is byte offset."""
+    """Encode SW rs2, off6(rs1). Store format: [1010][rs1:3][rs2:3][off6:6]."""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs2 <= 7 and 0 <= rs1 <= 7
     off6 &= 0x3F
-    return _encode_s_format(0b1010, off6, rs1, rs2)
+    insn = (0b1010 << 12) | (rs1 << 9) | (rs2 << 6) | off6
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 def _encode_jr(rs, off6):
@@ -2647,11 +2648,12 @@ def _encode_lbu(rs1, off6, rd):
 
 
 def _encode_sb(rs1, off6, rs2):
-    """Encode SB rs2, off6(rs1) -> 16-bit little-endian bytes. S-format."""
+    """Encode SB rs2, off6(rs1). Store format: [1001][rs1:3][rs2:3][off6:6]."""
     assert -32 <= off6 <= 31, f"off6 out of range: {off6}"
     assert 0 <= rs2 <= 7 and 0 <= rs1 <= 7
     off6 &= 0x3F
-    return _encode_s_format(0b1001, off6, rs1, rs2)
+    insn = (0b1001 << 12) | (rs1 << 9) | (rs2 << 6) | off6
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
 # ---------------------------------------------------------------------------
