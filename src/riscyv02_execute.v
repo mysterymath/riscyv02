@@ -10,8 +10,8 @@
 //
 // All instruction state is held in a single 16-bit ir register containing the
 // raw instruction word (or a synthesized pseudo-instruction for interrupts).
-// Instruction identity (op) and fields (off6, register selects) are derived
-// combinationally from ir, eliminating registered decode state.
+// All decode properties are derived directly from ir bits — no intermediate
+// opcode encoding. This makes decode cost transparent for ISA optimization.
 //
 // All instructions dispatch to E_EXEC_LO, then optionally continue to
 // E_EXEC_HI (two-cycle ops). Memory instructions proceed from E_EXEC_HI
@@ -31,8 +31,7 @@
 // All other formats use the full 4-bit opcode.
 //
 // Within C-format, bits [14:12] = group and [11:9] = sub identify the
-// specific instruction, with op = {group, sub} read directly from the
-// instruction word. S-format places rs1 at [11:9], off6 at [8:3].
+// specific instruction. S-format places rs1 at [11:9], off6 at [8:3].
 // ============================================================================
 
 module riscyv02_execute (
@@ -77,88 +76,91 @@ module riscyv02_execute (
   reg        i_bit;     // Interrupt disable flag (0=enabled, 1=disabled)
 
   // -------------------------------------------------------------------------
-  // Combinational instruction decode from ir
+  // Instruction decode: all properties derived directly from ir
+  //
+  // No intermediate "op" encoding — every property is a visible function
+  // of ir bits, making decode cost transparent for ISA optimization.
   // -------------------------------------------------------------------------
-  // op encoding: [5:3] = group, [2:0] = sub-opcode with meaningful bit properties
-  // Group 000 — System (single-cycle, ISA grp 111 remapped here)
-  localparam OP_NOP    = 6'b000_000;  // 0
-  localparam OP_SEI    = 6'b000_001;  // 1
-  localparam OP_CLI    = 6'b000_010;  // 2
-  localparam OP_RETI   = 6'b000_011;  // 3
-  localparam OP_WAI    = 6'b000_101;  // 5
-  localparam OP_INT = 6'b000_110; // 6 — software/hardware interrupt
-  localparam OP_STP    = 6'b000_111;  // 7
-  // Group 001 — Memory (loads, stores, AUIPC)
-  localparam OP_LW     = 6'b001_000;  // 8
-  localparam OP_LB     = 6'b001_001;  // 9
-  localparam OP_LBU    = 6'b001_010;  // 10
-  localparam OP_AUIPC  = 6'b001_011;  // 11
-  localparam OP_SW     = 6'b001_100;  // 12
-  localparam OP_SB     = 6'b001_101;  // 13
-  // Group 010 — Wide two-cycle (J, JAL, LUI)
-  localparam OP_J      = 6'b010_000;  // 16
-  localparam OP_JAL    = 6'b010_001;  // 17
-  localparam OP_LUI    = 6'b010_100;  // 20
-  // Group 011 — ALU RR (direct-mapped, sub = alu function)
-  localparam OP_ADD    = 6'b011_000;  // 24
-  localparam OP_SUB    = 6'b011_001;  // 25
-  localparam OP_AND    = 6'b011_010;  // 26
-  localparam OP_OR     = 6'b011_011;  // 27
-  localparam OP_XOR    = 6'b011_100;  // 28
-  localparam OP_SLT    = 6'b011_101;  // 29
-  localparam OP_SLTU   = 6'b011_110;  // 30
-  // Group 100 — Shift ([2]=immediate, [1]=right, [0]=arithmetic)
-  localparam OP_SLL    = 6'b100_000;  // 32
-  localparam OP_SRL    = 6'b100_010;  // 34
-  localparam OP_SRA    = 6'b100_011;  // 35
-  localparam OP_SLLI   = 6'b100_100;  // 36
-  localparam OP_SRLI   = 6'b100_110;  // 38
-  localparam OP_SRAI   = 6'b100_111;  // 39
-  // Group 101 — Control (branches, LI, JR, JALR)
-  localparam OP_BZ     = 6'b101_000;  // 40
-  localparam OP_BNZ    = 6'b101_001;  // 41
-  localparam OP_BLTZ   = 6'b101_010;  // 42
-  localparam OP_BGEZ   = 6'b101_011;  // 43
-  localparam OP_LI     = 6'b101_100;  // 44
-  localparam OP_JR     = 6'b101_110;  // 46
-  localparam OP_JALR   = 6'b101_111;  // 47
-  // Group 110 — ALU Immediate (parallel sub-opcodes to group 011)
-  localparam OP_ADDI   = 6'b110_000;  // 48
-  localparam OP_ANDI   = 6'b110_010;  // 50
-  localparam OP_ORI    = 6'b110_011;  // 51
-  localparam OP_XORI   = 6'b110_100;  // 52
-  localparam OP_SLTIF  = 6'b110_101;  // 53
-  localparam OP_SLTIUF = 6'b110_110;  // 54
-  localparam OP_XORIF  = 6'b110_111;  // 55
 
-  localparam LINK_REG = 3'd6;  // R6 is the link register for JAL/JALR
-  localparam T0_REG   = 3'd2;  // R2 is t0 for fixed-destination IF-type ops
-
-  // Combinational op decode: maps ir to internal group:sub encoding
-  reg [5:0] op;
-  always @(*) begin
-    if      (ir[15:13] == 3'b000)                          op = OP_LUI;
-    else if (ir[15:13] == 3'b001)                          op = OP_AUIPC;
-    else if (ir[15:12] == 4'b0100)                         op = OP_J;
-    else if (ir[15:12] == 4'b0101)                         op = OP_JAL;
-    else if (ir[15:12] == 4'b0110)                         op = OP_LB;
-    else if (ir[15:12] == 4'b0111)                         op = OP_LBU;
-    else if (ir[15:12] == 4'b1000)                         op = OP_LW;
-    else if (ir[15:12] == 4'b1001)                         op = OP_SB;
-    else if (ir[15:12] == 4'b1010)                         op = OP_SW;
-    else if (ir[14:12] == 3'b111 && ir[11:9] == 3'b100)   op = OP_INT;
-    else if (ir[14:12] == 3'b111)                          op = {3'b000, ir[11:9]};
-    else if (ir[15])                                       op = ir[14:9];
-    else                                                   op = OP_NOP;
-  end
-
-  // Instruction fields derived directly from ir
+  // Instruction fields
   wire [5:0] off6 = ir[8:3];
 
-  // Format detection from ir (used for r_sel derivation)
-  wire ir_fmt_u = ir[15:14] == 2'b00;
-  wire ir_fmt_j = ir[15:13] == 3'b010;
-  wire ir_fmt_c = ir[15] && (ir[14] || (ir[13] && ir[12]));
+  // Format detection from ir[15:12]
+  wire fmt_u = !ir[15] && !ir[14];                       // 00xx: LUI, AUIPC
+  wire fmt_j = !ir[15] && ir[14] && !ir[13];             // 010x: J, JAL
+  wire fmt_c = ir[15] && (ir[14] || (ir[13] && ir[12])); // 1011..1111
+  // S-format is the residual: 0110..1010
+
+  // --- Instruction identity ---
+
+  // U-format
+  wire is_lui   = fmt_u && !ir[13];           // 000x
+  wire is_auipc = fmt_u && ir[13];            // 001x
+
+  // J-format
+  wire is_j   = fmt_j && !ir[12];             // 0100
+  wire is_jal = fmt_j && ir[12];              // 0101
+
+  // S-format (individual opcodes from ir[15:12])
+  wire is_lb  = ir[15:12] == 4'b0110;
+  wire is_lbu = ir[15:12] == 4'b0111;
+  wire is_lw  = ir[15:12] == 4'b1000;
+  wire is_sb  = ir[15:12] == 4'b1001;
+  wire is_sw  = ir[15:12] == 4'b1010;
+
+  // C-format groups (ir[15:12])
+  wire is_alu_rr      = ir[15:12] == 4'b1011;  // grp 011
+  wire is_shift       = ir[15:12] == 4'b1100;  // grp 100
+  wire is_control     = ir[15:12] == 4'b1101;  // grp 101
+  wire is_alu_imm_grp = ir[15:12] == 4'b1110;  // grp 110
+  wire is_system      = ir[15:12] == 4'b1111;  // grp 111
+
+  // System group (sub = ir[11:9])
+  wire is_sei  = is_system && ir[11:9] == 3'b001;
+  wire is_cli  = is_system && ir[11:9] == 3'b010;
+  wire is_reti = is_system && ir[11:9] == 3'b011;
+  wire is_int  = is_system && ir[11:9] == 3'b100;
+  wire is_wai  = is_system && ir[11:9] == 3'b101;
+  wire is_stp  = is_system && ir[11:9] == 3'b111;
+
+  // Control group (sub = ir[11:9])
+  wire is_branch  = is_control && !ir[11];              // sub 0xx
+  wire is_li      = is_control && ir[11:9] == 3'b100;
+  wire is_jr_jalr = is_control && ir[11] && ir[10];     // sub 11x
+
+  // --- Behavioral properties ---
+
+  localparam LINK_REG = 3'd6;
+  localparam T0_REG   = 3'd2;
+
+  // Memory
+  wire is_load       = is_lb || is_lbu || is_lw;
+  wire is_store      = is_sb || is_sw;
+  wire is_mem_addr   = is_load || is_store || is_auipc;
+  wire is_byte_load  = is_lb || is_lbu;
+  wire is_byte_store = is_sb;
+
+  // Jump/link
+  wire is_jump_imm = fmt_j;
+  wire is_linking  = is_jal || (is_jr_jalr && ir[9]);   // JAL, JALR
+
+  // Branch properties (sub bits within control group)
+  wire is_sign_branch = is_branch && ir[10];             // BLTZ, BGEZ
+  wire branch_inv     = ir[9];                           // BNZ/BGEZ invert
+
+  // Shift properties (sub bits within shift group)
+  wire is_shift_rr    = is_shift && !ir[11];             // sub[2]=0: register
+  wire is_right_shift = is_shift && ir[10];              // sub[1]=1: right
+  wire is_arith_shift = is_shift && ir[9];               // sub[0]=1: arithmetic
+
+  // ALU sub-opcode properties (ir[11:9] = sub within ALU groups)
+  wire is_slt       = is_alu_rr      && ir[11] && (ir[10] ^ ir[9]);
+  wire is_slt_imm   = is_alu_imm_grp && ir[11] && (ir[10] ^ ir[9]);
+  wire is_alu_imm   = is_alu_imm_grp && !(ir[11] && (ir[10] ^ ir[9]));
+  wire is_fixed_dest = is_alu_imm_grp && ir[11] && |ir[10:9];
+
+  // Two-cycle: everything except system group single-cycle ops
+  wire is_two_cycle = !is_system;
 
   // ==========================================================================
   // Shared Infrastructure
@@ -179,7 +181,7 @@ module riscyv02_execute (
                          is_fixed_dest ? T0_REG : ir[2:0];
 
   wire [2:0] r2_sel = is_store ? ir[2:0] : ir[8:6];
-  wire r2_hi_mux = is_shift ? 1'b0 : r_hi;
+  wire r2_hi_mux = is_shift ? 1'b0 : r_hi;  // Shift reads lo byte via port 2
 
   riscyv02_regfile u_regfile (
     .clk    (clk),
@@ -240,40 +242,8 @@ module riscyv02_execute (
     rev7 = {v[0], v[1], v[2], v[3], v[4], v[5], v[6]};
   endfunction
 
-  // Group checks (one 3-bit compare each)
-  wire is_mem_addr    = op[5:3] == 3'b001;           // Group 001
-  wire is_alu_rr      = op[5:3] == 3'b011;           // Group 011
-  wire is_alu_imm_grp = op[5:3] == 3'b110;           // Group 110
-  wire is_shift       = op[5:3] == 3'b100;           // Group 100
-  wire is_control     = op[5:3] == 3'b101;           // Group 101
-  // Memory group properties
-  wire is_store     = is_mem_addr && op[2] && !op[1];   // SW, SB
-  wire is_byte_load = is_mem_addr && !op[2] && (op[1] ^ op[0]); // LB, LBU
-  // ALU sub-groups (parallel encoding between groups 011 and 110)
-  wire is_slt       = is_alu_rr      && op[2] && (op[1] ^ op[0]);
-  wire is_slt_imm   = is_alu_imm_grp && op[2] && (op[1] ^ op[0]);
-  wire is_alu_imm   = is_alu_imm_grp && !(op[2] && (op[1] ^ op[0]));
-  wire is_fixed_dest = is_alu_imm_grp && op[2] && |op[1:0];
-  // Shift properties — pure bit extraction
-  wire is_shift_rr    = is_shift && !op[2];
-  wire is_right_shift = is_shift && op[1];
-  wire is_arith_shift = is_shift && op[0];
-  // Control group properties
-  wire is_branch      = is_control && !op[2];         // BZ,BNZ,BLTZ,BGEZ (sub 0xx)
-  wire is_sign_branch = is_branch && op[1];           // BLTZ,BGEZ
-  wire is_jr_jalr     = is_control && op[2] && op[1]; // JR(110),JALR(111)
-  // Jump
-  wire is_jump_imm    = op[5:3] == 3'b010 && !op[2]; // J(16),JAL(17)
-  wire is_linking     = (is_jump_imm || is_jr_jalr) && op[0]; // JAL,JALR
-  // Sub-opcode properties (named to avoid raw bit tests in behavioral code)
-  wire is_byte_store = is_store && op[0];     // SB (vs SW)
-  wire op_unsigned   = op[1]; // Unsigned variant: SLTU/SLTIUF/LBU (vs SLT/SLTIF/LB)
-  wire branch_inv    = op[0]; // Branch inversion: BNZ/BGEZ invert condition
-  wire is_int   = (op == OP_INT); // INT instruction (BRK / hw interrupt)
-  wire is_two_cycle  = |op[5:3]; // Non-system group → needs E_EXEC_HI
-
   // -------------------------------------------------------------------------
-  // Combinational register-file select from (state, ir, op)
+  // Combinational register-file select from (state, ir)
   // -------------------------------------------------------------------------
 
   // r_sel: read port 1 register select
@@ -282,13 +252,13 @@ module riscyv02_execute (
   always @(*) begin
     if (state == E_MEM_LO || state == E_MEM_HI)
       r_sel = ir[2:0];
-    else if (op == OP_RETI)
+    else if (is_reti)
       r_sel = 3'd6;                                 // Banked R6
-    else if (ir_fmt_c &&
+    else if (fmt_c &&
              ir[14:12] != 3'b011 &&
              !(ir[14:12] == 3'b100 && !ir[11]))
       r_sel = ir[2:0];                              // C I-type: rd/rs at [2:0]
-    else if (ir_fmt_c || ir_fmt_u || ir_fmt_j)
+    else if (fmt_c || fmt_u || fmt_j)
       r_sel = ir[5:3];                              // C R-type, U, J: rs1 at [5:3]
     else
       r_sel = ir[11:9];                             // S-format: rs1 at [11:9]
@@ -325,8 +295,8 @@ module riscyv02_execute (
   wire take_nmi = fsm_ready && (nmi_pending || nmi_edge) && !nmi_ack;
   wire take_irq = fsm_ready && !irqb && !i_bit && !take_nmi;
   assign ir_accept      = fsm_ready && ir_valid && !fetch_flush;
-  assign waiting = (state == E_IDLE) && (op == OP_WAI);
-  assign stopped = (state == E_IDLE) && (op == OP_STP);
+  assign waiting = (state == E_IDLE) && is_wai;
+  assign stopped = (state == E_IDLE) && is_stp;
 
   // ==========================================================================
   // State-Property Block
@@ -355,12 +325,12 @@ module riscyv02_execute (
     jump            = 1'b0;
     shifter_din     = 15'b0;
 
-    // ALU operation select: groups 011/110 share sub-opcode semantics
+    // ALU operation select: groups 011/110 share sub-opcode in ir[11:9]
     if (is_alu_rr || is_alu_imm_grp) begin
       if (is_slt || is_slt_imm)
         alu_op = 3'd1;                // SLT variants → SUB
-      else if (!op[2])
-        alu_op = op[2:0];           // ADD=0, SUB=1, AND=2, OR=3
+      else if (!ir[11])
+        alu_op = ir[11:9];            // ADD=0, SUB=1, AND=2, OR=3
       else
         alu_op = 3'd4;                // XOR, XORI, XORIF
     end
@@ -369,7 +339,7 @@ module riscyv02_execute (
       E_IDLE: ;
 
       E_EXEC_LO: begin
-        if (op == OP_RETI) begin
+        if (is_reti) begin
           // Read banked R6 low byte (r_sel=6, r_hi=0, i_bit=1)
           // Captured into tmp[7:0] at negedge
         end else if (is_int) begin
@@ -379,7 +349,7 @@ module riscyv02_execute (
         end else if (is_mem_addr) begin
           // Address computation low byte (loads, stores, AUIPC)
           alu_new_op = 1'b1;
-          if (op == OP_AUIPC) begin
+          if (is_auipc) begin
             alu_a  = pc[7:0];
             alu_b  = {off6[1:0], 6'b0};             // (imm10 << 6) low byte
             w_data = alu_result;
@@ -442,11 +412,11 @@ module riscyv02_execute (
             w_hi   = 1'b0;
             w_we   = 1'b1;
           end
-        end else if (op == OP_LI) begin
+        end else if (is_li) begin
           w_data = {{2{off6[5]}}, off6};
           w_hi   = 1'b0;
           w_we   = 1'b1;
-        end else if (op == OP_LUI) begin
+        end else if (is_lui) begin
           w_data = {off6[1:0], 6'b0};
           w_hi   = 1'b0;
           w_we   = 1'b1;
@@ -464,7 +434,7 @@ module riscyv02_execute (
             w_we   = 1'b1;
           end
         end else begin
-          if (op != OP_WAI && op != OP_STP)
+          if (!is_wai && !is_stp)
             insn_completing = 1'b1;
         end
       end
@@ -473,7 +443,7 @@ module riscyv02_execute (
         if (is_mem_addr) begin
           // Address computation high byte (loads, stores, AUIPC)
           alu_new_op = 1'b0;
-          if (op == OP_AUIPC) begin
+          if (is_auipc) begin
             alu_a           = pc[15:8];
             alu_b           = ir[12:5];              // (imm10 << 6) high byte
             w_data          = alu_result;
@@ -495,7 +465,7 @@ module riscyv02_execute (
             w_we   = 1'b1;
           end
         end else begin
-          if (op == OP_RETI) begin
+          if (is_reti) begin
             // Hi byte from current read (r_sel=6, r_hi=1), lo from tmp
             jump    = 1'b1;
             next_pc = {r, tmp[7:1], 1'b0};
@@ -516,7 +486,7 @@ module riscyv02_execute (
             w_we       = 1'b1;
             if (is_slt) begin
               w_hi = 1'b0;
-              if (op_unsigned)                           // SLTU
+              if (ir[10])                                // SLTU (sub[1])
                 w_data = {7'b0, ~alu_co};
               else
                 w_data = {7'b0, (r[7] ^ r2[7]) ? r[7] : alu_result[7]};
@@ -532,7 +502,7 @@ module riscyv02_execute (
             alu_new_op = 1'b0;
             w_hi       = 1'b0;
             w_we       = 1'b1;
-            if (op_unsigned)                              // SLTIUF
+            if (ir[10])                                   // SLTIUF (sub[1])
               w_data = {7'b0, ~alu_co};
             else
               w_data = {7'b0, (r[7] ^ off6[5]) ? r[7] : alu_result[7]};
@@ -564,11 +534,11 @@ module riscyv02_execute (
               w_hi   = 1'b1;
               w_we   = 1'b1;
             end
-          end else if (op == OP_LI) begin
+          end else if (is_li) begin
             w_data = {8{off6[5]}};
             w_hi   = 1'b1;
             w_we   = 1'b1;
-          end else if (op == OP_LUI) begin
+          end else if (is_lui) begin
             w_data = ir[12:5];                         // {imm10[9:6], imm10[5:2]}
             w_hi   = 1'b1;
             w_we   = 1'b1;
@@ -611,7 +581,7 @@ module riscyv02_execute (
         bus_active      = !is_byte_load;
         ab              = {tmp[15:8] + {7'b0, ~|tmp[7:0]}, tmp[7:0]};
         if (is_byte_load) begin
-          w_data        = op_unsigned ? 8'h00 : {8{r[7]}}; // LBU : LB
+          w_data        = is_lbu ? 8'h00 : {8{r[7]}}; // LBU : LB
           w_we          = 1'b1;
         end else
           w_we          = !is_store;
@@ -659,15 +629,15 @@ module riscyv02_execute (
         E_IDLE: ;
 
         E_EXEC_LO: begin
-          if (op == OP_SEI) i_bit <= 1'b1;
-          if (op == OP_CLI) i_bit <= 1'b0;
-          if (op == OP_RETI) tmp[7:0] <= r;   // Capture banked R6 low byte
+          if (is_sei) i_bit <= 1'b1;
+          if (is_cli) i_bit <= 1'b0;
+          if (is_reti) tmp[7:0] <= r;   // Capture banked R6 low byte
           if (is_branch || is_jump_imm || is_mem_addr || is_jr_jalr)
             tmp[7:0] <= alu_result;
           if (is_branch) tmp[8] <= |r;  // nz_lo
           if (is_shift) tmp[7:0] <= r;
           // RETI and INT are two-cycle (system group, not is_two_cycle)
-          if (op == OP_RETI || is_int || is_two_cycle)
+          if (is_reti || is_int || is_two_cycle)
             state <= E_EXEC_HI;
           else
             state <= E_IDLE;
@@ -677,12 +647,12 @@ module riscyv02_execute (
           if (is_mem_addr) begin
             // Address high byte computed; set up for memory access or complete.
             tmp[15:8] <= alu_result;
-            state     <= (op == OP_AUIPC) ? E_IDLE : E_MEM_LO;
+            state     <= (is_auipc) ? E_IDLE : E_MEM_LO;
           end else if (is_jr_jalr) begin
             pc    <= next_pc;
             state <= E_IDLE;
           end else begin
-            if (op == OP_RETI) i_bit <= tmp[0];
+            if (is_reti) i_bit <= tmp[0];
             if (jump) pc <= next_pc;
             state <= E_IDLE;
           end
@@ -700,7 +670,7 @@ module riscyv02_execute (
 
       // ---------------------------------------------------------------------
       // Interrupt entry: synthesize an INT instruction in ir.
-      // ir = {7'b1111100, vector_id[5:0], 3'd6} decodes as OP_INT with
+      // ir = {7'b1111100, vector_id[5:0], 3'd6} decodes as is_int with
       // off6 = vector_id and write dest = R6 (banked).
       // ---------------------------------------------------------------------
       if (take_nmi || take_irq) begin
