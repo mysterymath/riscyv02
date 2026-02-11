@@ -134,7 +134,7 @@ def main():
     # See doc/sram_analysis.md for full design and justification.
     REGFILE_STDCELL_TX = 4674   # TODO: update from standalone synthesis of 9-entry regfile
     REGFILE_SRAM_TX    = 1702   # 8T SRAM design (144x8T + peripherals, 9-entry with banking)
-    ARLET_6502_TX      = 12198  # comparison baseline (decode consolidation)
+    ARLET_6502_TX      = 13176  # comparison baseline (original decode + bus_keep)
 
     discount = REGFILE_STDCELL_TX - REGFILE_SRAM_TX
     adjusted_tx = total_tx - discount

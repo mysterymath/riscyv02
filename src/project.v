@@ -189,24 +189,27 @@ module tt_um_riscyv02 (
   // -----------------------------------------------------------------------
   // Output muxes (identical protocol to 6502 wrapper)
   //
-  // DO and AB are routed through bus_keep modules so that the (* keep *)
+  // All bus signals routed through bus_keep modules so that (* keep *)
   // net names are guaranteed to survive synthesis as real path waypoints.
   // Without the hierarchy barrier, synthesis can invert or restructure
   // logic so that the critical path bypasses the kept net, breaking the
   // SDC false-path constraints that rely on those names.
   // -----------------------------------------------------------------------
   wire [7:0] do_kept, ab_lo_kept, ab_hi_kept;
+  wire       rwb_kept, sync_kept;
 
-  bus_keep u_do_keep    (.in(DO),       .out(do_kept));
-  bus_keep u_ab_lo_keep (.in(AB[7:0]),  .out(ab_lo_kept));
-  bus_keep u_ab_hi_keep (.in(AB[15:8]), .out(ab_hi_kept));
+  bus_keep   u_do_keep    (.in(DO),       .out(do_kept));
+  bus_keep   u_ab_lo_keep (.in(AB[7:0]),  .out(ab_lo_kept));
+  bus_keep   u_ab_hi_keep (.in(AB[15:8]), .out(ab_hi_kept));
+  bus_keep_1 u_rwb_keep   (.in(RWB),     .out(rwb_kept));
+  bus_keep_1 u_sync_keep  (.in(SYNC),    .out(sync_kept));
 
-  assign uo_out  = mux_sel ? {6'b0, SYNC, RWB} : ab_lo_kept;
-  assign uio_out = mux_sel ? do_kept            : ab_hi_kept;
+  assign uo_out  = mux_sel ? {6'b0, sync_kept, rwb_kept} : ab_lo_kept;
+  assign uio_out = mux_sel ? do_kept                     : ab_hi_kept;
 
   // uio_oe: tristate during mux_sel read cycles, drive otherwise
   always @(*) begin
-    if (mux_sel && RWB)
+    if (mux_sel && rwb_kept)
       uio_oe = 8'h00;  // Read: tristate for external data
     else
       uio_oe = 8'hFF;  // Write or address phase: drive
@@ -228,6 +231,14 @@ endmodule
 module bus_keep (
     input  wire [7:0] in,
     output wire [7:0] out
+);
+    assign out = in;
+endmodule
+
+(* keep_hierarchy *)
+module bus_keep_1 (
+    input  wire in,
+    output wire out
 );
     assign out = in;
 endmodule
