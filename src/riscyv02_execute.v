@@ -180,8 +180,8 @@ module riscyv02_execute (
   wire [2:0] w_sel_mux = is_linking ? LINK_REG :
                          is_fixed_dest ? T0_REG : ir[2:0];
 
-  wire [2:0] r2_sel = is_store ? ir[2:0] : ir[8:6];
-  wire r2_hi_mux = is_shift ? 1'b0 : r_hi;  // Shift reads lo byte via port 2
+  reg  [2:0] r2_sel_r;  // Registered at dispatch; avoids ir decode on critical dout path
+  reg        r2_hi_r;   // Registered; alternates 0/1 across states (lo then hi)
 
   riscyv02_regfile u_regfile (
     .clk    (clk),
@@ -194,8 +194,8 @@ module riscyv02_execute (
     .r_sel  (r_sel),
     .r_hi   (r_hi),
     .r      (r),
-    .r2_sel (r2_sel),
-    .r2_hi  (r2_hi_mux),
+    .r2_sel (r2_sel_r),
+    .r2_hi  (r2_hi_r),
     .r2     (r2)
   );
 
@@ -608,12 +608,13 @@ module riscyv02_execute (
 
   always @(negedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state   <= E_IDLE;
-      ir      <= 16'h0000;
-      tmp     <= 16'h0000;
-      pc      <= 16'h0000;
-      i_bit   <= 1'b1;  // Interrupts disabled after reset
-      nmi_ack <= 1'b0;
+      state    <= E_IDLE;
+      ir       <= 16'h0000;
+      tmp      <= 16'h0000;
+      pc       <= 16'h0000;
+      i_bit    <= 1'b1;  // Interrupts disabled after reset
+      nmi_ack  <= 1'b0;
+      r2_hi_r  <= 1'b0;
     end else begin
       // NMI handshake: set nmi_ack when NMI is taken; hold until project.v
       // clears nmi_pending, then release.
@@ -637,9 +638,10 @@ module riscyv02_execute (
           if (is_branch) tmp[8] <= |r;  // nz_lo
           if (is_shift) tmp[7:0] <= r;
           // RETI and INT are two-cycle (system group, not is_two_cycle)
-          if (is_reti || is_int || is_two_cycle)
+          if (is_reti || is_int || is_two_cycle) begin
+            if (!is_shift) r2_hi_r <= 1'b1;
             state <= E_EXEC_HI;
-          else
+          end else
             state <= E_IDLE;
         end
 
@@ -647,6 +649,7 @@ module riscyv02_execute (
           if (is_mem_addr) begin
             // Address high byte computed; set up for memory access or complete.
             tmp[15:8] <= alu_result;
+            r2_hi_r   <= 1'b0;
             state     <= (is_auipc) ? E_IDLE : E_MEM_LO;
           end else if (is_jr_jalr) begin
             pc    <= next_pc;
@@ -660,6 +663,7 @@ module riscyv02_execute (
 
         E_MEM_LO: begin
           tmp[7:0] <= tmp[7:0] + 8'd1;  // Increment for E_MEM_HI address
+          r2_hi_r  <= 1'b1;
           state    <= is_byte_store ? E_IDLE : E_MEM_HI;
         end
 
@@ -687,6 +691,11 @@ module riscyv02_execute (
       if (ir_accept) begin
         pc <= pc + 16'd2;
         ir <= fetch_ir;
+        // Stores (SB=1001, SW=1010) have rs2 at [2:0]; all others at [8:6].
+        // Registered here to break ir decode → regfile → dout critical path.
+        r2_sel_r <= (fetch_ir[15:12] == 4'b1001 || fetch_ir[15:12] == 4'b1010) ?
+                    fetch_ir[2:0] : fetch_ir[8:6];
+        r2_hi_r  <= 1'b0;
         if (fetch_ir[15:9] == 7'b1111100) begin
           pc[0] <= i_bit;         // Stash I flag
           i_bit <= 1'b1;
