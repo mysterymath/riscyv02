@@ -1,0 +1,294 @@
+# SPDX-FileCopyrightText: © 2024 mysterymath
+# SPDX-License-Identifier: Apache-2.0
+#
+# Shared test infrastructure for RISCY-V02 cocotb tests.
+#
+# Register convention: R7 is used as a zero-base register throughout tests.
+# After reset, all registers are 0, so R7 starts at 0 and is never modified
+# by test code (except explicitly). R,9 loads always write to R0; R,9 stores
+# always read data from R0. Use OR rd, R0, R0 to copy R0 to another register.
+
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import ClockCycles, FallingEdge
+
+__all__ = [
+    'cocotb', 'Clock', 'ClockCycles', 'FallingEdge',
+    '_reset', '_load_program', '_read_ram', '_place', '_set_ui', '_spin',
+    '_measure_instruction_cycles',
+    '_encode_r9', '_encode_addi', '_encode_li',
+    '_encode_lw', '_encode_lb', '_encode_lbu', '_encode_sw', '_encode_sb',
+    '_encode_jr', '_encode_jalr',
+    '_encode_r8', '_encode_andi', '_encode_ori', '_encode_xori',
+    '_encode_slti', '_encode_sltui', '_encode_bz', '_encode_bnz', '_encode_xorif',
+    '_encode_r7', '_encode_lui', '_encode_auipc',
+    '_encode_10', '_encode_j', '_encode_jal',
+    '_encode_rrr', '_encode_add', '_encode_sub',
+    '_encode_and_rr', '_encode_or_rr', '_encode_xor_rr',
+    '_encode_slt', '_encode_sltu', '_encode_sll', '_encode_srl', '_encode_sra',
+    '_encode_r4', '_encode_slli', '_encode_srli', '_encode_srai',
+    '_encode_rr',
+    '_encode_lw_rr', '_encode_lb_rr', '_encode_lbu_rr',
+    '_encode_sw_rr', '_encode_sb_rr',
+    '_encode_lw_a', '_encode_lb_a', '_encode_lbu_a',
+    '_encode_sw_a', '_encode_sb_a',
+    '_encode_sys', '_encode_sei', '_encode_cli', '_encode_reti',
+    '_encode_brk', '_encode_wai', '_encode_stp', '_encode_nop',
+]
+
+
+async def _reset(dut):
+    """Apply reset sequence."""
+    dut.ena.value = 1
+    dut.ui_in.value = 0x06  # RDY=1, NMIB=1 (inactive)
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+
+def _load_program(dut, program):
+    """Load a program dict {addr: byte} into RAM."""
+    for addr, val in program.items():
+        dut.ram[addr].value = val
+
+
+def _read_ram(dut, addr):
+    return int(dut.ram[addr].value)
+
+
+def _place(prog, addr, bytepair):
+    """Place a 2-byte instruction at addr."""
+    prog[addr] = bytepair[0]
+    prog[addr + 1] = bytepair[1]
+
+
+def _set_ui(dut, rdy=True, irqb=True, nmib=True):
+    """Set ui_in control signals. IRQB/NMIB are active-low."""
+    val = (int(rdy) << 2) | (int(nmib) << 1) | int(irqb)
+    dut.ui_in.value = val
+
+
+# ===========================================================================
+# Encoding helpers — variable-width prefix-free encoding
+# ===========================================================================
+
+# R,9 format: [prefix:4 @ 15:12][imm9:9 @ 11:3][reg:3 @ 2:0]
+def _encode_r9(prefix, imm9, reg):
+    insn = (prefix << 12) | ((imm9 & 0x1FF) << 3) | (reg & 0x7)
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+def _encode_addi(rd, imm9):
+    assert -256 <= imm9 <= 255, f"imm9 out of range: {imm9}"
+    return _encode_r9(0, imm9, rd)
+
+def _encode_li(rd, imm9):
+    assert -256 <= imm9 <= 255, f"imm9 out of range: {imm9}"
+    return _encode_r9(1, imm9, rd)
+
+def _encode_lw(rs, off9):
+    """LW: R0 = mem16[rs + sext(off9)]. Dest is always R0."""
+    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
+    return _encode_r9(2, off9, rs)
+
+def _encode_lb(rs, off9):
+    """LB: R0 = sext(mem[rs + sext(off9)]). Dest is always R0."""
+    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
+    return _encode_r9(3, off9, rs)
+
+def _encode_lbu(rs, off9):
+    """LBU: R0 = zext(mem[rs + sext(off9)]). Dest is always R0."""
+    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
+    return _encode_r9(4, off9, rs)
+
+def _encode_sw(rs, off9):
+    """SW: mem16[rs + sext(off9)] = R0. Data is always R0."""
+    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
+    return _encode_r9(5, off9, rs)
+
+def _encode_sb(rs, off9):
+    """SB: mem[rs + sext(off9)] = R0[7:0]. Data is always R0."""
+    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
+    return _encode_r9(6, off9, rs)
+
+def _encode_jr(rs, off9):
+    """JR: pc = rs + sext(off9) << 1."""
+    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
+    return _encode_r9(7, off9, rs)
+
+def _encode_jalr(rs, off9):
+    """JALR: tmp=rs+sext(off9)<<1; rs=pc+2; pc=tmp."""
+    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
+    return _encode_r9(8, off9, rs)
+
+# R,8 format: [prefix:5 @ 15:11][imm8:8 @ 10:3][reg:3 @ 2:0]
+def _encode_r8(prefix, imm8, reg):
+    insn = (prefix << 11) | ((imm8 & 0xFF) << 3) | (reg & 0x7)
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+def _encode_andi(rd, imm8):
+    assert 0 <= imm8 <= 255, f"imm8 out of range: {imm8}"
+    return _encode_r8(0b10010, imm8, rd)
+
+def _encode_ori(rd, imm8):
+    assert 0 <= imm8 <= 255, f"imm8 out of range: {imm8}"
+    return _encode_r8(0b10011, imm8, rd)
+
+def _encode_xori(rd, imm8):
+    assert 0 <= imm8 <= 255, f"imm8 out of range: {imm8}"
+    return _encode_r8(0b10100, imm8, rd)
+
+def _encode_slti(rs, imm8):
+    """SLTI: R0 = (rs < sext(imm8)) ? 1 : 0. Dest is R0."""
+    assert -128 <= imm8 <= 127, f"imm8 out of range: {imm8}"
+    return _encode_r8(0b10101, imm8, rs)
+
+def _encode_sltui(rs, imm8):
+    """SLTUI: R0 = (rs <u sext(imm8)) ? 1 : 0. Dest is R0."""
+    assert -128 <= imm8 <= 127, f"imm8 out of range: {imm8}"
+    return _encode_r8(0b10110, imm8, rs)
+
+def _encode_bz(rs, off8):
+    """BZ: if rs == 0, pc += sext(off8) << 1."""
+    assert -128 <= off8 <= 127, f"off8 out of range: {off8}"
+    return _encode_r8(0b10111, off8, rs)
+
+def _encode_bnz(rs, off8):
+    """BNZ: if rs != 0, pc += sext(off8) << 1."""
+    assert -128 <= off8 <= 127, f"off8 out of range: {off8}"
+    return _encode_r8(0b11000, off8, rs)
+
+def _encode_xorif(rs, imm8):
+    """XORIF: R0 = rs ^ zext(imm8). Dest is R0."""
+    assert 0 <= imm8 <= 255, f"imm8 out of range: {imm8}"
+    return _encode_r8(0b11001, imm8, rs)
+
+# R,7 format: [prefix:6 @ 15:10][imm7:7 @ 9:3][reg:3 @ 2:0]
+def _encode_r7(prefix, imm7, reg):
+    insn = (prefix << 10) | ((imm7 & 0x7F) << 3) | (reg & 0x7)
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+def _encode_lui(rd, imm7):
+    """LUI: rd = sext(imm7) << 9."""
+    assert -64 <= imm7 <= 63, f"imm7 out of range: {imm7}"
+    return _encode_r7(0b110100, imm7, rd)
+
+def _encode_auipc(rd, imm7):
+    """AUIPC: rd = pc + (sext(imm7) << 9)."""
+    assert -64 <= imm7 <= 63, f"imm7 out of range: {imm7}"
+    return _encode_r7(0b110101, imm7, rd)
+
+# "10" format: [prefix:6 @ 15:10][imm10:10 @ 9:0]
+def _encode_10(prefix, imm10):
+    insn = (prefix << 10) | (imm10 & 0x3FF)
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+def _encode_j(off10):
+    """J: pc += sext(off10) << 1."""
+    assert -512 <= off10 <= 511, f"off10 out of range: {off10}"
+    return _encode_10(0b110110, off10)
+
+def _encode_jal(off10):
+    """JAL: R6 = pc+2; pc += sext(off10) << 1. Links to R6."""
+    assert -512 <= off10 <= 511, f"off10 out of range: {off10}"
+    return _encode_10(0b110111, off10)
+
+# R,R,R format: [prefix:7 @ 15:9][rd:3 @ 8:6][rs2:3 @ 5:3][rs1:3 @ 2:0]
+def _encode_rrr(prefix, rd, rs2, rs1):
+    insn = (prefix << 9) | ((rd & 0x7) << 6) | ((rs2 & 0x7) << 3) | (rs1 & 0x7)
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+def _encode_add(rd, rs1, rs2):  return _encode_rrr(0b1110000, rd, rs2, rs1)
+def _encode_sub(rd, rs1, rs2):  return _encode_rrr(0b1110001, rd, rs2, rs1)
+def _encode_and_rr(rd, rs1, rs2): return _encode_rrr(0b1110010, rd, rs2, rs1)
+def _encode_or_rr(rd, rs1, rs2):  return _encode_rrr(0b1110011, rd, rs2, rs1)
+def _encode_xor_rr(rd, rs1, rs2): return _encode_rrr(0b1110100, rd, rs2, rs1)
+def _encode_slt(rd, rs1, rs2):  return _encode_rrr(0b1110101, rd, rs2, rs1)
+def _encode_sltu(rd, rs1, rs2): return _encode_rrr(0b1110110, rd, rs2, rs1)
+def _encode_sll(rd, rs1, rs2):  return _encode_rrr(0b1110111, rd, rs2, rs1)
+def _encode_srl(rd, rs1, rs2):  return _encode_rrr(0b1111000, rd, rs2, rs1)
+def _encode_sra(rd, rs1, rs2):  return _encode_rrr(0b1111001, rd, rs2, rs1)
+
+# R,4 format: [prefix:9 @ 15:7][shamt:4 @ 6:3][reg:3 @ 2:0]
+def _encode_r4(prefix, shamt, reg):
+    insn = (prefix << 7) | ((shamt & 0xF) << 3) | (reg & 0x7)
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+def _encode_slli(rd, shamt): return _encode_r4(0b111101000, shamt, rd)
+def _encode_srli(rd, shamt): return _encode_r4(0b111101001, shamt, rd)
+def _encode_srai(rd, shamt): return _encode_r4(0b111101010, shamt, rd)
+
+# R,R format: [prefix:10 @ 15:6][rd:3 @ 5:3][rs:3 @ 2:0]
+def _encode_rr(prefix, rd, rs):
+    insn = (prefix << 6) | ((rd & 0x7) << 3) | (rs & 0x7)
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+def _encode_lw_rr(rd, rs):  return _encode_rr(0b1111010110, rd, rs)
+def _encode_lb_rr(rd, rs):  return _encode_rr(0b1111010111, rd, rs)
+def _encode_lbu_rr(rd, rs): return _encode_rr(0b1111011000, rd, rs)
+def _encode_sw_rr(rd, rs):  return _encode_rr(0b1111011001, rd, rs)
+def _encode_sb_rr(rd, rs):  return _encode_rr(0b1111011010, rd, rs)
+def _encode_lw_a(rd, rs):   return _encode_rr(0b1111011011, rd, rs)
+def _encode_lb_a(rd, rs):   return _encode_rr(0b1111011100, rd, rs)
+def _encode_lbu_a(rd, rs):  return _encode_rr(0b1111011101, rd, rs)
+def _encode_sw_a(rd, rs):   return _encode_rr(0b1111011110, rd, rs)
+def _encode_sb_a(rd, rs):   return _encode_rr(0b1111011111, rd, rs)
+
+# System format: [1111100000:10 @ 15:6][sub:6 @ 5:0]
+def _encode_sys(sub):
+    insn = (0b1111100000 << 6) | (sub & 0x3F)
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+def _encode_sei():  return _encode_sys(0b000001)
+def _encode_cli():  return _encode_sys(0b000010)
+def _encode_reti(): return _encode_sys(0b000011)
+def _encode_brk():  return _encode_sys(0b100001)  # INT, vector 1 → addr 0x0004
+def _encode_wai():  return _encode_sys(0b000101)
+def _encode_stp():  return _encode_sys(0b000111)
+
+def _encode_nop():
+    """NOP = ADDI R0, 0 = 0x0000."""
+    return (0x00, 0x00)
+
+def _spin(addr):
+    """JR R7, off9 where off9<<1 = addr, so off9 = addr//2."""
+    return _encode_jr(rs=7, off9=addr // 2)
+
+
+# ===========================================================================
+# Cycle measurement helper
+# ===========================================================================
+async def _measure_instruction_cycles(dut, prog, expected_cycles, test_name):
+    """Measure cycles for the first instruction in prog."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    _load_program(dut, prog)
+    await _reset(dut)
+
+    def get_sync():
+        return (int(dut.uo_out.value) >> 1) & 1
+
+    # Wait for first SYNC
+    for _ in range(200):
+        await FallingEdge(dut.clk)
+        if get_sync():
+            break
+
+    # Count cycles until next SYNC
+    cycles = 0
+    # Wait for SYNC to drop
+    for _ in range(200):
+        await FallingEdge(dut.clk)
+        cycles += 1
+        if not get_sync():
+            break
+
+    # Wait for SYNC to rise
+    for _ in range(200):
+        await FallingEdge(dut.clk)
+        cycles += 1
+        if get_sync():
+            break
+
+    dut._log.info(f"{test_name}: {cycles} cycles (expected {expected_cycles})")
+    assert cycles == expected_cycles, f"{test_name}: expected {expected_cycles} cycles, got {cycles}"
