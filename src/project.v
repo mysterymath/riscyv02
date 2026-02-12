@@ -2,10 +2,9 @@
  * Copyright (c) 2024 mysterymath
  * SPDX-License-Identifier: Apache-2.0
  *
- * RISCY-V02 "Byte Byte Jump" — Minimal Turing-Complete RISC-V Subset
- *
- * ISA: LW, SW, JR only (all other opcodes = NOP).
+ * RISCY-V02 — 16-bit RISC processor, pin-compatible with WDC 65C02.
  * Architecture: 2-stage pipeline (Fetch / Execute) with 8-bit muxed bus.
+ * ISA: variable-width prefix-free encoding (see riscyv02_execute.v).
  *
  * Bus protocol: identical to tt_um_arlet_6502 mux/demux protocol.
  *
@@ -20,13 +19,10 @@
  *     uio[7:0]     = D[7:0] bidirectional data bus
  *     uio_oe       = RWB ? 8'h00 : 8'hFF
  *
- * Control signals:
- *   ui_in[2]     = RDY (active-high ready input for wait states / single-step)
- *
- * Instruction encoding (16-bit):
- *   LW  rd, off(rs1):  [1000][rs1:3][off6:6][rd:3]
- *   SW  rs2, off(rs1): [1010][rs1:3][off6:6][rs2:3]
- *   JR  rs, off6:      [1011100][off6:6][rs:3]
+ * Control inputs:
+ *   ui_in[0]     = IRQB (active-low interrupt request, level-sensitive)
+ *   ui_in[1]     = NMIB (active-low non-maskable interrupt, edge-triggered)
+ *   ui_in[2]     = RDY  (active-high ready input for wait states / single-step)
  */
 
 `default_nettype none
