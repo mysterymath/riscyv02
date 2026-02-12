@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **BLTZ**, **BGEZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTIF**, **SLTIUF**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling is supported with banked R6 for automatic return address save/restore. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor currently implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LW.POST**, **LB.POST**, **LBU.POST**, **SW.PRE**, **SB.PRE**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **BLTZ**, **BGEZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTIF**, **SLTIUF**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling is supported with banked R6 for automatic return address save/restore. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. Auto-modify load/store instructions (LW.POST, LB.POST, LBU.POST, SW.PRE, SB.PRE) provide PUSH/POP semantics with zero cycle overhead vs regular load/store. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -14,11 +14,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 58.5% | 45.3% |
-| Transistor count (synth) | 15,450 | 12,112 |
-| SRAM-adjusted | 12,478 | 12,112 |
+| Utilization | 58.9% | 45.3% |
+| Transistor count (synth) | 16,150 | 12,112 |
+| SRAM-adjusted | 13,178 | 12,112 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF). JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. R6 is automatically banked during interrupt handling (I=1), so the interrupt handler sees a separate R6 containing the return address while the interrupted code's R6 is preserved. The SRAM-adjusted total is within 3.0% of the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), sign-bit branches (BLTZ/BGEZ), immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTIF, SLTIUF, XORIF), and auto-modify load/store (LW.POST, LB.POST, LBU.POST, SW.PRE, SB.PRE) for zero-overhead PUSH/POP. JAL/JALR write the return address to R6, and subroutine return is just `JR R6, 0` — no dedicated link register hardware needed. R6 is automatically banked during interrupt handling (I=1), so the interrupt handler sees a separate R6 containing the return address while the interrupted code's R6 is preserved. The SRAM-adjusted total is within 8.8% of the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps with ±4 KB range, hardware call/return, immediate arithmetic/logic, auto-modify addressing).
 
 ## Bus Protocol
 
@@ -197,6 +197,68 @@ Loads a single byte from memory and zero-extends it to 16 bits. The high byte of
 Stores the low byte of rs2 to memory. Only one byte is written; adjacent bytes are unaffected. The 6-bit signed offset is unscaled (range ±32 bytes).
 
 **Cycle count:** 3 (2 address + 1 byte written)
+
+### LW.POST — Load Word, Post-Increment
+
+```
+[1011][111][000][rs1:3][rd:3]
+```
+
+`rd = MEM[rs1]; rs1 = rs1 + 2`
+
+Loads a 16-bit word from the address in rs1, then increments rs1 by 2 (word size). The load uses the original rs1 value; the increment happens in the E_EXEC phase before the memory access. This is SuperH-style post-increment addressing. PUSH/POP idiom: `LW.POST rd, (sp)` pops a word from the stack.
+
+When rd and rs1 are the same register, the loaded value overwrites the incremented pointer (the load wins).
+
+**Cycle count:** 4 (2 execute + 2 bytes read)
+
+### LB.POST — Load Byte (Sign-Extend), Post-Increment
+
+```
+[1011][111][001][rs1:3][rd:3]
+```
+
+`rd = sext(MEM[rs1]); rs1 = rs1 + 1`
+
+Loads a single byte from the address in rs1, sign-extends it to 16 bits, then increments rs1 by 1 (byte size). Bit 7 of the loaded byte determines the sign extension.
+
+**Cycle count:** 4 (2 execute + 1 byte read + 1 extension)
+
+### LBU.POST — Load Byte (Zero-Extend), Post-Increment
+
+```
+[1011][111][010][rs1:3][rd:3]
+```
+
+`rd = zext(MEM[rs1]); rs1 = rs1 + 1`
+
+Loads a single byte from the address in rs1, zero-extends it to 16 bits, then increments rs1 by 1 (byte size). The high byte of rd is always 0x00.
+
+**Cycle count:** 4 (2 execute + 1 byte read + 1 extension)
+
+### SW.PRE — Store Word, Pre-Decrement
+
+```
+[1100][001][rs2:3][rs1:3][000]
+```
+
+`rs1 = rs1 - 2; MEM[rs1] = rs2`
+
+Decrements rs1 by 2 (word size), then stores a 16-bit word to the new address. The decrement happens in the E_EXEC phase before the memory access. PUSH idiom: `SW.PRE rs2, (sp)` pushes a word onto the stack. Pairs with LW.POST for stack operations.
+
+**Cycle count:** 4 (2 execute + 2 bytes written)
+
+### SB.PRE — Store Byte, Pre-Decrement
+
+```
+[1100][001][rs2:3][rs1:3][001]
+```
+
+`rs1 = rs1 - 1; MEM[rs1] = rs2[7:0]`
+
+Decrements rs1 by 1 (byte size), then stores the low byte of rs2 to the new address.
+
+**Cycle count:** 3 (2 execute + 1 byte written)
 
 ### JR — Jump Register
 
@@ -703,7 +765,12 @@ Opcode  grp  sub  Instruction   Payload
 1011    011  100  XOR           [rs2:3][rs1:3][rd:3]
 1011    011  101  SLT           [rs2:3][rs1:3][rd:3]
 1011    011  110  SLTU          [rs2:3][rs1:3][rd:3]
+1011    011  111  LW.POST       [000][rs1:3][rd:3]      (variant 000)
+1011    011  111  LB.POST       [001][rs1:3][rd:3]      (variant 001)
+1011    011  111  LBU.POST      [010][rs1:3][rd:3]      (variant 010)
 1100    100  000  SLL           [rs2:3][rs1:3][rd:3]
+1100    100  001  SW.PRE        [rs2:3][rs1:3][000]     (variant 000)
+1100    100  001  SB.PRE        [rs2:3][rs1:3][001]     (variant 001)
 1100    100  010  SRL           [rs2:3][rs1:3][rd:3]
 1100    100  011  SRA           [rs2:3][rs1:3][rd:3]
 1100    100  100  SLLI          [00][imm4:4][rd:3]
@@ -749,6 +816,10 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | LB/LBU | 4 | 2 address + 1 byte read + 1 extension |
 | SB | 3 | 2 address + 1 byte written (overlapped fetch) |
 | LW/SW | 4 | 4 execute (address computation overlaps with fetch) |
+| LW.POST | 4 | 2 execute (increment rs1) + 2 bytes read |
+| LB.POST/LBU.POST | 4 | 2 execute (increment rs1) + 1 byte read + 1 extension |
+| SW.PRE | 4 | 2 execute (decrement rs1) + 2 bytes written |
+| SB.PRE | 3 | 2 execute (decrement rs1) + 1 byte written |
 | JR/JALR | 4 | 2 execute + 2 fetch after redirect |
 | J/JAL | 4 | 2 execute + 2 fetch after redirect |
 | RETI | 4 | 2 execute + 2 fetch after redirect |

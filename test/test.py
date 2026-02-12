@@ -5779,3 +5779,458 @@ async def test_srai_by_15_negative(dut):
     dut._log.info("PASS [srai_by_15_negative]")
 
 
+# ===========================================================================
+# Auto-modify load/store instructions (SuperH-style post-increment / pre-decrement)
+# ===========================================================================
+
+def _encode_lw_post(rd, rs1):
+    """Encode LW.POST rd, (rs1) -> [1011][111][000][rs1:3][rd:3]."""
+    assert 0 <= rd <= 7 and 0 <= rs1 <= 7
+    insn = (0b1011111 << 9) | (0b000 << 6) | (rs1 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_lb_post(rd, rs1):
+    """Encode LB.POST rd, (rs1) -> [1011][111][001][rs1:3][rd:3]."""
+    assert 0 <= rd <= 7 and 0 <= rs1 <= 7
+    insn = (0b1011111 << 9) | (0b001 << 6) | (rs1 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_lbu_post(rd, rs1):
+    """Encode LBU.POST rd, (rs1) -> [1011][111][010][rs1:3][rd:3]."""
+    assert 0 <= rd <= 7 and 0 <= rs1 <= 7
+    insn = (0b1011111 << 9) | (0b010 << 6) | (rs1 << 3) | rd
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_sw_pre(rs2, rs1):
+    """Encode SW.PRE rs2, (rs1) -> [1100][001][rs2:3][rs1:3][000]."""
+    assert 0 <= rs2 <= 7 and 0 <= rs1 <= 7
+    insn = (0b1100001 << 9) | (rs2 << 6) | (rs1 << 3) | 0b000
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+def _encode_sb_pre(rs2, rs1):
+    """Encode SB.PRE rs2, (rs1) -> [1100][001][rs2:3][rs1:3][001]."""
+    assert 0 <= rs2 <= 7 and 0 <= rs1 <= 7
+    insn = (0b1100001 << 9) | (rs2 << 6) | (rs1 << 3) | 0b001
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+# ---------------------------------------------------------------------------
+# Test: LW.POST basic
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lw_post_basic(dut):
+    """LW.POST R1, (R3): load word from R3, R3 += 2."""
+    dut._log.info("Test: LW.POST basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # R3 = 0x0020 (pointer)
+    prog[0x0010] = 0x20
+    prog[0x0011] = 0x00
+    # Target data at 0x0020
+    prog[0x0020] = 0xEF
+    prog[0x0021] = 0xBE
+
+    _place(prog, 0x0000, _encode_lw(rd=3, rs1=0, off6=16))   # R3 = 0x0020
+    _place(prog, 0x0002, _encode_lw_post(rd=1, rs1=3))        # R1 = MEM[0x20] = 0xBEEF, R3 = 0x0022
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))   # MEM[0x14] = R1
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=22))   # MEM[0x16] = R3
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"R1 = {val:#06x} (expected 0xBEEF)")
+    assert val == 0xBEEF, f"Expected 0xBEEF, got {val:#06x}"
+
+    lo = _read_ram(dut, 0x0016)
+    hi = _read_ram(dut, 0x0017)
+    ptr = lo | (hi << 8)
+    dut._log.info(f"R3 = {ptr:#06x} (expected 0x0022)")
+    assert ptr == 0x0022, f"Expected 0x0022, got {ptr:#06x}"
+    dut._log.info("PASS [lw_post_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LB.POST basic (sign-extend)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lb_post_basic(dut):
+    """LB.POST R1, (R3): load byte 0x80 -> R1 = 0xFF80, R3 += 1."""
+    dut._log.info("Test: LB.POST basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0010] = 0x20
+    prog[0x0011] = 0x00
+    prog[0x0020] = 0x80
+
+    _place(prog, 0x0000, _encode_lw(rd=3, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lb_post(rd=1, rs1=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=22))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"R1 = {val:#06x} (expected 0xFF80)")
+    assert val == 0xFF80, f"Expected 0xFF80, got {val:#06x}"
+
+    lo = _read_ram(dut, 0x0016)
+    hi = _read_ram(dut, 0x0017)
+    ptr = lo | (hi << 8)
+    dut._log.info(f"R3 = {ptr:#06x} (expected 0x0021)")
+    assert ptr == 0x0021, f"Expected 0x0021, got {ptr:#06x}"
+    dut._log.info("PASS [lb_post_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LBU.POST basic (zero-extend)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lbu_post_basic(dut):
+    """LBU.POST R1, (R3): load byte 0x80 -> R1 = 0x0080, R3 += 1."""
+    dut._log.info("Test: LBU.POST basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0010] = 0x20
+    prog[0x0011] = 0x00
+    prog[0x0020] = 0x80
+
+    _place(prog, 0x0000, _encode_lw(rd=3, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lbu_post(rd=1, rs1=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=22))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"R1 = {val:#06x} (expected 0x0080)")
+    assert val == 0x0080, f"Expected 0x0080, got {val:#06x}"
+
+    lo = _read_ram(dut, 0x0016)
+    hi = _read_ram(dut, 0x0017)
+    ptr = lo | (hi << 8)
+    dut._log.info(f"R3 = {ptr:#06x} (expected 0x0021)")
+    assert ptr == 0x0021, f"Expected 0x0021, got {ptr:#06x}"
+    dut._log.info("PASS [lbu_post_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SW.PRE basic
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sw_pre_basic(dut):
+    """SW.PRE R1, (R3): R3 -= 2, store R1 to new R3."""
+    dut._log.info("Test: SW.PRE basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # R1 = 0x1234 (value to store)
+    prog[0x0010] = 0x34
+    prog[0x0011] = 0x12
+    # R3 = 0x0022 (pointer, will decrement to 0x0020)
+    prog[0x0012] = 0x22
+    prog[0x0013] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))   # R1 = 0x1234
+    _place(prog, 0x0002, _encode_lw(rd=3, rs1=0, off6=18))   # R3 = 0x0022
+    _place(prog, 0x0004, _encode_sw_pre(rs2=1, rs1=3))        # R3 = 0x0020, MEM[0x20] = 0x1234
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))   # MEM[0x14] = R3
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    # Check stored value at decremented address
+    lo = _read_ram(dut, 0x0020)
+    hi = _read_ram(dut, 0x0021)
+    val = lo | (hi << 8)
+    dut._log.info(f"MEM[0x20] = {val:#06x} (expected 0x1234)")
+    assert val == 0x1234, f"Expected 0x1234, got {val:#06x}"
+
+    # Check pointer decrement
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    ptr = lo | (hi << 8)
+    dut._log.info(f"R3 = {ptr:#06x} (expected 0x0020)")
+    assert ptr == 0x0020, f"Expected 0x0020, got {ptr:#06x}"
+    dut._log.info("PASS [sw_pre_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SB.PRE basic
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sb_pre_basic(dut):
+    """SB.PRE R1, (R3): R3 -= 1, store R1[7:0] to new R3."""
+    dut._log.info("Test: SB.PRE basic")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # R1 = 0x00AB (value — load from memory)
+    prog[0x0010] = 0xAB
+    prog[0x0011] = 0x00
+    # R3 = 0x0021 (pointer, will decrement to 0x0020)
+    prog[0x0012] = 0x21
+    prog[0x0013] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))   # R1 = 0x00AB
+    _place(prog, 0x0002, _encode_lw(rd=3, rs1=0, off6=18))   # R3 = 0x0021
+    _place(prog, 0x0004, _encode_sb_pre(rs2=1, rs1=3))        # R3 = 0x0020, MEM[0x20] = 0xAB
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))   # MEM[0x14] = R3
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    # Check stored byte
+    val = _read_ram(dut, 0x0020)
+    dut._log.info(f"MEM[0x20] = {val:#04x} (expected 0xAB)")
+    assert val == 0xAB, f"Expected 0xAB, got {val:#04x}"
+
+    # Check pointer decrement
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    ptr = lo | (hi << 8)
+    dut._log.info(f"R3 = {ptr:#06x} (expected 0x0020)")
+    assert ptr == 0x0020, f"Expected 0x0020, got {ptr:#06x}"
+    dut._log.info("PASS [sb_pre_basic]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LW.POST + SW.PRE roundtrip (PUSH/POP pattern)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_push_pop_roundtrip(dut):
+    """SW.PRE (push) then LW.POST (pop): value survives, SP restored."""
+    dut._log.info("Test: PUSH/POP roundtrip")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # R1 = 0xDEAD (value to push)
+    prog[0x0010] = 0xAD
+    prog[0x0011] = 0xDE
+    # R7 (SP) = 0x0030 (stack pointer)
+    prog[0x0012] = 0x30
+    prog[0x0013] = 0x00
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))   # R1 = 0xDEAD
+    _place(prog, 0x0002, _encode_lw(rd=7, rs1=0, off6=18))   # R7 = 0x0030
+    _place(prog, 0x0004, _encode_sw_pre(rs2=1, rs1=7))        # PUSH: R7 = 0x002E, MEM[0x2E] = 0xDEAD
+    _place(prog, 0x0006, _encode_lw_post(rd=2, rs1=7))        # POP: R2 = MEM[0x2E] = 0xDEAD, R7 = 0x0030
+    _place(prog, 0x0008, _encode_sw(rs2=2, rs1=0, off6=20))   # MEM[0x14] = R2
+    _place(prog, 0x000A, _encode_sw(rs2=7, rs1=0, off6=22))   # MEM[0x16] = R7
+    _place(prog, 0x000C, _encode_jr(rs=0, off6=6))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 400)
+
+    # Check popped value
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"R2 = {val:#06x} (expected 0xDEAD)")
+    assert val == 0xDEAD, f"Expected 0xDEAD, got {val:#06x}"
+
+    # Check SP restored
+    lo = _read_ram(dut, 0x0016)
+    hi = _read_ram(dut, 0x0017)
+    sp = lo | (hi << 8)
+    dut._log.info(f"R7 = {sp:#06x} (expected 0x0030)")
+    assert sp == 0x0030, f"Expected 0x0030, got {sp:#06x}"
+    dut._log.info("PASS [push_pop_roundtrip]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LW.POST same register (rd == rs1)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lw_post_same_reg(dut):
+    """LW.POST R3, (R3): loaded value overwrites incremented pointer."""
+    dut._log.info("Test: LW.POST same register")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0010] = 0x20
+    prog[0x0011] = 0x00
+    prog[0x0020] = 0x34
+    prog[0x0021] = 0x12
+
+    _place(prog, 0x0000, _encode_lw(rd=3, rs1=0, off6=16))   # R3 = 0x0020
+    _place(prog, 0x0002, _encode_lw_post(rd=3, rs1=3))        # R3 = MEM[0x20] = 0x1234 (load overwrites increment)
+    _place(prog, 0x0004, _encode_sw(rs2=3, rs1=0, off6=20))   # MEM[0x14] = R3
+    _place(prog, 0x0006, _encode_jr(rs=0, off6=3))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"R3 = {val:#06x} (expected 0x1234)")
+    assert val == 0x1234, f"Expected 0x1234, got {val:#06x}"
+    dut._log.info("PASS [lw_post_same_reg]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LW.POST page crossing
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lw_post_page_cross(dut):
+    """LW.POST from address 0x00FF: crosses page boundary."""
+    dut._log.info("Test: LW.POST page crossing")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0010] = 0xFF
+    prog[0x0011] = 0x00
+    prog[0x00FF] = 0xCD
+    prog[0x0100] = 0xAB
+
+    _place(prog, 0x0000, _encode_lw(rd=3, rs1=0, off6=16))   # R3 = 0x00FF
+    _place(prog, 0x0002, _encode_lw_post(rd=1, rs1=3))        # R1 = MEM[0xFF] = 0xABCD, R3 = 0x0101
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=22))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"R1 = {val:#06x} (expected 0xABCD)")
+    assert val == 0xABCD, f"Expected 0xABCD, got {val:#06x}"
+
+    lo = _read_ram(dut, 0x0016)
+    hi = _read_ram(dut, 0x0017)
+    ptr = lo | (hi << 8)
+    dut._log.info(f"R3 = {ptr:#06x} (expected 0x0101)")
+    assert ptr == 0x0101, f"Expected 0x0101, got {ptr:#06x}"
+    dut._log.info("PASS [lw_post_page_cross]")
+
+
+# ---------------------------------------------------------------------------
+# Test: LB.POST positive byte
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_lb_post_positive(dut):
+    """LB.POST R1, (R3): load byte 0x7F -> R1 = 0x007F, R3 += 1."""
+    dut._log.info("Test: LB.POST positive byte")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0010] = 0x20
+    prog[0x0011] = 0x00
+    prog[0x0020] = 0x7F
+
+    _place(prog, 0x0000, _encode_lw(rd=3, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lb_post(rd=1, rs1=3))
+    _place(prog, 0x0004, _encode_sw(rs2=1, rs1=0, off6=20))
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=22))
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    val = lo | (hi << 8)
+    dut._log.info(f"R1 = {val:#06x} (expected 0x007F)")
+    assert val == 0x007F, f"Expected 0x007F, got {val:#06x}"
+
+    lo = _read_ram(dut, 0x0016)
+    hi = _read_ram(dut, 0x0017)
+    ptr = lo | (hi << 8)
+    dut._log.info(f"R3 = {ptr:#06x} (expected 0x0021)")
+    assert ptr == 0x0021, f"Expected 0x0021, got {ptr:#06x}"
+    dut._log.info("PASS [lb_post_positive]")
+
+
+# ---------------------------------------------------------------------------
+# Test: SW.PRE page crossing (decrement crosses page)
+# ---------------------------------------------------------------------------
+@cocotb.test()
+async def test_sw_pre_page_cross(dut):
+    """SW.PRE with pointer at 0x0101: decrement to 0x00FF, store word."""
+    dut._log.info("Test: SW.PRE page crossing")
+
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # R1 = 0xFACE
+    prog[0x0010] = 0xCE
+    prog[0x0011] = 0xFA
+    # R3 = 0x0101
+    prog[0x0012] = 0x01
+    prog[0x0013] = 0x01
+
+    _place(prog, 0x0000, _encode_lw(rd=1, rs1=0, off6=16))
+    _place(prog, 0x0002, _encode_lw(rd=3, rs1=0, off6=18))
+    _place(prog, 0x0004, _encode_sw_pre(rs2=1, rs1=3))        # R3 = 0x00FF, MEM[0xFF] = 0xFACE
+    _place(prog, 0x0006, _encode_sw(rs2=3, rs1=0, off6=20))   # MEM[0x14] = R3
+    _place(prog, 0x0008, _encode_jr(rs=0, off6=4))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    lo = _read_ram(dut, 0x00FF)
+    hi = _read_ram(dut, 0x0100)
+    val = lo | (hi << 8)
+    dut._log.info(f"MEM[0xFF] = {val:#06x} (expected 0xFACE)")
+    assert val == 0xFACE, f"Expected 0xFACE, got {val:#06x}"
+
+    lo = _read_ram(dut, 0x0014)
+    hi = _read_ram(dut, 0x0015)
+    ptr = lo | (hi << 8)
+    dut._log.info(f"R3 = {ptr:#06x} (expected 0x00FF)")
+    assert ptr == 0x00FF, f"Expected 0x00FF, got {ptr:#06x}"
+    dut._log.info("PASS [sw_pre_page_cross]")
+
+

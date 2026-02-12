@@ -70,6 +70,7 @@ module riscyv02_execute (
   reg [2:0]  state;
   reg [15:0] ir;        // Instruction register (raw or synthesized for interrupts)
   reg [15:0] tmp;       // Cycle-to-cycle temporary (mem addr, branch target, shift carry)
+  reg        bus_active_r;  // Registered bus_active for E_MEM_HI (set at E_MEM_LO transition)
 
   // Interrupt and PC state
   reg [15:0] pc;        // Program counter (next instruction to fetch; advanced at dispatch)
@@ -140,6 +141,17 @@ module riscyv02_execute (
   wire is_byte_load  = is_lb || is_lbu;
   wire is_byte_store = is_sb;
 
+  // Auto-modify memory (post-increment loads, pre-decrement stores)
+  wire is_auto_load  = ir[15:9] == 7'b1011111;
+  wire is_auto_store = ir[15:9] == 7'b1100001;
+  wire is_auto_mem   = is_auto_load || is_auto_store;
+
+  // Combined memory properties (S-format + auto-modify) for E_MEM and r_hi
+  wire mem_is_store      = is_store || is_auto_store;
+  wire mem_is_byte_load  = is_byte_load || (is_auto_load && |ir[8:6]);
+  wire mem_is_byte_store = is_byte_store || (is_auto_store && ir[0]);
+  wire mem_is_lbu        = is_lbu || (is_auto_load && ir[7]);
+
   // Jump/link
   wire is_jump_imm = fmt_j;
   wire is_linking  = is_jal || (is_jr_jalr && ir[9]);   // JAL, JALR
@@ -177,8 +189,10 @@ module riscyv02_execute (
   reg        w_we;
   reg  [7:0] w_data;
 
+  wire is_mem_phase = (state == E_MEM_LO || state == E_MEM_HI);
   wire [2:0] w_sel_mux = is_linking ? LINK_REG :
-                         is_fixed_dest ? T0_REG : ir[2:0];
+                         is_fixed_dest ? T0_REG :
+                         (is_auto_mem && !is_mem_phase) ? ir[5:3] : ir[2:0];
 
   wire [2:0] r2_sel = ir[8:6];  // rs2 at fixed position in both S-format and C R-type
   reg        r2_hi_r;   // Registered; alternates 0/1 across states (lo then hi)
@@ -274,7 +288,7 @@ module riscyv02_execute (
       E_EXEC_LO: r_hi = is_right_shift;
       E_EXEC_HI: r_hi = !is_right_shift;
       E_MEM_LO:  r_hi = 1'b0;
-      E_MEM_HI:  r_hi = !is_byte_load;
+      E_MEM_HI:  r_hi = bus_active_r;
       default:   r_hi = 1'b0;
     endcase
   end
@@ -359,6 +373,13 @@ module riscyv02_execute (
             alu_b = {{2{ir[5]}}, ir[5:0]};           // store off6 at [5:0]
           else
             alu_b = {{2{off6[5]}}, off6};             // load off6 at [8:3]
+        end else if (is_auto_mem) begin
+          alu_new_op = 1'b1;
+          alu_op     = is_auto_store ? 3'd1 : 3'd0;  // SUB for stores, ADD for loads
+          alu_b      = (is_auto_load ? |ir[8:6] : ir[0]) ? 8'd1 : 8'd2;  // 1 for byte, 2 for word
+          w_data     = alu_result;
+          w_hi       = 1'b0;
+          w_we       = 1'b1;
         end else if (is_jr_jalr) begin
           // JR/JALR address computation low byte
           alu_a      = r;
@@ -454,6 +475,13 @@ module riscyv02_execute (
             insn_completing = 1'b1;
           end else
             alu_b = {8{is_store ? ir[5] : off6[5]}};  // sign extension
+        end else if (is_auto_mem) begin
+          alu_new_op = 1'b0;
+          alu_op     = is_auto_store ? 3'd1 : 3'd0;
+          alu_b      = 8'd0;
+          w_data     = alu_result;
+          w_hi       = 1'b1;
+          w_we       = 1'b1;
         end else if (is_jr_jalr) begin
           // JR/JALR address computation high byte
           alu_b           = {8{off6[5]}};
@@ -572,21 +600,21 @@ module riscyv02_execute (
         bus_active   = 1'b1;
         ab           = tmp;
         w_hi         = 1'b0;
-        w_we         = !is_store;
-        if (is_byte_store)                              // SB
+        w_we         = !mem_is_store;
+        if (mem_is_byte_store)                          // SB, SB.PRE
           insn_completing = 1'b1;
       end
 
       E_MEM_HI: begin
         insn_completing = 1'b1;
         w_hi            = 1'b1;
-        bus_active      = !is_byte_load;
+        bus_active      = bus_active_r;
         ab              = {tmp[15:8] + {7'b0, ~|tmp[7:0]}, tmp[7:0]};
-        if (is_byte_load) begin
-          w_data        = is_lbu ? 8'h00 : {8{r[7]}}; // LBU : LB
+        if (!bus_active_r) begin
+          w_data        = mem_is_lbu ? 8'h00 : {8{r[7]}}; // LBU : LB
           w_we          = 1'b1;
         end else
-          w_we          = !is_store;
+          w_we          = !mem_is_store;
       end
 
       default: ;
@@ -595,7 +623,7 @@ module riscyv02_execute (
     case (state)
       E_MEM_LO, E_MEM_HI: begin
         dout = r2;  // rs2 via port 2 (low-fanout path to uio_out)
-        rwb  = !is_store;
+        rwb  = !mem_is_store;
       end
       default: ;
     endcase
@@ -616,7 +644,8 @@ module riscyv02_execute (
       pc       <= 16'h0000;
       i_bit    <= 1'b1;  // Interrupts disabled after reset
       nmi_ack  <= 1'b0;
-      r2_hi_r  <= 1'b0;
+      r2_hi_r      <= 1'b0;
+      bus_active_r <= 1'b0;
     end else begin
       // NMI handshake: set nmi_ack when NMI is taken; hold until project.v
       // clears nmi_pending, then release.
@@ -635,10 +664,10 @@ module riscyv02_execute (
           if (is_sei) i_bit <= 1'b1;
           if (is_cli) i_bit <= 1'b0;
           if (is_reti) tmp[7:0] <= r;   // Capture banked R6 low byte
-          if (is_branch || is_jump_imm || is_mem_addr || is_jr_jalr)
-            tmp[7:0] <= alu_result;
+          if (is_branch || is_jump_imm || is_mem_addr || is_jr_jalr || is_auto_mem)
+            tmp[7:0] <= is_auto_load ? r : alu_result;
           if (is_branch) tmp[8] <= |r;  // nz_lo
-          if (is_shift) tmp[7:0] <= r;
+          if (is_shift && !is_auto_store) tmp[7:0] <= r;
           // RETI and INT are two-cycle (system group, not is_two_cycle)
           if (is_reti || is_int || is_two_cycle) begin
             if (!is_shift) r2_hi_r <= 1'b1;
@@ -653,6 +682,10 @@ module riscyv02_execute (
             tmp[15:8] <= alu_result;
             r2_hi_r   <= 1'b0;
             state     <= (is_auipc) ? E_IDLE : E_MEM_LO;
+          end else if (is_auto_mem) begin
+            tmp[15:8] <= is_auto_load ? r : alu_result;
+            r2_hi_r   <= 1'b0;
+            state     <= E_MEM_LO;
           end else if (is_jr_jalr) begin
             pc    <= next_pc;
             state <= E_IDLE;
@@ -664,9 +697,10 @@ module riscyv02_execute (
         end
 
         E_MEM_LO: begin
-          tmp[7:0] <= tmp[7:0] + 8'd1;  // Increment for E_MEM_HI address
-          r2_hi_r  <= 1'b1;
-          state    <= is_byte_store ? E_IDLE : E_MEM_HI;
+          tmp[7:0]     <= tmp[7:0] + 8'd1;  // Increment for E_MEM_HI address
+          r2_hi_r      <= 1'b1;
+          bus_active_r <= !mem_is_byte_load;
+          state        <= mem_is_byte_store ? E_IDLE : E_MEM_HI;
         end
 
         E_MEM_HI: state <= E_IDLE;
