@@ -39,9 +39,9 @@ module riscyv02_regfile (
     input  wire        w_we,
 
     // Read port 1 (8-bit)
-    input  wire [2:0]  r_sel,
-    input  wire        r_hi,       // Select high byte for read
-    output wire [7:0]  r,
+    input  wire [2:0]  r1_sel,
+    input  wire        r1_hi,       // Select high byte for read
+    output wire [7:0]  r1,
 
     // Read port 2 (8-bit)
     input  wire [2:0]  r2_sel,
@@ -180,9 +180,9 @@ module riscyv02_regfile (
   assign regs_ext[8] = regs_int;
 
   // Port 1: 9:1 mux with banking folded into select
-  wire [3:0] r_sel_ext = (r_sel == 3'd6 && i_bit) ? 4'd8 : {1'b0, r_sel};
-  wire [15:0] r_full = regs_ext[r_sel_ext];
-  assign r = r_hi ? r_full[15:8] : r_full[7:0];
+  wire [3:0] r1_sel_ext = (r1_sel == 3'd6 && i_bit) ? 4'd8 : {1'b0, r1_sel};
+  wire [15:0] r_full = regs_ext[r1_sel_ext];
+  assign r1 = r1_hi ? r_full[15:8] : r_full[7:0];
 
   // Port 2: 9:1 mux with banking folded into select
   wire [3:0] r2_sel_ext = (r2_sel == 3'd6 && i_bit) ? 4'd8 : {1'b0, r2_sel};

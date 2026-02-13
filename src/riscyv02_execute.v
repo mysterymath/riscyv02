@@ -195,9 +195,9 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Register file (8-bit interface)
   // -------------------------------------------------------------------------
-  reg  [2:0] r_sel;
-  reg        r_hi;
-  wire [7:0] r;
+  reg  [2:0] r1_sel;
+  reg        r1_hi;
+  wire [7:0] r1;
   wire [7:0] r2;
   reg        w_hi;
   reg        w_we;
@@ -222,8 +222,8 @@ module riscyv02_execute (
 
   // r2_sel: read port 2 register select
   //   Default ir[5:3] works for R,R,R (rs2) and R,R loads/stores (rd/data).
-  //   Override to R0 for R,9 stores (implicit data = R0).
-  wire [2:0] r2_sel = is_r9_store ? 3'd0 : ir[5:3];
+  //   Override to R0 for R,8-format memory (implicit data/dest = R0).
+  wire [2:0] r2_sel = (is_r9_load || is_r9_store) ? 3'd0 : ir[5:3];
   reg        r2_hi_r;   // Registered; alternates 0/1 across states (lo then hi)
 
   riscyv02_regfile u_regfile (
@@ -234,9 +234,9 @@ module riscyv02_execute (
     .w_hi   (w_hi),
     .w_data (w_data),
     .w_we   (w_we),
-    .r_sel  (r_sel),
-    .r_hi   (r_hi),
-    .r      (r),
+    .r1_sel (r1_sel),
+    .r1_hi  (r1_hi),
+    .r1     (r1),
     .r2_sel (r2_sel),
     .r2_hi  (r2_hi_r),
     .r2     (r2)
@@ -289,28 +289,24 @@ module riscyv02_execute (
   // Combinational register-file select from (state, ir)
   // -------------------------------------------------------------------------
 
-  // r_sel: read port 1 register select
+  // r1_sel: read port 1 register select
   //   Default ir[2:0] works for all formats: reg/rs1/rs is always at [2:0].
-  //   E_MEM overrides to read the destination register (for byte load sign ext).
+  //   Sign-extension readback for loads uses port 2.
   always @(*) begin
-    if (is_mem_phase && (is_rr_load || is_auto_load))
-      r_sel = ir[5:3];                                 // R,R/auto loads: dest at [5:3]
-    else if (is_mem_phase && is_r9_load)
-      r_sel = 3'd0;                                    // R,9 loads: dest = R0
-    else if (is_reti)
-      r_sel = 3'd6;                                    // Banked R6
+    if (is_reti)
+      r1_sel = 3'd6;                                   // Banked R6
     else
-      r_sel = ir[2:0];                                 // Default: reg at [2:0]
+      r1_sel = ir[2:0];                                // Default: reg at [2:0]
   end
 
-  // r_hi: read port 1 byte select
+  // r1_hi: read port 1 byte select
   always @(*) begin
     case (state)
-      E_EXEC_LO: r_hi = is_right_shift;
-      E_EXEC_HI: r_hi = !is_right_shift;
-      E_MEM_LO:  r_hi = 1'b0;
-      E_MEM_HI:  r_hi = bus_active_r;
-      default:   r_hi = 1'b0;
+      E_EXEC_LO: r1_hi = is_right_shift;
+      E_EXEC_HI: r1_hi = !is_right_shift;
+      E_MEM_LO:  r1_hi = 1'b0;
+      E_MEM_HI:  r1_hi = bus_active_r;
+      default:   r1_hi = 1'b0;
     endcase
   end
 
@@ -341,7 +337,7 @@ module riscyv02_execute (
     ab              = 16'bx;
     dout            = 8'bx;
     rwb             = 1'bx;
-    alu_a           = r;
+    alu_a           = r1;
     alu_new_op      = 1'bx;
     alu_b           = 8'bx;
     alu_op          = 3'd0;    // ADD
@@ -452,18 +448,18 @@ module riscyv02_execute (
           if (shamt[3]) begin
             // Cross-byte: entire result comes from the other byte.
             w_data = is_right_shift ?
-                     (is_arith_shift ? {8{r[7]}} : 8'h00) : 8'h00;
+                     (is_arith_shift ? {8{r1[7]}} : 8'h00) : 8'h00;
             w_hi   = is_right_shift ? 1'b1 : 1'b0;
             w_we   = 1'b1;
           end else if (is_right_shift) begin
             // Right shift hi byte: fill from sign/zero
-            shifter_din = {is_arith_shift ? {7{r[7]}} : 7'b0, r};
+            shifter_din = {is_arith_shift ? {7{r1[7]}} : 7'b0, r1};
             w_data = shifter_result;
             w_hi   = 1'b1;
             w_we   = 1'b1;
           end else begin
             // Left shift lo byte: reverse, right-shift, reverse
-            shifter_din = {7'b0, rev8(r)};
+            shifter_din = {7'b0, rev8(r1)};
             w_data = rev8(shifter_result);
             w_hi   = 1'b0;
             w_we   = 1'b1;
@@ -531,7 +527,7 @@ module riscyv02_execute (
         end else begin
           if (is_reti) begin
             jump    = 1'b1;
-            next_pc = {r, tmp[7:1], 1'b0};
+            next_pc = {r1, tmp[7:1], 1'b0};
           end else if (is_int) begin
             w_data  = pc[15:8];
             w_hi    = 1'b1;
@@ -567,7 +563,7 @@ module riscyv02_execute (
             if (is_sltu)
               w_data = {7'b0, ~alu_co};
             else
-              w_data = {7'b0, (r[7] ^ r2[7]) ? r[7] : alu_result[7]};
+              w_data = {7'b0, (r1[7] ^ r2[7]) ? r1[7] : alu_result[7]};
           end else if (is_andi) begin
             alu_op     = 3'd2;
             alu_b      = 8'h00;                 // zero-extend
@@ -595,7 +591,7 @@ module riscyv02_execute (
             alu_new_op = 1'b0;
             w_hi       = 1'b0;
             w_we       = 1'b1;
-            w_data     = {7'b0, (r[7] ^ ir[10]) ? r[7] : alu_result[7]};
+            w_data     = {7'b0, (r1[7] ^ ir[10]) ? r1[7] : alu_result[7]};
           end else if (is_sltui) begin
             alu_op     = 3'd1;
             alu_b      = {8{ir[10]}};           // sign-extend for unsigned comparison
@@ -617,12 +613,12 @@ module riscyv02_execute (
                 w_we   = 1'b1;
               end
             end else if (is_right_shift) begin
-              shifter_din = {tmp[6:0], r};
+              shifter_din = {tmp[6:0], r1};
               w_data = shifter_result;
               w_hi   = 1'b0;
               w_we   = 1'b1;
             end else begin
-              shifter_din = {rev7(tmp[7:1]), rev8(r)};
+              shifter_din = {rev7(tmp[7:1]), rev8(r1)};
               w_data = rev8(shifter_result);
               w_hi   = 1'b1;
               w_we   = 1'b1;
@@ -636,7 +632,7 @@ module riscyv02_execute (
             alu_b      = {8{ir[10]}};           // sign-extend off8 bit 7
             alu_new_op = 1'b0;
             // BZ/BNZ: only zero/nonzero test (no sign branches)
-            if ((!tmp[8] && r == 8'h00) ^ is_bnz) begin
+            if ((!tmp[8] && r1 == 8'h00) ^ is_bnz) begin
               jump    = 1'b1;
               next_pc = {alu_result, tmp[7:0]};
             end
@@ -671,7 +667,7 @@ module riscyv02_execute (
         bus_active      = bus_active_r;
         ab              = {tmp[15:8] + {7'b0, ~|tmp[7:0]}, tmp[7:0]};
         if (!bus_active_r) begin
-          w_data        = mem_is_lbu ? 8'h00 : {8{r[7]}};
+          w_data        = mem_is_lbu ? 8'h00 : {8{r2[7]}};
           w_we          = 1'b1;
         end else
           w_we          = !mem_is_store;
@@ -720,12 +716,12 @@ module riscyv02_execute (
         E_EXEC_LO: begin
           if (is_sei) i_bit <= 1'b1;
           if (is_cli) i_bit <= 1'b0;
-          if (is_reti) tmp[7:0] <= r;
+          if (is_reti) tmp[7:0] <= r1;
           if (is_r9_load || is_r9_store || is_auipc || is_rr_load || is_rr_store
               || is_jr_jalr || is_branch || is_jump_imm || is_auto_mem)
-            tmp[7:0] <= is_auto_load ? r : alu_result;
-          if (is_branch) tmp[8] <= |r;       // nz_lo for BZ/BNZ
-          if (is_shift) tmp[7:0] <= r;
+            tmp[7:0] <= is_auto_load ? r1 : alu_result;
+          if (is_branch) tmp[8] <= |r1;       // nz_lo for BZ/BNZ
+          if (is_shift) tmp[7:0] <= r1;
           if (!is_system_1cyc) begin
             if (!is_shift) r2_hi_r <= 1'b1;
             state <= E_EXEC_HI;
@@ -739,7 +735,7 @@ module riscyv02_execute (
             r2_hi_r   <= 1'b0;
             state     <= is_auipc ? E_IDLE : E_MEM_LO;
           end else if (is_auto_mem) begin
-            tmp[15:8] <= is_auto_load ? r : alu_result;
+            tmp[15:8] <= is_auto_load ? r1 : alu_result;
             r2_hi_r   <= 1'b0;
             state     <= E_MEM_LO;
           end else if (is_jr_jalr) begin
@@ -754,7 +750,7 @@ module riscyv02_execute (
 
         E_MEM_LO: begin
           tmp[7:0]     <= tmp[7:0] + 8'd1;
-          r2_hi_r      <= 1'b1;
+          r2_hi_r      <= mem_is_store;  // Stores: hi byte for dout; loads: lo byte for sign ext
           bus_active_r <= !mem_is_byte_load;
           state        <= mem_is_byte_store ? E_IDLE : E_MEM_HI;
         end
