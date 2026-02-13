@@ -22,8 +22,7 @@
 // Prefix at MSB, registers at LSB for fixed positions.
 //
 //   Level  Format  Layout                             Instructions
-//   4      R,9     [prefix:4|imm9:9|reg:3]            9: ADDI,LI,LW,LB,LBU,SW,SB,JR,JALR
-//   5      R,8     [prefix:5|imm8:8|reg:3]            8: ANDI,ORI,XORI,SLTI,SLTUI,BZ,BNZ,XORIF
+//   5      R,8     [prefix:5|imm8:8|reg:3]            17: ADDI..XORIF
 //   6      R,7     [prefix:6|imm7:7|reg:3]            2: LUI,AUIPC
 //   6      "10"    [prefix:6|imm10:10]                 2: J,JAL
 //   7      R,R,R   [prefix:7|rd:3|rs2:3|rs1:3]       10: ADD..SRA
@@ -80,26 +79,26 @@ module riscyv02_execute (
   // Instruction decode: all properties derived directly from ir
   // -------------------------------------------------------------------------
 
-  // --- R,9 format (4-bit prefix @ [15:12]) ---
-  wire is_addi = ir[15:12] == 4'd0;
-  wire is_li   = ir[15:12] == 4'd1;
-  wire is_lw   = ir[15:12] == 4'd2;
-  wire is_lb   = ir[15:12] == 4'd3;
-  wire is_lbu  = ir[15:12] == 4'd4;
-  wire is_sw   = ir[15:12] == 4'd5;
-  wire is_sb   = ir[15:12] == 4'd6;
-  wire is_jr   = ir[15:12] == 4'd7;
-  wire is_jalr = ir[15:12] == 4'd8;
-
   // --- R,8 format (5-bit prefix @ [15:11]) ---
-  wire is_andi  = ir[15:11] == 5'b10010;
-  wire is_ori   = ir[15:11] == 5'b10011;
-  wire is_xori  = ir[15:11] == 5'b10100;
-  wire is_slti  = ir[15:11] == 5'b10101;
-  wire is_sltui = ir[15:11] == 5'b10110;
-  wire is_bz    = ir[15:11] == 5'b10111;
-  wire is_bnz   = ir[15:11] == 5'b11000;
-  wire is_xorif = ir[15:11] == 5'b11001;
+  wire is_addi = ir[15:11] == 5'b00000;
+  wire is_li   = ir[15:11] == 5'b00001;
+  wire is_lw   = ir[15:11] == 5'b00010;
+  wire is_lb   = ir[15:11] == 5'b00011;
+  wire is_lbu  = ir[15:11] == 5'b00100;
+  wire is_sw   = ir[15:11] == 5'b00101;
+  wire is_sb   = ir[15:11] == 5'b00110;
+  wire is_jr   = ir[15:11] == 5'b00111;
+  wire is_jalr = ir[15:11] == 5'b01000;
+
+
+  wire is_andi  = ir[15:11] == 5'b01001;
+  wire is_ori   = ir[15:11] == 5'b01010;
+  wire is_xori  = ir[15:11] == 5'b01011;
+  wire is_slti  = ir[15:11] == 5'b01100;
+  wire is_sltui = ir[15:11] == 5'b01101;
+  wire is_bz    = ir[15:11] == 5'b01110;
+  wire is_bnz   = ir[15:11] == 5'b01111;
+  wire is_xorif = ir[15:11] == 5'b10000;
 
   // --- R,7 / "10" format (6-bit prefix @ [15:10]) ---
   wire is_lui   = ir[15:10] == 6'b110100;
@@ -366,8 +365,8 @@ module riscyv02_execute (
           w_hi   = 1'b0;
           w_we   = 1'b1;
         end else if (is_r9_load || is_r9_store) begin
-          // Address: base + sext(off9), byte offset (no shift)
-          alu_b      = ir[10:3];            // off9[7:0]
+          // Address: base + sext(imm8), byte offset (no shift)
+          alu_b      = ir[10:3];            // imm[7:0]
           alu_new_op = 1'b1;
         end else if (is_auipc) begin
           // pc + (sext(imm7) << 9): lo byte is pc + 0
@@ -389,8 +388,8 @@ module riscyv02_execute (
           w_hi       = 1'b0;
           w_we       = 1'b1;
         end else if (is_jr_jalr) begin
-          // JR/JALR: rs + sext(off9) << 1
-          alu_b      = {ir[9:3], 1'b0};    // off9[6:0] << 1
+          // JR/JALR: rs + sext(imm8) << 1
+          alu_b      = {ir[9:3], 1'b0};    // imm[6:0] << 1
           alu_new_op = 1'b1;
           if (is_jalr) begin
             w_data = pc[7:0];
@@ -398,13 +397,13 @@ module riscyv02_execute (
             w_we   = 1'b1;
           end
         end else if (is_addi) begin
-          alu_b      = ir[10:3];            // imm9[7:0]
+          alu_b      = ir[10:3];            // imm[7:0]
           alu_new_op = 1'b1;
           w_data     = alu_result;
           w_hi       = 1'b0;
           w_we       = 1'b1;
         end else if (is_li) begin
-          w_data = ir[10:3];                // imm9[7:0]
+          w_data = ir[10:3];                // imm[7:0]
           w_hi   = 1'b0;
           w_we   = 1'b1;
         end else if (is_alu_rrr) begin
@@ -495,8 +494,8 @@ module riscyv02_execute (
 
       E_EXEC_HI: begin
         if (is_r9_load || is_r9_store) begin
-          // Address high byte: sign-extend off9 bit 8
-          alu_b      = {8{ir[11]}};
+          // Address high byte: sign-extend imm bit 7
+          alu_b      = {8{ir[10]}};
           alu_new_op = 1'b0;
         end else if (is_auipc) begin
           alu_a           = pc[15:8];
@@ -518,8 +517,8 @@ module riscyv02_execute (
           w_hi       = 1'b1;
           w_we       = 1'b1;
         end else if (is_jr_jalr) begin
-          // JR/JALR high byte: {7{sign}, off9[8:7]} after shift
-          alu_b           = {{7{ir[11]}}, ir[10]};
+          // JR/JALR high byte: sign-extend imm bit 7
+          alu_b           = {8{ir[10]}};
           alu_new_op      = 1'b0;
           jump            = 1'b1;
           next_pc         = {alu_result, tmp[7:0]};
@@ -543,13 +542,13 @@ module riscyv02_execute (
           // Execute high byte: completes this cycle
           insn_completing = 1'b1;
           if (is_addi) begin
-            alu_b      = {8{ir[11]}};           // sign-extend imm9 bit 8
+            alu_b      = {8{ir[10]}};           // sign-extend imm bit 7
             alu_new_op = 1'b0;
             w_data     = alu_result;
             w_hi       = 1'b1;
             w_we       = 1'b1;
           end else if (is_li) begin
-            w_data = {8{ir[11]}};               // sign-extend imm9 bit 8
+            w_data = {8{ir[10]}};               // sign-extend imm bit 7
             w_hi   = 1'b1;
             w_we   = 1'b1;
           end else if (is_alu_rrr) begin
@@ -707,9 +706,10 @@ module riscyv02_execute (
       r2_hi_r      <= 1'b0;
       bus_active_r <= 1'b0;
     end else begin
-      // NMI handshake
-      if (!nmi_pending) nmi_ack <= 1'b0;
-      else if (take_nmi) nmi_ack <= 1'b1;
+      // NMI handshake: set has priority (take_nmi fires via nmi_edge
+      // before nmi_pending is registered, so nmi_pending may still be 0).
+      if (take_nmi) nmi_ack <= 1'b1;
+      else if (!nmi_pending) nmi_ack <= 1'b0;
 
       // -----------------------------------------------------------------
       // State machine

@@ -5,7 +5,7 @@
 #
 # Register convention: R7 is used as a zero-base register throughout tests.
 # After reset, all registers are 0, so R7 starts at 0 and is never modified
-# by test code (except explicitly). R,9 loads always write to R0; R,9 stores
+# by test code (except explicitly). R,8 loads always write to R0; R,8 stores
 # always read data from R0. Use OR rd, R0, R0 to copy R0 to another register.
 
 import cocotb
@@ -16,10 +16,10 @@ __all__ = [
     'cocotb', 'Clock', 'ClockCycles', 'FallingEdge',
     '_reset', '_load_program', '_read_ram', '_place', '_set_ui', '_spin',
     '_measure_instruction_cycles',
-    '_encode_r9', '_encode_addi', '_encode_li',
+    '_encode_r8', '_encode_addi', '_encode_li',
     '_encode_lw', '_encode_lb', '_encode_lbu', '_encode_sw', '_encode_sb',
     '_encode_jr', '_encode_jalr',
-    '_encode_r8', '_encode_andi', '_encode_ori', '_encode_xori',
+    '_encode_andi', '_encode_ori', '_encode_xori',
     '_encode_slti', '_encode_sltui', '_encode_bz', '_encode_bnz', '_encode_xorif',
     '_encode_r7', '_encode_lui', '_encode_auipc',
     '_encode_10', '_encode_j', '_encode_jal',
@@ -72,95 +72,90 @@ def _set_ui(dut, rdy=True, irqb=True, nmib=True):
 # Encoding helpers — variable-width prefix-free encoding
 # ===========================================================================
 
-# R,9 format: [prefix:4 @ 15:12][imm9:9 @ 11:3][reg:3 @ 2:0]
-def _encode_r9(prefix, imm9, reg):
-    insn = (prefix << 12) | ((imm9 & 0x1FF) << 3) | (reg & 0x7)
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
-
-def _encode_addi(rd, imm9):
-    assert -256 <= imm9 <= 255, f"imm9 out of range: {imm9}"
-    return _encode_r9(0, imm9, rd)
-
-def _encode_li(rd, imm9):
-    assert -256 <= imm9 <= 255, f"imm9 out of range: {imm9}"
-    return _encode_r9(1, imm9, rd)
-
-def _encode_lw(rs, off9):
-    """LW: R0 = mem16[rs + sext(off9)]. Dest is always R0."""
-    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
-    return _encode_r9(2, off9, rs)
-
-def _encode_lb(rs, off9):
-    """LB: R0 = sext(mem[rs + sext(off9)]). Dest is always R0."""
-    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
-    return _encode_r9(3, off9, rs)
-
-def _encode_lbu(rs, off9):
-    """LBU: R0 = zext(mem[rs + sext(off9)]). Dest is always R0."""
-    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
-    return _encode_r9(4, off9, rs)
-
-def _encode_sw(rs, off9):
-    """SW: mem16[rs + sext(off9)] = R0. Data is always R0."""
-    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
-    return _encode_r9(5, off9, rs)
-
-def _encode_sb(rs, off9):
-    """SB: mem[rs + sext(off9)] = R0[7:0]. Data is always R0."""
-    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
-    return _encode_r9(6, off9, rs)
-
-def _encode_jr(rs, off9):
-    """JR: pc = rs + sext(off9) << 1."""
-    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
-    return _encode_r9(7, off9, rs)
-
-def _encode_jalr(rs, off9):
-    """JALR: tmp=rs+sext(off9)<<1; rs=pc+2; pc=tmp."""
-    assert -256 <= off9 <= 255, f"off9 out of range: {off9}"
-    return _encode_r9(8, off9, rs)
-
 # R,8 format: [prefix:5 @ 15:11][imm8:8 @ 10:3][reg:3 @ 2:0]
 def _encode_r8(prefix, imm8, reg):
     insn = (prefix << 11) | ((imm8 & 0xFF) << 3) | (reg & 0x7)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
-def _encode_andi(rd, imm8):
-    assert 0 <= imm8 <= 255, f"imm8 out of range: {imm8}"
-    return _encode_r8(0b10010, imm8, rd)
+def _encode_addi(rd, imm):
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b00000, imm, rd)
 
-def _encode_ori(rd, imm8):
-    assert 0 <= imm8 <= 255, f"imm8 out of range: {imm8}"
-    return _encode_r8(0b10011, imm8, rd)
+def _encode_li(rd, imm):
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b00001, imm, rd)
 
-def _encode_xori(rd, imm8):
-    assert 0 <= imm8 <= 255, f"imm8 out of range: {imm8}"
-    return _encode_r8(0b10100, imm8, rd)
+def _encode_lw(rs, imm):
+    """LW: R0 = mem16[rs + sext(imm)]. Dest is always R0."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b00010, imm, rs)
 
-def _encode_slti(rs, imm8):
-    """SLTI: R0 = (rs < sext(imm8)) ? 1 : 0. Dest is R0."""
-    assert -128 <= imm8 <= 127, f"imm8 out of range: {imm8}"
-    return _encode_r8(0b10101, imm8, rs)
+def _encode_lb(rs, imm):
+    """LB: R0 = sext(mem[rs + sext(imm)]). Dest is always R0."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b00011, imm, rs)
 
-def _encode_sltui(rs, imm8):
-    """SLTUI: R0 = (rs <u sext(imm8)) ? 1 : 0. Dest is R0."""
-    assert -128 <= imm8 <= 127, f"imm8 out of range: {imm8}"
-    return _encode_r8(0b10110, imm8, rs)
+def _encode_lbu(rs, imm):
+    """LBU: R0 = zext(mem[rs + sext(imm)]). Dest is always R0."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b00100, imm, rs)
 
-def _encode_bz(rs, off8):
-    """BZ: if rs == 0, pc += sext(off8) << 1."""
-    assert -128 <= off8 <= 127, f"off8 out of range: {off8}"
-    return _encode_r8(0b10111, off8, rs)
+def _encode_sw(rs, imm):
+    """SW: mem16[rs + sext(imm)] = R0. Data is always R0."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b00101, imm, rs)
 
-def _encode_bnz(rs, off8):
-    """BNZ: if rs != 0, pc += sext(off8) << 1."""
-    assert -128 <= off8 <= 127, f"off8 out of range: {off8}"
-    return _encode_r8(0b11000, off8, rs)
+def _encode_sb(rs, imm):
+    """SB: mem[rs + sext(imm)] = R0[7:0]. Data is always R0."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b00110, imm, rs)
 
-def _encode_xorif(rs, imm8):
-    """XORIF: R0 = rs ^ zext(imm8). Dest is R0."""
-    assert 0 <= imm8 <= 255, f"imm8 out of range: {imm8}"
-    return _encode_r8(0b11001, imm8, rs)
+def _encode_jr(rs, imm):
+    """JR: pc = rs + sext(imm) << 1."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b00111, imm, rs)
+
+def _encode_jalr(rs, imm):
+    """JALR: R6=pc+2; pc = rs + sext(imm) << 1."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b01000, imm, rs)
+
+def _encode_andi(rd, imm):
+    assert 0 <= imm <= 255, f"imm out of range: {imm}"
+    return _encode_r8(0b01001, imm, rd)
+
+def _encode_ori(rd, imm):
+    assert 0 <= imm <= 255, f"imm out of range: {imm}"
+    return _encode_r8(0b01010, imm, rd)
+
+def _encode_xori(rd, imm):
+    assert 0 <= imm <= 255, f"imm out of range: {imm}"
+    return _encode_r8(0b01011, imm, rd)
+
+def _encode_slti(rs, imm):
+    """SLTI: R0 = (rs < sext(imm)) ? 1 : 0. Dest is R0."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b01100, imm, rs)
+
+def _encode_sltui(rs, imm):
+    """SLTUI: R0 = (rs <u sext(imm)) ? 1 : 0. Dest is R0."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b01101, imm, rs)
+
+def _encode_bz(rs, imm):
+    """BZ: if rs == 0, pc += sext(imm) << 1."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b01110, imm, rs)
+
+def _encode_bnz(rs, imm):
+    """BNZ: if rs != 0, pc += sext(imm) << 1."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b01111, imm, rs)
+
+def _encode_xorif(rs, imm):
+    """XORIF: R0 = rs ^ zext(imm). Dest is R0."""
+    assert 0 <= imm <= 255, f"imm out of range: {imm}"
+    return _encode_r8(0b10000, imm, rs)
 
 # R,7 format: [prefix:6 @ 15:10][imm7:7 @ 9:3][reg:3 @ 2:0]
 def _encode_r7(prefix, imm7, reg):
@@ -250,8 +245,8 @@ def _encode_nop():
     return (0x00, 0x00)
 
 def _spin(addr):
-    """JR R7, off9 where off9<<1 = addr, so off9 = addr//2."""
-    return _encode_jr(rs=7, off9=addr // 2)
+    """JR R7, imm where imm<<1 = addr, so imm = addr//2."""
+    return _encode_jr(rs=7, imm=addr // 2)
 
 
 # ===========================================================================

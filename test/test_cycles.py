@@ -22,7 +22,7 @@ async def test_cycle_count_nop(dut):
 async def test_cycle_count_lw(dut):
     """LW takes 4 cycles throughput."""
     prog = {}
-    _place(prog, 0x0000, _encode_lw(rs=7, off9=0x30))
+    _place(prog, 0x0000, _encode_lw(rs=7, imm=0x30))
     _place(prog, 0x0002, _spin(0x0002))
     await _measure_instruction_cycles(dut, prog, 4, "LW")
 
@@ -31,7 +31,7 @@ async def test_cycle_count_lw(dut):
 async def test_cycle_count_sw(dut):
     """SW takes 4 cycles throughput."""
     prog = {}
-    _place(prog, 0x0000, _encode_sw(rs=7, off9=0x30))
+    _place(prog, 0x0000, _encode_sw(rs=7, imm=0x30))
     _place(prog, 0x0002, _spin(0x0002))
     await _measure_instruction_cycles(dut, prog, 4, "SW")
 
@@ -41,7 +41,7 @@ async def test_cycle_count_jr(dut):
     """JR takes 4 cycles."""
     prog = {}
     # JR R7, 0 → PC = 0+0 = 0x0000 (spin at self)
-    _place(prog, 0x0000, _encode_jr(rs=7, off9=0))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0))
     await _measure_instruction_cycles(dut, prog, 4, "JR")
 
 
@@ -95,7 +95,7 @@ async def test_cycle_count_cli(dut):
 async def test_cycle_count_li(dut):
     """LI takes 2 cycles (no memory phase, fetch overlaps execute)."""
     prog = {}
-    _place(prog, 0x0000, _encode_li(rd=1, imm9=42))
+    _place(prog, 0x0000, _encode_li(rd=1, imm=42))
     _place(prog, 0x0002, _spin(0x0002))
     await _measure_instruction_cycles(dut, prog, 2, "LI")
 
@@ -114,7 +114,7 @@ async def test_cycle_count_lb(dut):
     """LB takes 4 cycles."""
     prog = {}
     prog[0x0030] = 0x42
-    _place(prog, 0x0000, _encode_lb(rs=7, off9=0x30))
+    _place(prog, 0x0000, _encode_lb(rs=7, imm=0x30))
     _place(prog, 0x0002, _spin(0x0002))
     await _measure_instruction_cycles(dut, prog, 4, "LB")
 
@@ -123,7 +123,7 @@ async def test_cycle_count_lb(dut):
 async def test_cycle_count_sb(dut):
     """SB takes 3 cycles (1 memory byte)."""
     prog = {}
-    _place(prog, 0x0000, _encode_sb(rs=7, off9=0x30))
+    _place(prog, 0x0000, _encode_sb(rs=7, imm=0x30))
     _place(prog, 0x0002, _spin(0x0002))
     await _measure_instruction_cycles(dut, prog, 3, "SB")
 
@@ -132,7 +132,7 @@ async def test_cycle_count_sb(dut):
 async def test_cycle_count_addi(dut):
     """ADDI takes 2 cycles (no memory phase)."""
     prog = {}
-    _place(prog, 0x0000, _encode_addi(rd=1, imm9=5))
+    _place(prog, 0x0000, _encode_addi(rd=1, imm=5))
     _place(prog, 0x0002, _spin(0x0002))
     await _measure_instruction_cycles(dut, prog, 2, "ADDI")
 
@@ -151,7 +151,7 @@ async def test_cycle_count_branch_taken(dut):
     """BZ taken takes 4 cycles."""
     prog = {}
     # R0 = 0 from reset, BZ R0 is always taken
-    _place(prog, 0x0000, _encode_bz(rs=0, off8=1))  # jump to 0x0004+2=0x0006
+    _place(prog, 0x0000, _encode_bz(rs=0, imm=1))  # jump to 0x0004+2=0x0006
     _place(prog, 0x0006, _spin(0x0006))
     await _measure_instruction_cycles(dut, prog, 4, "BZ taken")
 
@@ -319,6 +319,6 @@ async def test_cycle_count_brk(dut):
 async def test_cycle_count_lbu(dut):
     """LBU takes 4 cycles throughput."""
     prog = {}
-    _place(prog, 0x0000, _encode_lbu(rs=7, off9=0))
+    _place(prog, 0x0000, _encode_lbu(rs=7, imm=0))
     _place(prog, 0x0002, _spin(0x0002))
     await _measure_instruction_cycles(dut, prog, 4, "LBU")

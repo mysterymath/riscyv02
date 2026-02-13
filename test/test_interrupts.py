@@ -17,8 +17,8 @@ async def test_reset_i_state(dut):
 
     prog = {}
     _place(prog, 0x0000, _spin(0x0000))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0xAD))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _spin(0x000A))
     prog[0x0040] = 0x00
     prog[0x0041] = 0x00
@@ -44,8 +44,8 @@ async def test_cli_enables_irq(dut):
     prog = {}
     _place(prog, 0x0000, _encode_cli())
     _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0xEF))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x5A))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _spin(0x000A))
     prog[0x0040] = 0x00
     prog[0x0041] = 0x00
@@ -61,7 +61,7 @@ async def test_cli_enables_irq(dut):
     await ClockCycles(dut.clk, 100)
 
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0x00EF, f"IRQ did not fire after CLI! Got {val:#06x}"
+    assert val == 0x005A, f"IRQ did not fire after CLI! Got {val:#06x}"
 
 
 @cocotb.test()
@@ -72,8 +72,8 @@ async def test_sei_disables_irq(dut):
 
     prog = {}
     _place(prog, 0x0000, _encode_j(off10=8))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0xAD))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _spin(0x000A))
     _place(prog, 0x0012, _encode_cli())
     _place(prog, 0x0014, _encode_sei())
@@ -103,8 +103,8 @@ async def test_reti(dut):
 
     prog = {}
     _place(prog, 0x0000, _encode_j(off10=8))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _encode_reti())
     _place(prog, 0x0012, _encode_cli())
     _place(prog, 0x0014, _spin(0x0014))
@@ -135,8 +135,8 @@ async def test_brk(dut):
 
     prog = {}
     _place(prog, 0x0000, _encode_j(off10=8))
-    _place(prog, 0x0004, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0006, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0004, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0006, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0008, _spin(0x0008))
     _place(prog, 0x0012, _encode_brk())
     _place(prog, 0x0014, _spin(0x0014))
@@ -159,13 +159,13 @@ async def test_wai(dut):
 
     prog = {}
     _place(prog, 0x0000, _encode_j(off10=8))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _encode_reti())
     _place(prog, 0x0012, _encode_cli())
     _place(prog, 0x0014, _encode_wai())
-    _place(prog, 0x0016, _encode_li(rd=0, imm9=0x99))
-    _place(prog, 0x0018, _encode_sw(rs=7, off9=0x42))
+    _place(prog, 0x0016, _encode_li(rd=0, imm=0x55))
+    _place(prog, 0x0018, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x001A, _spin(0x001A))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     prog[0x0042] = 0x00; prog[0x0043] = 0x00
@@ -189,7 +189,7 @@ async def test_wai(dut):
     v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
     v2 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
     assert v1 == 0x0042, f"IRQ handler marker: expected 0x0042, got {v1:#06x}"
-    assert v2 == 0x0099, f"Post-WAI marker: expected 0x0099, got {v2:#06x}"
+    assert v2 == 0x0055, f"Post-WAI marker: expected 0x0099, got {v2:#06x}"
 
 
 @cocotb.test()
@@ -200,8 +200,8 @@ async def test_stp(dut):
 
     prog = {}
     _place(prog, 0x0000, _encode_stp())
-    _place(prog, 0x0002, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0004, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0002, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0004, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0006, _spin(0x0006))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
 
@@ -220,8 +220,8 @@ async def test_nmi(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0002, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0004, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0002, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0004, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0006, _spin(0x0006))
     _place(prog, 0x0000, _spin(0x0000))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
@@ -250,11 +250,11 @@ async def test_i_bit_masking(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_li(rd=1, imm9=0x20))
+    _place(prog, 0x0000, _encode_li(rd=1, imm=0x20))
     _place(prog, 0x0002, _encode_or_rr(rd=1, rs1=0, rs2=1))
-    _place(prog, 0x0004, _encode_jr(rs=1, off9=0))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0004, _encode_jr(rs=1, imm=0))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _spin(0x000A))
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _spin(0x0022))
@@ -281,14 +281,14 @@ async def test_irq_during_multicycle(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_li(rd=1, imm9=0x10))
+    _place(prog, 0x0000, _encode_li(rd=1, imm=0x10))
     _place(prog, 0x0002, _encode_or_rr(rd=1, rs1=0, rs2=1))
-    _place(prog, 0x0004, _encode_jr(rs=1, off9=0))
-    _place(prog, 0x0006, _encode_sw(rs=7, off9=0x42))
+    _place(prog, 0x0004, _encode_jr(rs=1, imm=0))
+    _place(prog, 0x0006, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x0008, _encode_reti())
     _place(prog, 0x0010, _encode_cli())
-    _place(prog, 0x0012, _encode_lw(rs=7, off9=0x30))
-    _place(prog, 0x0014, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0012, _encode_lw(rs=7, imm=0x30))
+    _place(prog, 0x0014, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0016, _spin(0x0016))
     prog[0x0030] = 0x34; prog[0x0031] = 0x12
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
@@ -321,8 +321,8 @@ async def test_cli_atomicity(dut):
     prog = {}
     _place(prog, 0x0000, _encode_cli())
     _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _spin(0x000A))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
 
@@ -346,8 +346,8 @@ async def test_nmi_edge_triggered(dut):
 
     prog = {}
     _place(prog, 0x0000, _spin(0x0000))
-    _place(prog, 0x0002, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0004, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0002, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0004, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0006, _spin(0x0006))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
 
@@ -373,17 +373,17 @@ async def test_nmi_priority_over_irq(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, off9=0x10))
-    _place(prog, 0x0002, _encode_jr(rs=7, off9=0x18))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0002, _encode_jr(rs=7, imm=0x18))
     _place(prog, 0x0004, _spin(0x0004))
-    _place(prog, 0x0006, _encode_jr(rs=7, off9=0x1C))
+    _place(prog, 0x0006, _encode_jr(rs=7, imm=0x1C))
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _spin(0x0022))
-    _place(prog, 0x0030, _encode_li(rd=0, imm9=0x22))
-    _place(prog, 0x0032, _encode_sw(rs=7, off9=0x44))
+    _place(prog, 0x0030, _encode_li(rd=0, imm=0x22))
+    _place(prog, 0x0032, _encode_sw(rs=7, imm=0x44))
     _place(prog, 0x0034, _spin(0x0034))
-    _place(prog, 0x0038, _encode_li(rd=0, imm9=0x11))
-    _place(prog, 0x003A, _encode_sw(rs=7, off9=0x46))
+    _place(prog, 0x0038, _encode_li(rd=0, imm=0x11))
+    _place(prog, 0x003A, _encode_sw(rs=7, imm=0x46))
     _place(prog, 0x003C, _spin(0x003C))
     prog[0x0044] = 0x00; prog[0x0045] = 0x00
     prog[0x0046] = 0x00; prog[0x0047] = 0x00
@@ -411,12 +411,12 @@ async def test_nmi_during_multicycle(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, off9=0x10))
-    _place(prog, 0x0002, _encode_sw(rs=7, off9=0x42))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0002, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x0004, _encode_reti())
     _place(prog, 0x0006, _spin(0x0006))
-    _place(prog, 0x0020, _encode_lw(rs=7, off9=0x30))
-    _place(prog, 0x0022, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0020, _encode_lw(rs=7, imm=0x30))
+    _place(prog, 0x0022, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0024, _spin(0x0024))
     prog[0x0030] = 0x34; prog[0x0031] = 0x12
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
@@ -448,9 +448,9 @@ async def test_nmi_second_edge(dut):
 
     prog = {}
     _place(prog, 0x0000, _spin(0x0000))
-    _place(prog, 0x0002, _encode_lw(rs=7, off9=0x40))
-    _place(prog, 0x0004, _encode_addi(rd=0, imm9=1))
-    _place(prog, 0x0006, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0002, _encode_lw(rs=7, imm=0x40))
+    _place(prog, 0x0004, _encode_addi(rd=0, imm=1))
+    _place(prog, 0x0006, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0008, _encode_reti())
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
 
@@ -462,11 +462,13 @@ async def test_nmi_second_edge(dut):
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 30)
 
+    # First NMI pulse
     _set_ui(dut, rdy=True, irqb=True, nmib=False)
     await ClockCycles(dut.clk, 10)
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     await ClockCycles(dut.clk, 100)
 
+    # Second NMI pulse
     _set_ui(dut, rdy=True, irqb=True, nmib=False)
     await ClockCycles(dut.clk, 10)
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
@@ -484,8 +486,8 @@ async def test_nmi_during_rdy_low(dut):
 
     prog = {}
     _place(prog, 0x0000, _spin(0x0000))
-    _place(prog, 0x0002, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0004, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0002, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0004, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0006, _spin(0x0006))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
 
@@ -521,16 +523,16 @@ async def test_wai_irq(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, off9=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
     _place(prog, 0x0002, _spin(0x0002))
     _place(prog, 0x0004, _spin(0x0004))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0x11))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x11))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _encode_reti())
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_wai())
-    _place(prog, 0x0024, _encode_li(rd=0, imm9=0x22))
-    _place(prog, 0x0026, _encode_sw(rs=7, off9=0x42))
+    _place(prog, 0x0024, _encode_li(rd=0, imm=0x22))
+    _place(prog, 0x0026, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x0028, _spin(0x0028))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     prog[0x0042] = 0x00; prog[0x0043] = 0x00
@@ -560,13 +562,13 @@ async def test_wai_nmi(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, off9=0x10))
-    _place(prog, 0x0002, _encode_li(rd=0, imm9=0x11))
-    _place(prog, 0x0004, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0002, _encode_li(rd=0, imm=0x11))
+    _place(prog, 0x0004, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0006, _encode_reti())
     _place(prog, 0x0020, _encode_wai())
-    _place(prog, 0x0022, _encode_li(rd=0, imm9=0x22))
-    _place(prog, 0x0024, _encode_sw(rs=7, off9=0x42))
+    _place(prog, 0x0022, _encode_li(rd=0, imm=0x22))
+    _place(prog, 0x0024, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x0026, _spin(0x0026))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     prog[0x0042] = 0x00; prog[0x0043] = 0x00
@@ -596,13 +598,13 @@ async def test_wai_masked_irq_wakes(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, off9=0x10))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0xAD))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _spin(0x000A))
     _place(prog, 0x0020, _encode_wai())
-    _place(prog, 0x0022, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0024, _encode_sw(rs=7, off9=0x42))
+    _place(prog, 0x0022, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0024, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x0026, _spin(0x0026))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     prog[0x0042] = 0x00; prog[0x0043] = 0x00
@@ -630,18 +632,18 @@ async def test_brk_masks_irq(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, off9=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
     _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, off9=0x18))
-    _place(prog, 0x0006, _encode_jr(rs=7, off9=0x1C))
+    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x18))
+    _place(prog, 0x0006, _encode_jr(rs=7, imm=0x1C))
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_brk())
     _place(prog, 0x0024, _spin(0x0024))
-    _place(prog, 0x0030, _encode_li(rd=0, imm9=0x11))
-    _place(prog, 0x0032, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0030, _encode_li(rd=0, imm=0x11))
+    _place(prog, 0x0032, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0034, _encode_reti())
-    _place(prog, 0x0038, _encode_li(rd=0, imm9=0x22))
-    _place(prog, 0x003A, _encode_sw(rs=7, off9=0x42))
+    _place(prog, 0x0038, _encode_li(rd=0, imm=0x22))
+    _place(prog, 0x003A, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x003C, _encode_reti())
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     prog[0x0042] = 0x00; prog[0x0043] = 0x00
@@ -669,18 +671,18 @@ async def test_brk_restores_i(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, off9=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
     _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, off9=0x18))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0xAD))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x42))
+    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x18))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x000A, _encode_reti())
     _place(prog, 0x0020, _encode_brk())
-    _place(prog, 0x0022, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0024, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0022, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0024, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0026, _spin(0x0026))
-    _place(prog, 0x0030, _encode_li(rd=0, imm9=0x11))
-    _place(prog, 0x0032, _encode_sw(rs=7, off9=0x44))
+    _place(prog, 0x0030, _encode_li(rd=0, imm=0x11))
+    _place(prog, 0x0032, _encode_sw(rs=7, imm=0x44))
     _place(prog, 0x0034, _encode_reti())
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     prog[0x0042] = 0x00; prog[0x0043] = 0x00
@@ -709,11 +711,11 @@ async def test_banked_r6_read(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, off9=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
     _place(prog, 0x0002, _spin(0x0002))
     _place(prog, 0x0004, _spin(0x0004))
     _place(prog, 0x0006, _encode_or_rr(rd=0, rs1=6, rs2=6))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _spin(0x000A))
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _spin(0x0022))
@@ -738,19 +740,19 @@ async def test_banked_r6_redirect(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, off9=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
     _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, off9=0x18))
+    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x18))
     _place(prog, 0x0006, _spin(0x0006))
     _place(prog, 0x0020, _encode_brk())
-    _place(prog, 0x0022, _encode_li(rd=0, imm9=0xAD))
-    _place(prog, 0x0024, _encode_sw(rs=7, off9=0x60))
+    _place(prog, 0x0022, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0024, _encode_sw(rs=7, imm=0x60))
     _place(prog, 0x0026, _spin(0x0026))
-    _place(prog, 0x0030, _encode_lw(rs=7, off9=0x50))
+    _place(prog, 0x0030, _encode_lw(rs=7, imm=0x50))
     _place(prog, 0x0032, _encode_or_rr(rd=6, rs1=0, rs2=0))
     _place(prog, 0x0034, _encode_reti())
-    _place(prog, 0x0040, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0042, _encode_sw(rs=7, off9=0x62))
+    _place(prog, 0x0040, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0042, _encode_sw(rs=7, imm=0x62))
     _place(prog, 0x0044, _spin(0x0044))
     prog[0x0050] = 0x40; prog[0x0051] = 0x00
     prog[0x0060] = 0x00; prog[0x0061] = 0x00
@@ -777,15 +779,15 @@ async def test_banked_r6_i_bit(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, off9=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
     _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, off9=0x18))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0x33))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x60))
+    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x18))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x33))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x60))
     _place(prog, 0x000A, _spin(0x000A))
     _place(prog, 0x0020, _encode_brk())
     _place(prog, 0x0022, _spin(0x0022))
-    _place(prog, 0x0030, _encode_lw(rs=7, off9=0x50))
+    _place(prog, 0x0030, _encode_lw(rs=7, imm=0x50))
     _place(prog, 0x0032, _encode_or_rr(rd=6, rs1=0, rs2=0))
     _place(prog, 0x0034, _encode_reti())
     _place(prog, 0x0040, _spin(0x0040))
@@ -812,14 +814,14 @@ async def test_irq_interrupts_jr(dut):
 
     prog = {}
     _place(prog, 0x0000, _encode_cli())
-    _place(prog, 0x0002, _encode_jr(rs=7, off9=0x10))
-    _place(prog, 0x0006, _encode_li(rd=1, imm9=0xEF))
+    _place(prog, 0x0002, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0006, _encode_li(rd=1, imm=0x5A))
     _place(prog, 0x0008, _encode_or_rr(rd=0, rs1=1, rs2=1))
-    _place(prog, 0x000A, _encode_sw(rs=7, off9=0x60))
+    _place(prog, 0x000A, _encode_sw(rs=7, imm=0x60))
     _place(prog, 0x000C, _encode_reti())
-    _place(prog, 0x0020, _encode_li(rd=2, imm9=0xFE))
+    _place(prog, 0x0020, _encode_li(rd=2, imm=0x7E))
     _place(prog, 0x0022, _encode_or_rr(rd=0, rs1=2, rs2=2))
-    _place(prog, 0x0024, _encode_sw(rs=7, off9=0x62))
+    _place(prog, 0x0024, _encode_sw(rs=7, imm=0x62))
     _place(prog, 0x0026, _spin(0x0026))
     prog[0x0060] = 0x00; prog[0x0061] = 0x00
     prog[0x0062] = 0x00; prog[0x0063] = 0x00
@@ -837,5 +839,5 @@ async def test_irq_interrupts_jr(dut):
 
     irq_marker = _read_ram(dut, 0x0060) | (_read_ram(dut, 0x0061) << 8)
     jr_marker = _read_ram(dut, 0x0062) | (_read_ram(dut, 0x0063) << 8)
-    assert irq_marker == 0x00EF, f"IRQ handler didn't run! Got {irq_marker:#06x}"
-    assert jr_marker == 0x00FE, f"RETI didn't return to JR target! Got {jr_marker:#06x}"
+    assert irq_marker == 0x005A, f"IRQ handler didn't run! Got {irq_marker:#06x}"
+    assert jr_marker == 0x007E, f"RETI didn't return to JR target! Got {jr_marker:#06x}"

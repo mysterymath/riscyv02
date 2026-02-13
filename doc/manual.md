@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LW.RR**, **LB.RR**, **LBU.RR**, **SW.RR**, **SB.RR**, **LW.A**, **LB.A**, **LBU.A**, **SW.A**, **SB.A**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTI**, **SLTUI**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling is supported with banked R6 for automatic return address save/restore. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. Auto-modify load/store instructions (LW.A, LB.A, LBU.A, SW.A, SB.A) provide PUSH/POP semantics with zero cycle overhead vs regular load/store. R,9-format loads/stores use R0 as an implicit data register, while R,R-format loads/stores allow explicit register selection. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LW.RR**, **LB.RR**, **LBU.RR**, **SW.RR**, **SB.RR**, **LW.A**, **LB.A**, **LBU.A**, **SW.A**, **SB.A**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTI**, **SLTUI**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling is supported with banked R6 for automatic return address save/restore. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. Auto-modify load/store instructions (LW.A, LB.A, LBU.A, SW.A, SB.A) provide PUSH/POP semantics with zero cycle overhead vs regular load/store. R,8-format loads/stores use R0 as an implicit data register, while R,R-format loads/stores allow explicit register selection. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -106,7 +106,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 
 | Register | Name | Suggested Purpose |
 |---|---|---|
-| R0 | a0 | Accumulator / implicit load dest / store data (R,9 format) |
+| R0 | a0 | Accumulator / implicit load dest / store data (R,8 format) |
 | R1 | a1 | Argument / return value 1 |
 | R2 | t0 | Temporary 0 |
 | R3 | t1 | Temporary 1 |
@@ -115,7 +115,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | R6 | ra | Return address (link register, banked during interrupts) |
 | R7 | sp | Stack pointer |
 
-R0 is the implicit data register for R,9-format loads and stores: loads write their result to R0, stores read their data from R0. SLTI, SLTUI, and XORIF also write their result to R0 (non-destructive compare/test patterns). R,R-format loads and stores allow explicit register selection for both data and base.
+R0 is the implicit data register for R,8-format loads and stores: loads write their result to R0, stores read their data from R0. SLTI, SLTUI, and XORIF also write their result to R0 (non-destructive compare/test patterns). R,R-format loads and stores allow explicit register selection for both data and base.
 
 ### Link Register (R6) and Banking
 
@@ -135,8 +135,6 @@ All instructions are 16 bits. The encoding uses a **variable-width prefix-free**
 
 | Level | Format | Layout | Instructions |
 |---|---|---|---|
-| 4 | R,9 | `[prefix:4\|imm9:9\|reg:3]` | ADDI, LI, LW, LB, LBU, SW, SB, JR, JALR |
-| 5 | R,8 | `[prefix:5\|imm8:8\|reg:3]` | ANDI, ORI, XORI, SLTI, SLTUI, BZ, BNZ, XORIF |
 | 6 | R,7 | `[prefix:6\|imm7:7\|reg:3]` | LUI, AUIPC |
 | 6 | "10" | `[prefix:6\|off10:10]` | J, JAL |
 | 7 | R,R,R | `[prefix:7\|rd:3\|rs2:3\|rs1:3]` | ADD, SUB, AND, OR, XOR, SLT, SLTU, SLL, SRL, SRA |
@@ -147,8 +145,6 @@ All instructions are 16 bits. The encoding uses a **variable-width prefix-free**
 ### Bit Layout
 
 ```
-R,9:   [prefix:4 @ 15:12] [imm9:9 @ 11:3]   [reg:3 @ 2:0]
-R,8:   [prefix:5 @ 15:11] [imm8:8 @ 10:3]    [reg:3 @ 2:0]
 R,7:   [prefix:6 @ 15:10] [imm7:7 @ 9:3]     [reg:3 @ 2:0]
 "10":  [prefix:6 @ 15:10] [off10:10 @ 9:0]
 R,R,R: [prefix:7 @ 15:9]  [rd:3 @ 8:6] [rs2:3 @ 5:3] [rs1:3 @ 2:0]
@@ -160,26 +156,26 @@ System:[prefix:10 @ 15:6] [sub:6 @ 5:0]
 ### Prefix Table
 
 ```
---- R,9 format (4-bit prefix) ---
-0000    ADDI    rd = rd + sext(imm9)
-0001    LI      rd = sext(imm9)
-0010    LW      R0 = mem16[rs + sext(off9)]
-0011    LB      R0 = sext(mem[rs + sext(off9)])
-0100    LBU     R0 = zext(mem[rs + sext(off9)])
-0101    SW      mem16[rs + sext(off9)] = R0
-0110    SB      mem[rs + sext(off9)] = R0[7:0]
-0111    JR      pc = rs + sext(off9) << 1
-1000    JALR    R6 = pc+2; pc = rs + sext(off9) << 1
-
 --- R,8 format (5-bit prefix) ---
-10010   ANDI    rd = rd & zext(imm8)
-10011   ORI     rd = rd | zext(imm8)
-10100   XORI    rd = rd ^ zext(imm8)
-10101   SLTI    R0 = (rs < sext(imm8)) ? 1 : 0   (signed)
-10110   SLTUI   R0 = (rs <u sext(imm8)) ? 1 : 0  (unsigned)
-10111   BZ      if rs == 0, pc += sext(off8) << 1
-11000   BNZ     if rs != 0, pc += sext(off8) << 1
-11001   XORIF   R0 = rs ^ zext(imm8)
+00000   ADDI    rd = rd + sext(imm8)
+00001   LI      rd = sext(imm8)
+00010   LW      R0 = mem16[rs + sext(imm8)]
+00011   LB      R0 = sext(mem[rs + sext(imm8)])
+00100   LBU     R0 = zext(mem[rs + sext(imm8)])
+00101   SW      mem16[rs + sext(imm8)] = R0
+00110   SB      mem[rs + sext(imm8)] = R0[7:0]
+00111   JR      pc = rs + sext(imm8) << 1
+01000   JALR    R6 = pc+2; pc = rs + sext(imm8) << 1
+
+
+01001   ANDI    rd = rd & zext(imm8)
+01010   ORI     rd = rd | zext(imm8)
+01011   XORI    rd = rd ^ zext(imm8)
+01100   SLTI    R0 = (rs < sext(imm8)) ? 1 : 0   (signed)
+01101   SLTUI   R0 = (rs <u sext(imm8)) ? 1 : 0  (unsigned)
+01110   BZ      if rs == 0, pc += sext(imm8) << 1
+01111   BNZ     if rs != 0, pc += sext(imm8) << 1
+10000   XORIF   R0 = rs ^ zext(imm8)
 
 --- R,7 format (6-bit prefix) ---
 110100  LUI     rd = sext(imm7) << 9
@@ -235,59 +231,58 @@ All other encodings execute as NOP (2-cycle no-op).
 
 #### ADDI -- Add Immediate
 
-`rd = rd + sext(imm9)` -- 2 cycles
+`rd = rd + sext(imm8)` -- 2 cycles
 
-Adds a sign-extended 9-bit immediate (-256 to +255) to the destination register. `ADDI R0, 0` (encoding `0x0000`) is the canonical NOP. Useful for stack pointer adjustments and small constant additions. Pairs with LUI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`.
+Adds a sign-extended 8-bit immediate (-128 to +127) to the destination register. `ADDI R0, 0` (encoding `0x0000`) is the canonical NOP. Useful for stack pointer adjustments and small constant additions. Pairs with LUI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`.
 
 #### LI -- Load Immediate
 
-`rd = sext(imm9)` -- 2 cycles
+`rd = sext(imm8)` -- 2 cycles
 
-Loads a sign-extended 9-bit immediate (-256 to +255) into a register. No memory access or register read needed.
+Loads a sign-extended 8-bit immediate (-128 to +127) into a register. No memory access or register read needed.
 
 #### LW -- Load Word
 
-`R0 = MEM16[rs + sext(off9)]` -- 4 cycles
+`R0 = MEM16[rs + sext(imm8)]` -- 4 cycles
 
-Loads a 16-bit word from memory into R0. The 9-bit signed offset is a byte offset (not scaled), giving a range of -256 to +255 bytes from the base register. The low byte is read first, then the high byte.
+Loads a 16-bit word from memory into R0. The 8-bit signed offset is a byte offset (not scaled), giving a range of -128 to +127 bytes from the base register. The low byte is read first, then the high byte.
 
 #### LB -- Load Byte (Sign-Extend)
 
-`R0 = sext(MEM[rs + sext(off9)])` -- 4 cycles
+`R0 = sext(MEM[rs + sext(imm8)])` -- 4 cycles
 
 Loads a single byte and sign-extends it to 16 bits into R0. If bit 7 is set, the high byte is filled with 0xFF; otherwise 0x00.
 
 #### LBU -- Load Byte (Zero-Extend)
 
-`R0 = zext(MEM[rs + sext(off9)])` -- 4 cycles
+`R0 = zext(MEM[rs + sext(imm8)])` -- 4 cycles
 
 Loads a single byte and zero-extends it to 16 bits into R0. The high byte is always 0x00.
 
 #### SW -- Store Word
 
-`MEM16[rs + sext(off9)] = R0` -- 4 cycles
+`MEM16[rs + sext(imm8)] = R0` -- 4 cycles
 
 Stores R0 as a 16-bit word to memory. The low byte is written first, then the high byte.
 
 #### SB -- Store Byte
 
-`MEM[rs + sext(off9)] = R0[7:0]` -- 3 cycles
+`MEM[rs + sext(imm8)] = R0[7:0]` -- 3 cycles
 
 Stores the low byte of R0 to memory.
 
 #### JR -- Jump Register
 
-`PC = rs + sext(off9) << 1` -- 4 cycles
+`PC = rs + sext(imm8) << 1` -- 4 cycles
 
-Unconditional jump to a register plus a scaled signed offset. The 9-bit offset is shifted left by 1, giving a range of -512 to +510 bytes from the register value.
+Unconditional jump to a register plus a scaled signed offset. The 8-bit offset is shifted left by 1, giving a range of -256 to +254 bytes from the register value.
 
 #### JALR -- Jump and Link Register
 
-`R6 = PC+2; PC = rs + sext(off9) << 1` -- 4 cycles
+`R6 = PC+2; PC = rs + sext(imm8) << 1` -- 4 cycles
 
 Register-indirect jump that saves the return address in R6. Pairs with AUIPC for full 16-bit PC-relative function calls: `AUIPC t0, upper; JALR t0, lower`.
 
-### R,8 Format -- Logic Immediate, Compare, Branches
 
 #### ANDI -- And Immediate
 

@@ -90,12 +90,14 @@ module tb ();
   // -----------------------------------------------------------------------
   // Write capture: at negedge clk (data phase).
   //
-  // At negedge, mux_sel is still 1, so uo_out[0] = RWB.  RWB=0 means
-  // the CPU is writing.  Gated on rst_n because during reset mux_sel is
+  // At negedge, mux_sel is 1, so uo_out[0] = RWB.  RWB=0 means the CPU
+  // is writing.  Gated on rst_n AND mux_sel: during reset mux_sel is
   // stuck at 0 (address phase) and uo_out carries address bits, not RWB.
+  // The mux_sel check also protects the first negedge after reset release,
+  // where mux_sel hasn't yet toggled to data phase.
   // -----------------------------------------------------------------------
   always @(negedge clk) begin
-    if (rst_n && !uo_out[0])
+    if (rst_n && user_project.mux_sel && !uo_out[0])
       ram[addr] <= uio_out;
   end
 

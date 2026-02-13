@@ -21,13 +21,13 @@ async def test_jr_computed(dut):
     prog[0x0032] = 0xEF
     prog[0x0033] = 0xBE
 
-    _place(prog, 0x0000, _encode_lw(rs=7, off9=0x30))
+    _place(prog, 0x0000, _encode_lw(rs=7, imm=0x30))
     _place(prog, 0x0002, _encode_or_rr(rd=1, rs1=0, rs2=0))
-    _place(prog, 0x0004, _encode_lw(rs=7, off9=0x32))
+    _place(prog, 0x0004, _encode_lw(rs=7, imm=0x32))
     _place(prog, 0x0006, _encode_or_rr(rd=2, rs1=0, rs2=0))
-    _place(prog, 0x0008, _encode_jr(rs=1, off9=0))
+    _place(prog, 0x0008, _encode_jr(rs=1, imm=0))
     _place(prog, 0x0020, _encode_or_rr(rd=0, rs1=2, rs2=2))
-    _place(prog, 0x0022, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0022, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0024, _spin(0x0024))
 
     _load_program(dut, prog)
@@ -48,11 +48,11 @@ async def test_jr_after_lw(dut):
     prog[0x0030] = 0x40
     prog[0x0031] = 0x00
 
-    _place(prog, 0x0000, _encode_lw(rs=7, off9=0x30))
+    _place(prog, 0x0000, _encode_lw(rs=7, imm=0x30))
     _place(prog, 0x0002, _encode_or_rr(rd=1, rs1=0, rs2=0))
-    _place(prog, 0x0004, _encode_jr(rs=1, off9=0))
-    _place(prog, 0x0040, _encode_li(rd=0, imm9=0))
-    _place(prog, 0x0042, _encode_sw(rs=7, off9=0x50))
+    _place(prog, 0x0004, _encode_jr(rs=1, imm=0))
+    _place(prog, 0x0040, _encode_li(rd=0, imm=0))
+    _place(prog, 0x0042, _encode_sw(rs=7, imm=0x50))
     _place(prog, 0x0044, _spin(0x0044))
 
     prog[0x0050] = 0xFF
@@ -75,17 +75,17 @@ async def test_branches(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_li(rd=2, imm9=1))
-    _place(prog, 0x0002, _encode_bz(rs=1, off8=3))
-    _place(prog, 0x0004, _encode_li(rd=0, imm9=0xBA))
-    _place(prog, 0x0006, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0000, _encode_li(rd=2, imm=1))
+    _place(prog, 0x0002, _encode_bz(rs=1, imm=3))
+    _place(prog, 0x0004, _encode_li(rd=0, imm=0x13))
+    _place(prog, 0x0006, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0008, _spin(0x0008))
-    _place(prog, 0x000A, _encode_bnz(rs=2, off8=3))
-    _place(prog, 0x000C, _encode_li(rd=0, imm9=0xBA))
-    _place(prog, 0x000E, _encode_sw(rs=7, off9=0x42))
+    _place(prog, 0x000A, _encode_bnz(rs=2, imm=3))
+    _place(prog, 0x000C, _encode_li(rd=0, imm=0x13))
+    _place(prog, 0x000E, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x0010, _spin(0x0010))
-    _place(prog, 0x0012, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0014, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0012, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0014, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0016, _spin(0x0016))
 
     prog[0x0040] = 0x00
@@ -110,7 +110,7 @@ async def test_j_jal(dut):
     _place(prog, 0x0012, _encode_jal(off10=4))
     _place(prog, 0x0014, _spin(0x0014))
     _place(prog, 0x001C, _encode_or_rr(rd=0, rs1=6, rs2=6))
-    _place(prog, 0x001E, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x001E, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0020, _spin(0x0020))
 
     _load_program(dut, prog)
@@ -130,11 +130,11 @@ async def test_jalr(dut):
     prog = {}
     prog[0x0030] = 0x40
     prog[0x0031] = 0x00
-    _place(prog, 0x0000, _encode_lw(rs=7, off9=0x30))
+    _place(prog, 0x0000, _encode_lw(rs=7, imm=0x30))
     _place(prog, 0x0002, _encode_or_rr(rd=1, rs1=0, rs2=0))
-    _place(prog, 0x0004, _encode_jalr(rs=1, off9=0))
+    _place(prog, 0x0004, _encode_jalr(rs=1, imm=0))
     _place(prog, 0x0040, _encode_or_rr(rd=0, rs1=1, rs2=1))
-    _place(prog, 0x0042, _encode_sw(rs=7, off9=0x50))
+    _place(prog, 0x0042, _encode_sw(rs=7, imm=0x50))
     _place(prog, 0x0044, _spin(0x0044))
 
     _load_program(dut, prog)
@@ -152,15 +152,15 @@ async def test_single_step(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_li(rd=1, imm9=0x11))
-    _place(prog, 0x0002, _encode_li(rd=2, imm9=0x22))
-    _place(prog, 0x0004, _encode_li(rd=3, imm9=0x33))
+    _place(prog, 0x0000, _encode_li(rd=1, imm=0x11))
+    _place(prog, 0x0002, _encode_li(rd=2, imm=0x22))
+    _place(prog, 0x0004, _encode_li(rd=3, imm=0x33))
     _place(prog, 0x0006, _encode_or_rr(rd=0, rs1=1, rs2=1))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _encode_or_rr(rd=0, rs1=2, rs2=2))
-    _place(prog, 0x000C, _encode_sw(rs=7, off9=0x42))
+    _place(prog, 0x000C, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x000E, _encode_or_rr(rd=0, rs1=3, rs2=3))
-    _place(prog, 0x0010, _encode_sw(rs=7, off9=0x44))
+    _place(prog, 0x0010, _encode_sw(rs=7, imm=0x44))
     _place(prog, 0x0012, _spin(0x0012))
 
     def get_sync():
@@ -239,13 +239,13 @@ async def test_bnz_high_byte(dut):
     cocotb.start_soon(clock.start())
     prog = {}
     prog[0x0030] = 0x00; prog[0x0031] = 0x01
-    _place(prog, 0x0000, _encode_lw(rs=7, off9=0x30))
+    _place(prog, 0x0000, _encode_lw(rs=7, imm=0x30))
     _place(prog, 0x0002, _encode_or_rr(rd=1, rs1=0, rs2=0))
-    _place(prog, 0x0004, _encode_bnz(rs=1, off8=2))
-    _place(prog, 0x0006, _encode_li(rd=0, imm9=0xAD))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
-    _place(prog, 0x000A, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x000C, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0004, _encode_bnz(rs=1, imm=2))
+    _place(prog, 0x0006, _encode_li(rd=0, imm=0x13))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
+    _place(prog, 0x000A, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x000C, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000E, _spin(0x000E))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
@@ -262,8 +262,8 @@ async def test_j_backward(dut):
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_j(off10=15))
-    _place(prog, 0x0010, _encode_li(rd=0, imm9=0x42))
-    _place(prog, 0x0012, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0010, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0012, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0014, _spin(0x0014))
     _place(prog, 0x0020, _encode_j(off10=-9))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
@@ -283,7 +283,7 @@ async def test_jal_link_value(dut):
     _place(prog, 0x0000, _encode_jal(off10=4))
     _place(prog, 0x0002, _spin(0x0002))
     _place(prog, 0x000A, _encode_or_rr(rd=0, rs1=6, rs2=6))
-    _place(prog, 0x000C, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x000C, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000E, _spin(0x000E))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
@@ -299,11 +299,11 @@ async def test_bz_not_taken(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
-    _place(prog, 0x0000, _encode_li(rd=1, imm9=5))
-    _place(prog, 0x0002, _encode_bz(rs=1, off8=3))
-    _place(prog, 0x0004, _encode_li(rd=2, imm9=7))
+    _place(prog, 0x0000, _encode_li(rd=1, imm=5))
+    _place(prog, 0x0002, _encode_bz(rs=1, imm=3))
+    _place(prog, 0x0004, _encode_li(rd=2, imm=7))
     _place(prog, 0x0006, _encode_or_rr(rd=0, rs1=2, rs2=2))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _spin(0x000A))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
@@ -319,10 +319,10 @@ async def test_bnz_not_taken(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
-    _place(prog, 0x0000, _encode_bnz(rs=0, off8=3))
-    _place(prog, 0x0002, _encode_li(rd=1, imm9=7))
+    _place(prog, 0x0000, _encode_bnz(rs=0, imm=3))
+    _place(prog, 0x0002, _encode_li(rd=1, imm=7))
     _place(prog, 0x0004, _encode_or_rr(rd=0, rs1=1, rs2=1))
-    _place(prog, 0x0006, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0006, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0008, _spin(0x0008))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)

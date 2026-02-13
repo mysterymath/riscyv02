@@ -19,8 +19,8 @@ async def test_lw_sw_jr_basic(dut):
     prog[0x0030] = 0x34
     prog[0x0031] = 0x12
 
-    _place(prog, 0x0000, _encode_lw(rs=7, off9=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=7, off9=0x32))
+    _place(prog, 0x0000, _encode_lw(rs=7, imm=0x30))
+    _place(prog, 0x0002, _encode_sw(rs=7, imm=0x32))
     _place(prog, 0x0004, _spin(0x0004))
 
     _load_program(dut, prog)
@@ -45,10 +45,10 @@ async def test_negative_offsets(dut):
     prog[0x004E] = 0xFE
     prog[0x004F] = 0xCA
 
-    _place(prog, 0x0000, _encode_lw(rs=7, off9=0x30))
+    _place(prog, 0x0000, _encode_lw(rs=7, imm=0x30))
     _place(prog, 0x0002, _encode_or_rr(rd=3, rs1=0, rs2=0))
-    _place(prog, 0x0004, _encode_lw(rs=3, off9=-2))
-    _place(prog, 0x0006, _encode_sw(rs=7, off9=0x60))
+    _place(prog, 0x0004, _encode_lw(rs=3, imm=-2))
+    _place(prog, 0x0006, _encode_sw(rs=7, imm=0x60))
     _place(prog, 0x0008, _spin(0x0008))
 
     _load_program(dut, prog)
@@ -68,11 +68,11 @@ async def test_byte_ops(dut):
     prog = {}
     prog[0x0030] = 0x85
 
-    _place(prog, 0x0000, _encode_lb(rs=7, off9=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=7, off9=0x40))
-    _place(prog, 0x0004, _encode_lbu(rs=7, off9=0x30))
-    _place(prog, 0x0006, _encode_sw(rs=7, off9=0x42))
-    _place(prog, 0x0008, _encode_sb(rs=7, off9=0x44))
+    _place(prog, 0x0000, _encode_lb(rs=7, imm=0x30))
+    _place(prog, 0x0002, _encode_sw(rs=7, imm=0x40))
+    _place(prog, 0x0004, _encode_lbu(rs=7, imm=0x30))
+    _place(prog, 0x0006, _encode_sw(rs=7, imm=0x42))
+    _place(prog, 0x0008, _encode_sb(rs=7, imm=0x44))
     _place(prog, 0x000A, _spin(0x000A))
 
     _load_program(dut, prog)
@@ -97,9 +97,9 @@ async def test_rr_load_store(dut):
     prog[0x0030] = 0xAD
     prog[0x0031] = 0xDE
 
-    _place(prog, 0x0000, _encode_li(rd=1, imm9=0x30))
+    _place(prog, 0x0000, _encode_li(rd=1, imm=0x30))
     _place(prog, 0x0002, _encode_lw_rr(rd=2, rs=1))
-    _place(prog, 0x0004, _encode_li(rd=3, imm9=0x50))
+    _place(prog, 0x0004, _encode_li(rd=3, imm=0x50))
     _place(prog, 0x0006, _encode_sw_rr(rd=2, rs=3))
     _place(prog, 0x0008, _spin(0x0008))
 
@@ -121,15 +121,15 @@ async def test_auto_modify(dut):
     prog[0x0030] = 0x11; prog[0x0031] = 0x11
     prog[0x0032] = 0x22; prog[0x0033] = 0x22
 
-    _place(prog, 0x0000, _encode_li(rd=1, imm9=0x30))
+    _place(prog, 0x0000, _encode_li(rd=1, imm=0x30))
     _place(prog, 0x0002, _encode_lw_a(rd=2, rs=1))
     _place(prog, 0x0004, _encode_lw_a(rd=3, rs=1))
     _place(prog, 0x0006, _encode_or_rr(rd=0, rs1=2, rs2=2))
-    _place(prog, 0x0008, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _encode_or_rr(rd=0, rs1=3, rs2=3))
-    _place(prog, 0x000C, _encode_sw(rs=7, off9=0x42))
+    _place(prog, 0x000C, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x000E, _encode_or_rr(rd=0, rs1=1, rs2=1))
-    _place(prog, 0x0010, _encode_sw(rs=7, off9=0x44))
+    _place(prog, 0x0010, _encode_sw(rs=7, imm=0x44))
     _place(prog, 0x0012, _spin(0x0012))
 
     _load_program(dut, prog)
@@ -151,8 +151,8 @@ async def test_lb_sign_extend(dut):
     cocotb.start_soon(clock.start())
     prog = {}
     prog[0x0030] = 0x80
-    _place(prog, 0x0000, _encode_lb(rs=7, off9=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0000, _encode_lb(rs=7, imm=0x30))
+    _place(prog, 0x0002, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0004, _spin(0x0004))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
@@ -169,8 +169,8 @@ async def test_lbu_zero_extend(dut):
     cocotb.start_soon(clock.start())
     prog = {}
     prog[0x0030] = 0x80
-    _place(prog, 0x0000, _encode_lbu(rs=7, off9=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0000, _encode_lbu(rs=7, imm=0x30))
+    _place(prog, 0x0002, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0004, _spin(0x0004))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
@@ -187,9 +187,9 @@ async def test_byte_negative_offset(dut):
     cocotb.start_soon(clock.start())
     prog = {}
     prog[0x001F] = 0x7F
-    _place(prog, 0x0000, _encode_li(rd=1, imm9=0x20))
-    _place(prog, 0x0002, _encode_lb(rs=1, off9=-1))
-    _place(prog, 0x0004, _encode_sw(rs=7, off9=0x40))
+    _place(prog, 0x0000, _encode_li(rd=1, imm=0x20))
+    _place(prog, 0x0002, _encode_lb(rs=1, imm=-1))
+    _place(prog, 0x0004, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0006, _spin(0x0006))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
