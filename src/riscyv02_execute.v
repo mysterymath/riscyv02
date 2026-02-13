@@ -70,6 +70,7 @@ module riscyv02_execute (
   reg [15:0] ir;        // Instruction register (raw or synthesized for interrupts)
   reg [15:0] tmp;       // Cycle-to-cycle temporary (mem addr, branch target, shift carry)
   reg        bus_active_r;  // Registered bus_active for E_MEM_HI (set at E_MEM_LO transition)
+  reg        mem_carry;     // Pre-computed carry for E_MEM_HI address increment
 
   // Interrupt and PC state
   reg [15:0] pc;        // Program counter (next instruction to fetch; advanced at dispatch)
@@ -655,6 +656,9 @@ module riscyv02_execute (
       E_MEM_LO: begin
         bus_active   = 1'b1;
         ab           = tmp;
+        alu_a        = tmp[7:0];
+        alu_b        = 8'd1;
+        alu_new_op   = 1'b1;
         w_hi         = 1'b0;
         w_we         = !mem_is_store;
         if (mem_is_byte_store)
@@ -665,7 +669,7 @@ module riscyv02_execute (
         insn_completing = 1'b1;
         w_hi            = 1'b1;
         bus_active      = bus_active_r;
-        ab              = {tmp[15:8] + {7'b0, ~|tmp[7:0]}, tmp[7:0]};
+        ab              = {tmp[15:8] + {7'b0, mem_carry}, tmp[7:0]};
         if (!bus_active_r) begin
           w_data        = mem_is_lbu ? 8'h00 : {8{r2[7]}};
           w_we          = 1'b1;
@@ -701,6 +705,7 @@ module riscyv02_execute (
       nmi_ack  <= 1'b0;
       r2_hi_r      <= 1'b0;
       bus_active_r <= 1'b0;
+      mem_carry    <= 1'b0;
     end else begin
       // NMI handshake: set has priority (take_nmi fires via nmi_edge
       // before nmi_pending is registered, so nmi_pending may still be 0).
@@ -749,7 +754,8 @@ module riscyv02_execute (
         end
 
         E_MEM_LO: begin
-          tmp[7:0]     <= tmp[7:0] + 8'd1;
+          tmp[7:0]     <= alu_result;
+          mem_carry    <= alu_co;             // Carry from ALU increment for E_MEM_HI address
           r2_hi_r      <= mem_is_store;  // Stores: hi byte for dout; loads: lo byte for sign ext
           bus_active_r <= !mem_is_byte_load;
           state        <= mem_is_byte_store ? E_IDLE : E_MEM_HI;
