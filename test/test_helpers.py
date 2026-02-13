@@ -111,12 +111,12 @@ def _encode_sb(rs, imm):
     return _encode_r8(0b00110, imm, rs)
 
 def _encode_jr(rs, imm):
-    """JR: pc = rs + sext(imm) << 1."""
+    """JR: pc = rs + sext(imm). Byte offset, no shift."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b00111, imm, rs)
 
 def _encode_jalr(rs, imm):
-    """JALR: R6=pc+2; pc = rs + sext(imm) << 1."""
+    """JALR: R6=pc+2; pc = rs + sext(imm). Byte offset, no shift."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b01000, imm, rs)
 
@@ -143,14 +143,30 @@ def _encode_sltui(rs, imm):
     return _encode_r8(0b01101, imm, rs)
 
 def _encode_bz(rs, imm):
-    """BZ: if rs == 0, pc += sext(imm) << 1."""
+    """BZ: if rs == 0, pc += sext(imm) << 1.
+
+    RISC-V trick encoding: imm is the half-word offset. Bits are scrambled
+    so that ir[9:4] matches the non-shifted immediate format, reducing the
+    ALU input mux from 8 bits to 2.
+    """
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b01110, imm, rs)
+    off = imm & 0xFF
+    scrambled = ((off & 0x80) |          # off[7] → bit 7 (sign)
+                 ((off & 0x3F) << 1) |   # off[5:0] → bits [6:1]
+                 ((off >> 6) & 1))       # off[6] → bit 0
+    return _encode_r8(0b01110, scrambled, rs)
 
 def _encode_bnz(rs, imm):
-    """BNZ: if rs != 0, pc += sext(imm) << 1."""
+    """BNZ: if rs != 0, pc += sext(imm) << 1.
+
+    Same RISC-V trick encoding as BZ.
+    """
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b01111, imm, rs)
+    off = imm & 0xFF
+    scrambled = ((off & 0x80) |          # off[7] → bit 7 (sign)
+                 ((off & 0x3F) << 1) |   # off[5:0] → bits [6:1]
+                 ((off >> 6) & 1))       # off[6] → bit 0
+    return _encode_r8(0b01111, scrambled, rs)
 
 def _encode_xorif(rs, imm):
     """XORIF: R0 = rs ^ zext(imm). Dest is R0."""
@@ -244,9 +260,9 @@ def _encode_nop():
     """NOP = ADDI R0, 0 = 0x0000."""
     return (0x00, 0x00)
 
-def _spin(addr):
-    """JR R7, imm where imm<<1 = addr, so imm = addr//2."""
-    return _encode_jr(rs=7, imm=addr // 2)
+def _spin(addr=None):
+    """Self-loop: J -1 (pc-relative, works at any address)."""
+    return _encode_j(off10=-1)
 
 
 # ===========================================================================

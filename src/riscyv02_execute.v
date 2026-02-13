@@ -384,8 +384,8 @@ module riscyv02_execute (
           w_hi       = 1'b0;
           w_we       = 1'b1;
         end else if (is_jr_jalr) begin
-          // JR/JALR: rs + sext(imm8) << 1
-          alu_b      = {ir[9:3], 1'b0};    // imm[6:0] << 1
+          // JR/JALR: rs + sext(imm8) (byte offset, no shift)
+          alu_b      = ir[10:3];            // imm[7:0]
           alu_new_op = 1'b1;
           if (is_jalr) begin
             w_data = pc[7:0];
@@ -470,7 +470,7 @@ module riscyv02_execute (
           w_we   = 1'b1;
         end else if (is_branch) begin
           alu_a      = pc[7:0];
-          alu_b      = {ir[9:3], 1'b0};     // sext(off8)[6:0] << 1
+          alu_b      = {ir[3], ir[9:4], 1'b0};  // RISC-V trick: off[6],off[5:0],0
           alu_new_op = 1'b1;
         end else if (is_jump_imm) begin
           alu_a      = pc[7:0];

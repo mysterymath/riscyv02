@@ -373,10 +373,10 @@ async def test_nmi_priority_over_irq(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
-    _place(prog, 0x0002, _encode_jr(rs=7, imm=0x18))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
+    _place(prog, 0x0002, _encode_jr(rs=7, imm=0x30))
     _place(prog, 0x0004, _spin(0x0004))
-    _place(prog, 0x0006, _encode_jr(rs=7, imm=0x1C))
+    _place(prog, 0x0006, _encode_jr(rs=7, imm=0x38))
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _spin(0x0022))
     _place(prog, 0x0030, _encode_li(rd=0, imm=0x22))
@@ -411,7 +411,7 @@ async def test_nmi_during_multicycle(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0002, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x0004, _encode_reti())
     _place(prog, 0x0006, _spin(0x0006))
@@ -523,7 +523,7 @@ async def test_wai_irq(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0002, _spin(0x0002))
     _place(prog, 0x0004, _spin(0x0004))
     _place(prog, 0x0006, _encode_li(rd=0, imm=0x11))
@@ -562,7 +562,7 @@ async def test_wai_nmi(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0002, _encode_li(rd=0, imm=0x11))
     _place(prog, 0x0004, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x0006, _encode_reti())
@@ -598,7 +598,7 @@ async def test_wai_masked_irq_wakes(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0006, _encode_li(rd=0, imm=0x42))
     _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _spin(0x000A))
@@ -632,10 +632,10 @@ async def test_brk_masks_irq(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x18))
-    _place(prog, 0x0006, _encode_jr(rs=7, imm=0x1C))
+    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x30))
+    _place(prog, 0x0006, _encode_jr(rs=7, imm=0x38))
     _place(prog, 0x0020, _encode_cli())
     _place(prog, 0x0022, _encode_brk())
     _place(prog, 0x0024, _spin(0x0024))
@@ -671,9 +671,9 @@ async def test_brk_restores_i(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x18))
+    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x30))
     _place(prog, 0x0006, _encode_li(rd=0, imm=0x42))
     _place(prog, 0x0008, _encode_sw(rs=7, imm=0x42))
     _place(prog, 0x000A, _encode_reti())
@@ -711,7 +711,7 @@ async def test_banked_r6_read(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0002, _spin(0x0002))
     _place(prog, 0x0004, _spin(0x0004))
     _place(prog, 0x0006, _encode_or_rr(rd=0, rs1=6, rs2=6))
@@ -740,9 +740,9 @@ async def test_banked_r6_redirect(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x18))
+    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x30))
     _place(prog, 0x0006, _spin(0x0006))
     _place(prog, 0x0020, _encode_brk())
     _place(prog, 0x0022, _encode_li(rd=0, imm=0x42))
@@ -779,9 +779,9 @@ async def test_banked_r6_i_bit(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x18))
+    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x30))
     _place(prog, 0x0006, _encode_li(rd=0, imm=0x33))
     _place(prog, 0x0008, _encode_sw(rs=7, imm=0x60))
     _place(prog, 0x000A, _spin(0x000A))
@@ -814,7 +814,7 @@ async def test_irq_interrupts_jr(dut):
 
     prog = {}
     _place(prog, 0x0000, _encode_cli())
-    _place(prog, 0x0002, _encode_jr(rs=7, imm=0x10))
+    _place(prog, 0x0002, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0006, _encode_li(rd=1, imm=0x5A))
     _place(prog, 0x0008, _encode_or_rr(rd=0, rs1=1, rs2=1))
     _place(prog, 0x000A, _encode_sw(rs=7, imm=0x60))
