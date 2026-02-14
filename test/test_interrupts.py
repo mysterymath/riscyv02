@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2024 mysterymath
 # SPDX-License-Identifier: Apache-2.0
 #
-# Interrupt handling tests: IRQ, NMI, BRK, RETI, WAI, STP, CLI/SEI, banked R6.
+# Interrupt handling tests: IRQ, NMI, BRK, RETI, WAI, STP, CLI/SEI, EPCR/EPCW.
 
 import cocotb
 from cocotb.clock import Clock
@@ -705,8 +705,8 @@ async def test_brk_restores_i(dut):
 
 
 @cocotb.test()
-async def test_banked_r6_read(dut):
-    """In IRQ handler, R6 reads the banked value (return addr | I bit)."""
+async def test_epcr(dut):
+    """EPCR reads saved return address | I bit from EPC."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -714,7 +714,8 @@ async def test_banked_r6_read(dut):
     _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0002, _spin(0x0002))
     _place(prog, 0x0004, _spin(0x0004))
-    _place(prog, 0x0006, _encode_or_rr(rd=0, rs1=6, rs2=6))
+    # IRQ handler: read EPC into R0, store to memory
+    _place(prog, 0x0006, _encode_epcr(rd=0))
     _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
     _place(prog, 0x000A, _spin(0x000A))
     _place(prog, 0x0020, _encode_cli())
@@ -730,12 +731,13 @@ async def test_banked_r6_read(dut):
     await ClockCycles(dut.clk, 300)
 
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0x0022, f"Wrong banked R6! Got {val:#06x}"
+    # EPC = saved PC (0x0022) with I bit = 0 (CLI cleared it) → 0x0022
+    assert val == 0x0022, f"Wrong EPC! Got {val:#06x}"
 
 
 @cocotb.test()
-async def test_banked_r6_redirect(dut):
-    """In BRK handler, LW R6 overwrites banked R6; RETI jumps there."""
+async def test_epcw_redirect(dut):
+    """EPCW changes RETI return address; RETI jumps to new target."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -748,8 +750,9 @@ async def test_banked_r6_redirect(dut):
     _place(prog, 0x0022, _encode_li(rd=0, imm=0x42))
     _place(prog, 0x0024, _encode_sw(rs=7, imm=0x60))
     _place(prog, 0x0026, _spin(0x0026))
+    # BRK handler: load redirect target into R0, EPCW to set EPC, RETI
     _place(prog, 0x0030, _encode_lw(rs=7, imm=0x50))
-    _place(prog, 0x0032, _encode_or_rr(rd=6, rs1=0, rs2=0))
+    _place(prog, 0x0032, _encode_epcw(rs=0))
     _place(prog, 0x0034, _encode_reti())
     _place(prog, 0x0040, _encode_li(rd=0, imm=0x42))
     _place(prog, 0x0042, _encode_sw(rs=7, imm=0x62))
@@ -773,8 +776,8 @@ async def test_banked_r6_redirect(dut):
 
 
 @cocotb.test()
-async def test_banked_r6_i_bit(dut):
-    """BRK handler loads R6 with bit 0 clear; RETI restores I=0, IRQ fires."""
+async def test_epcw_i_bit(dut):
+    """EPCW with bit 0 clear; RETI restores I=0, IRQ fires."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -787,8 +790,9 @@ async def test_banked_r6_i_bit(dut):
     _place(prog, 0x000A, _spin(0x000A))
     _place(prog, 0x0020, _encode_brk())
     _place(prog, 0x0022, _spin(0x0022))
+    # BRK handler: load target (bit 0=0 → I=0), EPCW, RETI
     _place(prog, 0x0030, _encode_lw(rs=7, imm=0x50))
-    _place(prog, 0x0032, _encode_or_rr(rd=6, rs1=0, rs2=0))
+    _place(prog, 0x0032, _encode_epcw(rs=0))
     _place(prog, 0x0034, _encode_reti())
     _place(prog, 0x0040, _spin(0x0040))
     prog[0x0050] = 0x40; prog[0x0051] = 0x00

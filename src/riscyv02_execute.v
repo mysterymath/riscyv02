@@ -142,6 +142,8 @@ module riscyv02_execute (
   wire is_cli  = is_system_grp && ir[5:0] == 6'b000010;
   wire is_reti = is_system_grp && ir[5:0] == 6'b000011;
   wire is_int  = is_system_grp && ir[5];                  // sub[5]=1: INT
+  wire is_epcr = is_system_grp && ir[5:3] == 3'b010;
+  wire is_epcw = is_system_grp && ir[5:3] == 3'b011;
   wire is_wai  = is_system_grp && ir[5:0] == 6'b000101;
   wire is_stp  = is_system_grp && ir[5:0] == 6'b000111;
 
@@ -196,7 +198,7 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Register file (8-bit interface)
   // -------------------------------------------------------------------------
-  reg  [2:0] r1_sel;
+  reg  [3:0] r1_sel;
   reg        r1_hi;
   wire [7:0] r1;
   wire [7:0] r2;
@@ -206,19 +208,21 @@ module riscyv02_execute (
 
   wire is_mem_phase = (state == E_MEM_LO || state == E_MEM_HI);
 
-  // w_sel: write port register select
-  reg [2:0] w_sel_mux;
+  // w_sel: write port register select (4-bit: bit 3 selects EPC)
+  reg [3:0] w_sel_mux;
   always @(*) begin
-    if (is_jal || is_int)
-      w_sel_mux = LINK_REG;                                    // JAL/INT → R6
+    if (is_int || is_epcw)
+      w_sel_mux = 4'd8;                                        // INT/EPCW → EPC
+    else if (is_jal)
+      w_sel_mux = {1'b0, LINK_REG};                            // JAL → R6
     else if (is_rrr)
-      w_sel_mux = ir[8:6];                                     // R,R,R: rd at [8:6]
+      w_sel_mux = {1'b0, ir[8:6]};                             // R,R,R: rd at [8:6]
     else if (is_mem_phase && (is_rr_load || is_auto_load))
-      w_sel_mux = ir[5:3];                                     // R,R/auto loads: rd at [5:3]
+      w_sel_mux = {1'b0, ir[5:3]};                             // R,R/auto loads: rd at [5:3]
     else if ((is_mem_phase && is_r9_load) || is_r0_dest)
-      w_sel_mux = 3'd0;                                        // R,9 loads/SLTI/SLTUI/XORIF → R0
+      w_sel_mux = 4'd0;                                        // R,9 loads/SLTI/SLTUI/XORIF → R0
     else
-      w_sel_mux = ir[2:0];                                     // Default: reg at [2:0]
+      w_sel_mux = {1'b0, ir[2:0]};                             // Default: reg at [2:0]
   end
 
   // r2_sel: read port 2 register select
@@ -230,7 +234,6 @@ module riscyv02_execute (
   riscyv02_regfile u_regfile (
     .clk    (clk),
     .rst_n  (rst_n),
-    .i_bit  (i_bit),
     .w_sel  (w_sel_mux),
     .w_hi   (w_hi),
     .w_data (w_data),
@@ -294,10 +297,10 @@ module riscyv02_execute (
   //   Default ir[2:0] works for all formats: reg/rs1/rs is always at [2:0].
   //   Sign-extension readback for loads uses port 2.
   always @(*) begin
-    if (is_reti)
-      r1_sel = 3'd6;                                   // Banked R6
+    if (is_reti || is_epcr)
+      r1_sel = 4'd8;                                   // EPC (entry 8)
     else
-      r1_sel = ir[2:0];                                // Default: reg at [2:0]
+      r1_sel = {1'b0, ir[2:0]};                        // Default: reg at [2:0]
   end
 
   // r1_hi: read port 1 byte select
@@ -355,10 +358,14 @@ module riscyv02_execute (
 
       E_EXEC_LO: begin
         if (is_reti) begin
-          // Read banked R6 low byte (r_sel=6, r_hi=0, i_bit=1)
+          // Read EPC low byte (r1_sel=8, r1_hi=0)
           // Captured into tmp[7:0] at negedge
         end else if (is_int) begin
           w_data = pc[7:0];
+          w_hi   = 1'b0;
+          w_we   = 1'b1;
+        end else if (is_epcr || is_epcw) begin
+          w_data = r1;
           w_hi   = 1'b0;
           w_we   = 1'b1;
         end else if (is_r9_load || is_r9_store) begin
@@ -648,6 +655,10 @@ module riscyv02_execute (
               w_hi   = 1'b1;
               w_we   = 1'b1;
             end
+          end else if (is_epcr || is_epcw) begin
+            w_data = r1;
+            w_hi   = 1'b1;
+            w_we   = 1'b1;
           end
           end // inner else (insn_completing path)
         end // outer else (not mem, not jr_jalr)

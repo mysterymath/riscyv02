@@ -33,6 +33,7 @@ __all__ = [
     '_encode_lw_a', '_encode_lb_a', '_encode_lbu_a',
     '_encode_sw_a', '_encode_sb_a',
     '_encode_sys', '_encode_sei', '_encode_cli', '_encode_reti',
+    '_encode_epcr', '_encode_epcw',
     '_encode_brk', '_encode_wai', '_encode_stp', '_encode_nop',
 ]
 
@@ -252,6 +253,15 @@ def _encode_sys(sub):
 def _encode_sei():  return _encode_sys(0b000001)
 def _encode_cli():  return _encode_sys(0b000010)
 def _encode_reti(): return _encode_sys(0b000011)
+
+def _encode_epcr(rd):
+    """EPCR Rd: copy EPC to Rd."""
+    return _encode_sys(0b010_000 | (rd & 0x7))
+
+def _encode_epcw(rs):
+    """EPCW Rs: copy Rs to EPC."""
+    return _encode_sys(0b011_000 | (rs & 0x7))
+
 def _encode_brk():  return _encode_sys(0b100001)  # INT, vector 1 → addr 0x0004
 def _encode_wai():  return _encode_sys(0b000101)
 def _encode_stp():  return _encode_sys(0b000111)

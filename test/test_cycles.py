@@ -163,7 +163,7 @@ async def test_cycle_count_reti(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    # RETI at 0x0000 returns to banked R6 (0x0000 after reset) -> infinite loop
+    # RETI at 0x0000 returns to EPC (0x0000 after reset) -> infinite loop
     _place(prog, 0x0000, _encode_reti())
 
     def get_sync():

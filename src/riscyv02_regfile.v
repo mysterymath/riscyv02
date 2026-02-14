@@ -3,12 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Two-phase latch register file: 8 x 16-bit GP registers with 8-bit interface,
- * plus a banked R6 for interrupt context.
+ * plus a 9th entry for the Exception PC (EPC) register.
  *
- * When i_bit=1, register 6 reads/writes map to a separate physical register
- * (regs_int) instead of the normal regs[6]. This provides automatic save/restore
- * of R6 across interrupt entry/exit — the interrupt handler sees banked R6
- * (containing the return address), while the interrupted code's R6 is preserved.
+ * The EPC is accessible as entry 8 via 4-bit select lines on port 1 and the
+ * write port. Port 2 remains 3-bit (GP registers only).
  *
  * Leader latches (sg13g2_dlhrq_1, transparent-high) capture w_data,
  * w_sel, w_hi, and w_we at the falling clock edge.  Follower latches
@@ -30,16 +28,15 @@
 module riscyv02_regfile (
     input  wire        clk,
     input  wire        rst_n,
-    input  wire        i_bit,      // Interrupt mode: bank R6 when high
 
     // Write port (8-bit)
-    input  wire [2:0]  w_sel,
+    input  wire [3:0]  w_sel,      // Bit 3 selects EPC (entry 8)
     input  wire        w_hi,       // Select high byte for write
     input  wire [7:0]  w_data,
     input  wire        w_we,
 
     // Read port 1 (8-bit)
-    input  wire [2:0]  r1_sel,
+    input  wire [3:0]  r1_sel,     // Bit 3 selects EPC (entry 8)
     input  wire        r1_hi,       // Select high byte for read
     output wire [7:0]  r1,
 
@@ -53,10 +50,9 @@ module riscyv02_regfile (
   // capture at negedge. These hold w_data/w_sel/w_hi/w_we stable during clk=0
   // so follower inputs never depend on live combinational paths.
   wire [7:0] w_data_held;
-  wire [2:0] w_sel_held;
+  wire [3:0] w_sel_held;
   wire       w_hi_held;
   wire       w_we_held;
-  wire       i_bit_held;
 
   generate
     genvar li;
@@ -68,7 +64,7 @@ module riscyv02_regfile (
         .Q(w_data_held[li])
       );
     end
-    for (li = 0; li < 3; li = li + 1) begin : gen_leader_sel
+    for (li = 0; li < 4; li = li + 1) begin : gen_leader_sel
       sg13g2_dlhrq_1 u_leader (
         .D(w_sel[li]),
         .GATE(clk),
@@ -92,13 +88,6 @@ module riscyv02_regfile (
     .Q(w_we_held)
   );
 
-  sg13g2_dlhrq_1 u_leader_ibit (
-    .D(i_bit),
-    .GATE(clk),
-    .RESET_B(rst_n),
-    .Q(i_bit_held)
-  );
-
   // Phase 2 — Follower latches (sg13g2_dlhrq_1): transparent when GATE=1,
   // i.e. when ~clk & write_enable. Selected register byte passes leader's
   // captured value during clk=0; all others hold.
@@ -111,10 +100,8 @@ module riscyv02_regfile (
   generate
     genvar gi, bi;
     for (gi = 0; gi < 8; gi = gi + 1) begin : gen_reg
-      // Register selected for write?
-      // For register 6, only write when NOT in interrupt mode (normal R6).
-      wire wen = w_we_held && (w_sel_held == gi[2:0]) &&
-                 ((gi != 6) || !i_bit_held);
+      // GP register selected for write? Only when w_sel[3]=0 (not EPC).
+      wire wen = w_we_held && !w_sel_held[3] && (w_sel_held[2:0] == gi[2:0]);
       // Byte-select: which byte of this register to write
       wire write_lo = wen & ~w_hi_held;
       wire write_hi = wen & w_hi_held;
@@ -140,53 +127,49 @@ module riscyv02_regfile (
     end
   endgenerate
 
-  // Banked R6 (interrupt context): written when w_sel==6 AND i_bit_held
-  wire [15:0] regs_int;
-  wire wen_int = w_we_held && (w_sel_held == 3'd6) && i_bit_held;
-  wire write_int_lo = wen_int & ~w_hi_held;
-  wire write_int_hi = wen_int & w_hi_held;
-  wire gate_int_lo = clk_n & write_int_lo;
-  wire gate_int_hi = clk_n & write_int_hi;
+  // EPC register (entry 8): written when w_sel[3]=1
+  wire [15:0] regs_epc;
+  wire wen_epc = w_we_held && w_sel_held[3];
+  wire write_epc_lo = wen_epc & ~w_hi_held;
+  wire write_epc_hi = wen_epc & w_hi_held;
+  wire gate_epc_lo = clk_n & write_epc_lo;
+  wire gate_epc_hi = clk_n & write_epc_hi;
 
   generate
-    for (bi = 0; bi < 8; bi = bi + 1) begin : gen_int_lo
+    for (bi = 0; bi < 8; bi = bi + 1) begin : gen_epc_lo
       sg13g2_dlhrq_1 u_follower (
         .D(w_data_held[bi]),
-        .GATE(gate_int_lo),
+        .GATE(gate_epc_lo),
         .RESET_B(rst_n),
-        .Q(regs_int[bi])
+        .Q(regs_epc[bi])
       );
     end
-    for (bi = 0; bi < 8; bi = bi + 1) begin : gen_int_hi
+    for (bi = 0; bi < 8; bi = bi + 1) begin : gen_epc_hi
       sg13g2_dlhrq_1 u_follower (
         .D(w_data_held[bi]),
-        .GATE(gate_int_hi),
+        .GATE(gate_epc_hi),
         .RESET_B(rst_n),
-        .Q(regs_int[bi+8])
+        .Q(regs_epc[bi+8])
       );
     end
   endgenerate
 
-  // Read ports: banking via extended 9-entry array with 4-bit select.
-  // Putting banking on the select path (computed in parallel with mux tree)
-  // rather than the data path (serial with mux tree) avoids adding delay
-  // to the critical regfile→dout→uio_out timing path.
+  // Read ports: extended 9-entry array with 4-bit select for port 1.
+  // Port 2 uses standard 8-entry array (no EPC access needed).
   wire [15:0] regs_ext [0:8];
   generate
     for (gi = 0; gi < 8; gi = gi + 1) begin : gen_ext
       assign regs_ext[gi] = regs[gi];
     end
   endgenerate
-  assign regs_ext[8] = regs_int;
+  assign regs_ext[8] = regs_epc;
 
-  // Port 1: 9:1 mux with banking folded into select
-  wire [3:0] r1_sel_ext = (r1_sel == 3'd6 && i_bit) ? 4'd8 : {1'b0, r1_sel};
-  wire [15:0] r_full = regs_ext[r1_sel_ext];
+  // Port 1: 9:1 mux (r1_sel[3] selects EPC)
+  wire [15:0] r_full = regs_ext[r1_sel];
   assign r1 = r1_hi ? r_full[15:8] : r_full[7:0];
 
-  // Port 2: 9:1 mux with banking folded into select
-  wire [3:0] r2_sel_ext = (r2_sel == 3'd6 && i_bit) ? 4'd8 : {1'b0, r2_sel};
-  wire [15:0] r2_full = regs_ext[r2_sel_ext];
+  // Port 2: 8:1 mux (GP registers only)
+  wire [15:0] r2_full = regs[r2_sel];
   assign r2 = r2_hi ? r2_full[15:8] : r2_full[7:0];
 
 endmodule
