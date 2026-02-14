@@ -14,11 +14,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 62.7% | 45.3% |
-| Transistor count (synth) | 17,104 | 13,176 |
-| SRAM-adjusted | 13,484 | 13,176 |
+| Utilization | 63.4% | 45.3% |
+| Transistor count (synth) | 17,158 | 13,176 |
+| SRAM-adjusted | 13,374 | 13,176 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF), and auto-modify load/store (LW.A, LB.A, LBU.A, SW.A, SB.A) for zero-overhead PUSH/POP. Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is within 5.5% of the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic, auto-modify addressing).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF), and auto-modify load/store (LW.A, LB.A, LBU.A, SW.A, SB.A) for zero-overhead PUSH/POP. Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is within 1.5% of the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic, auto-modify addressing).
 
 ## Bus Protocol
 
@@ -249,13 +249,13 @@ Loads a 16-bit word from memory into R0. The 8-bit signed offset is a byte offse
 
 #### LB -- Load Byte (Sign-Extend)
 
-`R0 = sext(MEM[rs + sext(imm8)])` -- 4 cycles
+`R0 = sext(MEM[rs + sext(imm8)])` -- 3 cycles
 
 Loads a single byte and sign-extends it to 16 bits into R0. If bit 7 is set, the high byte is filled with 0xFF; otherwise 0x00.
 
 #### LBU -- Load Byte (Zero-Extend)
 
-`R0 = zext(MEM[rs + sext(imm8)])` -- 4 cycles
+`R0 = zext(MEM[rs + sext(imm8)])` -- 3 cycles
 
 Loads a single byte and zero-extends it to 16 bits into R0. The high byte is always 0x00.
 
@@ -413,8 +413,8 @@ All shift immediate instructions are 2 cycles and operate in-place (rd = rd shif
 R,R-format loads and stores use explicit registers for both data and base, with no offset. Auto-modify variants (.A) adjust the base register automatically.
 
 #### LW.RR -- `rd = MEM16[rs]` -- 4 cycles
-#### LB.RR -- `rd = sext(MEM[rs])` -- 4 cycles
-#### LBU.RR -- `rd = zext(MEM[rs])` -- 4 cycles
+#### LB.RR -- `rd = sext(MEM[rs])` -- 3 cycles
+#### LBU.RR -- `rd = zext(MEM[rs])` -- 3 cycles
 #### SW.RR -- `MEM16[rs] = rd` -- 4 cycles
 #### SB.RR -- `MEM[rs] = rd[7:0]` -- 3 cycles
 
@@ -426,11 +426,11 @@ Loads a 16-bit word from the address in rs, then increments rs by 2 (word size).
 
 #### LB.A -- Load Byte (Sign-Extend), Post-Increment
 
-`rd = sext(MEM[rs]); rs += 1` -- 4 cycles
+`rd = sext(MEM[rs]); rs += 1` -- 3 cycles
 
 #### LBU.A -- Load Byte (Zero-Extend), Post-Increment
 
-`rd = zext(MEM[rs]); rs += 1` -- 4 cycles
+`rd = zext(MEM[rs]); rs += 1` -- 3 cycles
 
 #### SW.A -- Store Word, Pre-Decrement
 
@@ -509,7 +509,7 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | NOP/SEI/CLI/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (taken) | 4 | 2 execute + 2 fetch after redirect |
-| LB/LBU/LB.RR/LBU.RR/LB.A/LBU.A | 4 | 2 address + 1 byte read + 1 extension |
+| LB/LBU/LB.RR/LBU.RR/LB.A/LBU.A | 3 | 2 address + 1 byte read (sign/zero-extend at E_MEM_LO) |
 | SB/SB.RR/SB.A | 3 | 2 address + 1 byte written |
 | LW/SW/LW.RR/SW.RR/LW.A/SW.A | 4 | 2 address + 2 bytes transferred |
 | JR/JALR | 4 | 2 execute + 2 fetch after redirect |

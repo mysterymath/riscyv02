@@ -111,12 +111,12 @@ async def test_cycle_count_add(dut):
 
 @cocotb.test()
 async def test_cycle_count_lb(dut):
-    """LB takes 4 cycles."""
+    """LB takes 3 cycles (byte load completes at E_MEM_LO)."""
     prog = {}
     prog[0x0030] = 0x42
     _place(prog, 0x0000, _encode_lb(rs=7, imm=0x30))
     _place(prog, 0x0002, _spin(0x0002))
-    await _measure_instruction_cycles(dut, prog, 4, "LB")
+    await _measure_instruction_cycles(dut, prog, 3, "LB")
 
 
 @cocotb.test()
@@ -317,8 +317,8 @@ async def test_cycle_count_brk(dut):
 
 @cocotb.test()
 async def test_cycle_count_lbu(dut):
-    """LBU takes 4 cycles throughput."""
+    """LBU takes 3 cycles (byte load completes at E_MEM_LO)."""
     prog = {}
     _place(prog, 0x0000, _encode_lbu(rs=7, imm=0))
     _place(prog, 0x0002, _spin(0x0002))
-    await _measure_instruction_cycles(dut, prog, 4, "LBU")
+    await _measure_instruction_cycles(dut, prog, 3, "LBU")
