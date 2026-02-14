@@ -266,22 +266,3 @@ async def test_lw_rr_rd_eq_rs(dut):
     assert val == 0xBEEF, f"LW.RR rd==rs: expected 0xBEEF, got {val:#06x}"
 
 
-@cocotb.test()
-async def test_lw_a_rd_eq_rs(dut):
-    """LW.A R1, R1: rd == rs. Load data overwrites increment (defined)."""
-    clock = Clock(dut.clk, 10, unit="us")
-    cocotb.start_soon(clock.start())
-    prog = {}
-    # R1 = 0x0030. Memory at 0x0030 = 0xBEEF.
-    # LW.A: increment R1 to 0x0032, then load from [0x0030] into R1 → R1 = 0xBEEF.
-    prog[0x30] = 0xEF; prog[0x31] = 0xBE
-    _place(prog, 0x0000, _encode_li(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_lw_a(rd=1, rs=1))
-    pc = _store_r16(prog, 0x0004, 0x40, rs=1)
-    _place(prog, pc, _spin())
-    prog[0x40] = 0x00; prog[0x41] = 0x00
-    _load_program(dut, prog)
-    await _reset(dut)
-    await ClockCycles(dut.clk, 300)
-    val = _read_ram(dut, 0x40) | (_read_ram(dut, 0x41) << 8)
-    assert val == 0xBEEF, f"LW.A rd==rs: expected 0xBEEF, got {val:#06x}"

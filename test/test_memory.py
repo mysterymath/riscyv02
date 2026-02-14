@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2024 mysterymath
 # SPDX-License-Identifier: Apache-2.0
 #
-# Memory operation tests: LW/SW, LB/LBU/SB, R,R loads/stores, auto-modify.
+# Memory operation tests: LW/SW, LB/LBU/SB, R,R loads/stores.
 
 import cocotb
 from cocotb.clock import Clock
@@ -109,39 +109,6 @@ async def test_rr_load_store(dut):
 
     val = _read_ram(dut, 0x0050) | (_read_ram(dut, 0x0051) << 8)
     assert val == 0xDEAD, f"R,R load/store: expected 0xDEAD, got {val:#06x}"
-
-
-@cocotb.test()
-async def test_auto_modify(dut):
-    """LW.A (post-increment) and SW.A (pre-decrement)."""
-    clock = Clock(dut.clk, 10, unit="us")
-    cocotb.start_soon(clock.start())
-
-    prog = {}
-    prog[0x0030] = 0x11; prog[0x0031] = 0x11
-    prog[0x0032] = 0x22; prog[0x0033] = 0x22
-
-    _place(prog, 0x0000, _encode_li(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_lw_a(rd=2, rs=1))
-    _place(prog, 0x0004, _encode_lw_a(rd=3, rs=1))
-    _place(prog, 0x0006, _encode_or_rr(rd=0, rs1=2, rs2=2))
-    _place(prog, 0x0008, _encode_sw(rs=7, imm=0x40))
-    _place(prog, 0x000A, _encode_or_rr(rd=0, rs1=3, rs2=3))
-    _place(prog, 0x000C, _encode_sw(rs=7, imm=0x42))
-    _place(prog, 0x000E, _encode_or_rr(rd=0, rs1=1, rs2=1))
-    _place(prog, 0x0010, _encode_sw(rs=7, imm=0x44))
-    _place(prog, 0x0012, _spin(0x0012))
-
-    _load_program(dut, prog)
-    await _reset(dut)
-    await ClockCycles(dut.clk, 300)
-
-    v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    v2 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
-    v3 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
-    assert v1 == 0x1111, f"LW.A first: expected 0x1111, got {v1:#06x}"
-    assert v2 == 0x2222, f"LW.A second: expected 0x2222, got {v2:#06x}"
-    assert v3 == 0x0034, f"Pointer after 2x LW.A: expected 0x0034, got {v3:#06x}"
 
 
 @cocotb.test()

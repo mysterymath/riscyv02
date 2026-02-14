@@ -32,7 +32,7 @@
 //   6      "10"    [prefix:6|imm10:10]                 2: J,JAL
 //   7      R,R,R   [prefix:7|rd:3|rs2:3|rs1:3]       10: ADD..SRA
 //   9      R,4     [prefix:9|shamt:4|reg:3]            3: SLLI,SRLI,SRAI
-//  10      R,R     [prefix:10|rd:3|rs:3]              10: LW.RR..SB.A
+//  10      R,R     [prefix:10|rd:3|rs:3]               5: LW.RR..SB.RR
 //  10+     System  [prefix:10|sub:6]                   6: SEI..STP
 //
 // ADDI has prefix 0000 so that 0x0000 = ADDI R0, 0 = NOP.
@@ -134,11 +134,6 @@ module riscyv02_execute (
   wire is_lbu_rr = ir[15:6] == 10'b1111011000;
   wire is_sw_rr  = ir[15:6] == 10'b1111011001;
   wire is_sb_rr  = ir[15:6] == 10'b1111011010;
-  wire is_lw_a   = ir[15:6] == 10'b1111011011;
-  wire is_lb_a   = ir[15:6] == 10'b1111011100;
-  wire is_lbu_a  = ir[15:6] == 10'b1111011101;
-  wire is_sw_a   = ir[15:6] == 10'b1111011110;
-  wire is_sb_a   = ir[15:6] == 10'b1111011111;
 
   // --- System format (10-bit prefix @ [15:6] + sub @ [5:0]) ---
   wire is_system_grp = ir[15:6] == 10'b1111100000;
@@ -160,15 +155,11 @@ module riscyv02_execute (
   wire is_r9_store = is_sw || is_sb;
   wire is_rr_load  = is_lw_rr || is_lb_rr || is_lbu_rr;
   wire is_rr_store = is_sw_rr || is_sb_rr;
-  wire is_auto_load  = is_lw_a || is_lb_a || is_lbu_a;
-  wire is_auto_store = is_sw_a || is_sb_a;
-  wire is_auto_mem = is_auto_load || is_auto_store;
-
   // Combined memory properties for E_MEM and r_hi
-  wire mem_is_store      = is_r9_store || is_rr_store || is_auto_store;
-  wire mem_is_byte_load  = is_lb || is_lbu || is_lb_rr || is_lbu_rr || is_lb_a || is_lbu_a;
-  wire mem_is_byte_store = is_sb || is_sb_rr || is_sb_a;
-  wire mem_is_lbu        = is_lbu || is_lbu_rr || is_lbu_a;
+  wire mem_is_store      = is_r9_store || is_rr_store;
+  wire mem_is_byte_load  = is_lb || is_lbu || is_lb_rr || is_lbu_rr;
+  wire mem_is_byte_store = is_sb || is_sb_rr;
+  wire mem_is_lbu        = is_lbu || is_lbu_rr;
 
   // R,R,R group
   wire is_rrr = is_add || is_sub || is_and || is_or || is_xor
@@ -219,8 +210,8 @@ module riscyv02_execute (
       w_sel_mux = {1'b0, LINK_REG};                            // JAL → R6
     else if (is_rrr)
       w_sel_mux = {1'b0, ir[8:6]};                             // R,R,R: rd at [8:6]
-    else if (is_mem_phase && (is_rr_load || is_auto_load))
-      w_sel_mux = {1'b0, ir[5:3]};                             // R,R/auto loads: rd at [5:3]
+    else if (is_mem_phase && is_rr_load)
+      w_sel_mux = {1'b0, ir[5:3]};                             // R,R loads: rd at [5:3]
     else if ((is_mem_phase && is_r9_load) || is_r0_dest)
       w_sel_mux = 4'd0;                                        // R,9 loads/SLTI/SLTUI/XORIF → R0
     else
@@ -369,12 +360,6 @@ module riscyv02_execute (
           // Address = rs, no offset
           alu_b      = 8'd0;
           alu_new_op = 1'b1;
-        end else if (is_auto_mem) begin
-          alu_new_op = 1'b1;
-          alu_op     = is_auto_store ? 3'd1 : 3'd0;
-          alu_b      = (is_lb_a || is_lbu_a || is_sb_a) ? 8'd1 : 8'd2;
-          if (is_auto_load)
-            next_tmp_lo = r1[7:0];  // Original address for E_MEM
         end else if (is_jr_jalr) begin
           // JR/JALR: rs + sext(imm8) (byte offset, no shift)
           alu_b      = ir[10:3];            // imm[7:0]
@@ -465,14 +450,6 @@ module riscyv02_execute (
           alu_a      = r1[15:8];
           alu_b      = 8'd0;
           alu_new_op = 1'b0;
-        end else if (is_auto_mem) begin
-          alu_a      = r1[15:8];
-          alu_new_op = 1'b0;
-          alu_op     = is_auto_store ? 3'd1 : 3'd0;
-          alu_b      = 8'd0;
-          if (is_auto_load)
-            w_data = {alu_result, r1[7:0] + ((is_lb_a || is_lbu_a) ? 8'd1 : 8'd2)};
-          w_we       = 1'b1;
         end else if (is_jr_jalr) begin
           // JR/JALR high byte: sign-extend imm bit 7
           alu_a           = r1[15:8];
@@ -687,9 +664,6 @@ module riscyv02_execute (
           if (is_r9_load || is_r9_store || is_auipc || is_rr_load || is_rr_store) begin
             tmp[15:8] <= alu_result;
             state     <= is_auipc ? E_IDLE : E_MEM_LO;
-          end else if (is_auto_mem) begin
-            tmp[15:8] <= is_auto_load ? r1[15:8] : alu_result;
-            state     <= E_MEM_LO;
           end else if (is_jr_jalr) begin
             pc    <= next_pc;
             state <= E_IDLE;

@@ -30,8 +30,6 @@ __all__ = [
     '_encode_rr',
     '_encode_lw_rr', '_encode_lb_rr', '_encode_lbu_rr',
     '_encode_sw_rr', '_encode_sb_rr',
-    '_encode_lw_a', '_encode_lb_a', '_encode_lbu_a',
-    '_encode_sw_a', '_encode_sb_a',
     '_encode_sys', '_encode_sei', '_encode_cli', '_encode_reti',
     '_encode_epcr', '_encode_epcw',
     '_encode_brk', '_encode_wai', '_encode_stp', '_encode_nop',
@@ -117,7 +115,7 @@ def _encode_jr(rs, imm):
     return _encode_r8(0b00111, imm, rs)
 
 def _encode_jalr(rs, imm):
-    """JALR: R6=pc+2; pc = rs + sext(imm). Byte offset, no shift."""
+    """JALR: rs=pc+2; pc = rs + sext(imm). Byte offset, no shift."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b01000, imm, rs)
 
@@ -239,11 +237,6 @@ def _encode_lb_rr(rd, rs):  return _encode_rr(0b1111010111, rd, rs)
 def _encode_lbu_rr(rd, rs): return _encode_rr(0b1111011000, rd, rs)
 def _encode_sw_rr(rd, rs):  return _encode_rr(0b1111011001, rd, rs)
 def _encode_sb_rr(rd, rs):  return _encode_rr(0b1111011010, rd, rs)
-def _encode_lw_a(rd, rs):   return _encode_rr(0b1111011011, rd, rs)
-def _encode_lb_a(rd, rs):   return _encode_rr(0b1111011100, rd, rs)
-def _encode_lbu_a(rd, rs):  return _encode_rr(0b1111011101, rd, rs)
-def _encode_sw_a(rd, rs):   return _encode_rr(0b1111011110, rd, rs)
-def _encode_sb_a(rd, rs):   return _encode_rr(0b1111011111, rd, rs)
 
 # System format: [1111100000:10 @ 15:6][sub:6 @ 5:0]
 def _encode_sys(sub):

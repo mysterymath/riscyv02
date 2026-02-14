@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LW.RR**, **LB.RR**, **LBU.RR**, **SW.RR**, **SB.RR**, **LW.A**, **LB.A**, **LBU.A**, **SW.A**, **SB.A**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTI**, **SLTUI**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **EPCR**, **EPCW**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling saves the return address to the Exception PC (EPC) register; EPCR/EPCW allow handlers to read and modify it. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. Auto-modify load/store instructions (LW.A, LB.A, LBU.A, SW.A, SB.A) provide PUSH/POP semantics with zero cycle overhead vs regular load/store. R,8-format loads/stores use R0 as an implicit data register, while R,R-format loads/stores allow explicit register selection. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LW.RR**, **LB.RR**, **LBU.RR**, **SW.RR**, **SB.RR**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTI**, **SLTUI**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **EPCR**, **EPCW**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling saves the return address to the Exception PC (EPC) register; EPCR/EPCW allow handlers to read and modify it. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. R,8-format loads/stores use R0 as an implicit data register, while R,R-format loads/stores allow explicit register selection. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -14,11 +14,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 63.4% | 45.3% |
-| Transistor count (synth) | 17,158 | 13,176 |
-| SRAM-adjusted | 13,374 | 13,176 |
+| Utilization | 62.4% | 45.3% |
+| Transistor count (synth) | 17,022 | 13,176 |
+| SRAM-adjusted | 13,238 | 13,176 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF), and auto-modify load/store (LW.A, LB.A, LBU.A, SW.A, SB.A) for zero-overhead PUSH/POP. Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is within 1.5% of the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic, auto-modify addressing).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is within 0.5% of the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -137,7 +137,7 @@ All instructions are 16 bits. The encoding uses a **variable-width prefix-free**
 | 6 | "10" | `[prefix:6\|off10:10]` | J, JAL |
 | 7 | R,R,R | `[prefix:7\|rd:3\|rs2:3\|rs1:3]` | ADD, SUB, AND, OR, XOR, SLT, SLTU, SLL, SRL, SRA |
 | 9 | R,4 | `[prefix:9\|shamt:4\|reg:3]` | SLLI, SRLI, SRAI |
-| 10 | R,R | `[prefix:10\|rd:3\|rs:3]` | LW.RR, LB.RR, LBU.RR, SW.RR, SB.RR, LW.A, LB.A, LBU.A, SW.A, SB.A |
+| 10 | R,R | `[prefix:10\|rd:3\|rs:3]` | LW.RR, LB.RR, LBU.RR, SW.RR, SB.RR |
 | 10+ | System | `[prefix:10\|sub:6]` | SEI, CLI, RETI, INT, WAI, STP |
 
 ### Bit Layout
@@ -163,7 +163,7 @@ System:[prefix:10 @ 15:6] [sub:6 @ 5:0]
 00101   SW      mem16[rs + sext(imm8)] = R0
 00110   SB      mem[rs + sext(imm8)] = R0[7:0]
 00111   JR      pc = rs + sext(imm8) << 1
-01000   JALR    R6 = pc+2; pc = rs + sext(imm8) << 1
+01000   JALR    rs = pc+2; pc = rs + sext(imm8) << 1
 
 
 01001   ANDI    rd = rd & zext(imm8)
@@ -206,11 +206,6 @@ System:[prefix:10 @ 15:6] [sub:6 @ 5:0]
 1111011000  LBU.RR   rd = zext(mem[rs])
 1111011001  SW.RR    mem16[rs] = rd
 1111011010  SB.RR    mem[rs] = rd[7:0]
-1111011011  LW.A     rd = mem16[rs]; rs += 2
-1111011100  LB.A     rd = sext(mem[rs]); rs += 1
-1111011101  LBU.A    rd = zext(mem[rs]); rs += 1
-1111011110  SW.A     rs -= 2; mem16[rs] = rd
-1111011111  SB.A     rs -= 1; mem[rs] = rd[7:0]
 
 --- System format (10-bit prefix + sub) ---
 1111100000 000001  SEI    I = 1
@@ -279,9 +274,9 @@ Unconditional jump to a register plus a scaled signed offset. The 8-bit offset i
 
 #### JALR -- Jump and Link Register
 
-`R6 = PC+2; PC = rs + sext(imm8) << 1` -- 4 cycles
+`rs = PC+2; PC = rs + sext(imm8) << 1` -- 4 cycles
 
-Register-indirect jump that saves the return address in R6. Pairs with AUIPC for full 16-bit PC-relative function calls: `AUIPC t0, upper; JALR t0, lower`.
+Register-indirect jump that saves the return address in the source register. In the R,8 format, the single register field serves as both jump base and link destination. The conventional call sequence uses R6: `JALR R6, offset` reads the jump target from R6, then writes the return address back to R6. Pairs with AUIPC for full 16-bit PC-relative function calls: `AUIPC t0, upper; JALR t0, lower`.
 
 
 #### ANDI -- And Immediate
@@ -410,37 +405,13 @@ All shift immediate instructions are 2 cycles and operate in-place (rd = rd shif
 
 ### R,R Format -- Register Load/Store
 
-R,R-format loads and stores use explicit registers for both data and base, with no offset. Auto-modify variants (.A) adjust the base register automatically.
+R,R-format loads and stores use explicit registers for both data and base, with no offset.
 
 #### LW.RR -- `rd = MEM16[rs]` -- 4 cycles
 #### LB.RR -- `rd = sext(MEM[rs])` -- 3 cycles
 #### LBU.RR -- `rd = zext(MEM[rs])` -- 3 cycles
 #### SW.RR -- `MEM16[rs] = rd` -- 4 cycles
 #### SB.RR -- `MEM[rs] = rd[7:0]` -- 3 cycles
-
-#### LW.A -- Load Word, Post-Increment
-
-`rd = MEM16[rs]; rs += 2` -- 4 cycles
-
-Loads a 16-bit word from the address in rs, then increments rs by 2 (word size). POP idiom: `LW.A rd, (sp)` pops a word from the stack. When rd and rs are the same register, the loaded value overwrites the incremented pointer.
-
-#### LB.A -- Load Byte (Sign-Extend), Post-Increment
-
-`rd = sext(MEM[rs]); rs += 1` -- 3 cycles
-
-#### LBU.A -- Load Byte (Zero-Extend), Post-Increment
-
-`rd = zext(MEM[rs]); rs += 1` -- 3 cycles
-
-#### SW.A -- Store Word, Pre-Decrement
-
-`rs -= 2; MEM16[rs] = rd` -- 4 cycles
-
-Decrements rs by 2, then stores rd to the new address. PUSH idiom: `SW.A rd, (sp)` pushes a word onto the stack. Pairs with LW.A for stack operations.
-
-#### SB.A -- Store Byte, Pre-Decrement
-
-`rs -= 1; MEM[rs] = rd[7:0]` -- 3 cycles
 
 ### System Format
 
@@ -509,9 +480,9 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | NOP/SEI/CLI/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (taken) | 4 | 2 execute + 2 fetch after redirect |
-| LB/LBU/LB.RR/LBU.RR/LB.A/LBU.A | 3 | 2 address + 1 byte read (sign/zero-extend at E_MEM_LO) |
-| SB/SB.RR/SB.A | 3 | 2 address + 1 byte written |
-| LW/SW/LW.RR/SW.RR/LW.A/SW.A | 4 | 2 address + 2 bytes transferred |
+| LB/LBU/LB.RR/LBU.RR | 3 | 2 address + 1 byte read (sign/zero-extend at E_MEM_LO) |
+| SB/SB.RR | 3 | 2 address + 1 byte written |
+| LW/SW/LW.RR/SW.RR | 4 | 2 address + 2 bytes transferred |
 | JR/JALR | 4 | 2 execute + 2 fetch after redirect |
 | J/JAL | 4 | 2 execute + 2 fetch after redirect |
 | RETI | 4 | 2 execute + 2 fetch after redirect |
