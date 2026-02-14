@@ -2,19 +2,19 @@
  * Copyright (c) 2024 mysterymath
  * SPDX-License-Identifier: Apache-2.0
  *
- * Two-phase latch register file: 8 x 16-bit GP registers with 8-bit interface,
+ * Two-phase latch register file: 8 x 16-bit GP registers with 16-bit ports,
  * plus a 9th entry for the Exception PC (EPC) register.
  *
  * The EPC is accessible as entry 8 via 4-bit select lines on port 1 and the
  * write port. Port 2 remains 3-bit (GP registers only).
  *
- * Leader latches (sg13g2_dlhrq_1, transparent-high) capture w_data,
- * w_sel, w_hi, and w_we at the falling clock edge.  Follower latches
+ * Leader latches (sg13g2_dlhrq_1, transparent-high) capture w_data[15:0],
+ * w_sel, and w_we at the falling clock edge.  Follower latches
  * (also sg13g2_dlhrq_1) use GATE = ~clk & write_enable to pass the
- * leader's captured value to the selected register byte during clk=0.
+ * leader's captured value to the selected register during clk=0.
  *
- * Both phases use sg13g2_dlhrq_1 (27.22 µm²) rather than sg13g2_dllrq_1
- * (29.03 µm²) for followers, saving ~232 µm² across 128 follower latches.
+ * Both phases use sg13g2_dlhrq_1 (27.22 um²) rather than sg13g2_dllrq_1
+ * (29.03 um²) for followers, saving ~232 um² across 128 follower latches.
  * The ~clk inverter in the follower gate path actually improves hold-time
  * margin: leaders close (clk falls) before followers open (~clk rises
  * through the inverter), providing a natural non-overlap guarantee.
@@ -29,34 +29,30 @@ module riscyv02_regfile (
     input  wire        clk,
     input  wire        rst_n,
 
-    // Write port (8-bit)
+    // Write port (16-bit)
     input  wire [3:0]  w_sel,      // Bit 3 selects EPC (entry 8)
-    input  wire        w_hi,       // Select high byte for write
-    input  wire [7:0]  w_data,
+    input  wire [15:0] w_data,
     input  wire        w_we,
 
-    // Read port 1 (8-bit)
+    // Read port 1 (16-bit)
     input  wire [3:0]  r1_sel,     // Bit 3 selects EPC (entry 8)
-    input  wire        r1_hi,       // Select high byte for read
-    output wire [7:0]  r1,
+    output wire [15:0] r1,
 
-    // Read port 2 (8-bit)
+    // Read port 2 (16-bit)
     input  wire [2:0]  r2_sel,
-    input  wire        r2_hi,      // Select high byte for read
-    output wire [7:0]  r2
+    output wire [15:0] r2
 );
 
   // Phase 1 — Leader latches (sg13g2_dlhrq_1): transparent when GATE=clk=1,
-  // capture at negedge. These hold w_data/w_sel/w_hi/w_we stable during clk=0
+  // capture at negedge. These hold w_data/w_sel/w_we stable during clk=0
   // so follower inputs never depend on live combinational paths.
-  wire [7:0] w_data_held;
+  wire [15:0] w_data_held;
   wire [3:0] w_sel_held;
-  wire       w_hi_held;
   wire       w_we_held;
 
   generate
     genvar li;
-    for (li = 0; li < 8; li = li + 1) begin : gen_leader_data
+    for (li = 0; li < 16; li = li + 1) begin : gen_leader_data
       sg13g2_dlhrq_1 u_leader (
         .D(w_data[li]),
         .GATE(clk),
@@ -74,13 +70,6 @@ module riscyv02_regfile (
     end
   endgenerate
 
-  sg13g2_dlhrq_1 u_leader_hi (
-    .D(w_hi),
-    .GATE(clk),
-    .RESET_B(rst_n),
-    .Q(w_hi_held)
-  );
-
   sg13g2_dlhrq_1 u_leader_we (
     .D(w_we),
     .GATE(clk),
@@ -89,7 +78,7 @@ module riscyv02_regfile (
   );
 
   // Phase 2 — Follower latches (sg13g2_dlhrq_1): transparent when GATE=1,
-  // i.e. when ~clk & write_enable. Selected register byte passes leader's
+  // i.e. when ~clk & write_enable. Selected register passes leader's
   // captured value during clk=0; all others hold.
   //
   // The ~clk inverter provides natural non-overlap: leaders close at negedge
@@ -102,24 +91,20 @@ module riscyv02_regfile (
     for (gi = 0; gi < 8; gi = gi + 1) begin : gen_reg
       // GP register selected for write? Only when w_sel[3]=0 (not EPC).
       wire wen = w_we_held && !w_sel_held[3] && (w_sel_held[2:0] == gi[2:0]);
-      // Byte-select: which byte of this register to write
-      wire write_lo = wen & ~w_hi_held;
-      wire write_hi = wen & w_hi_held;
-      // Gate signals: transparent when clk=0 AND write enabled for this byte
-      wire gate_lo = clk_n & write_lo;
-      wire gate_hi = clk_n & write_hi;
+      // Single gate: both bytes written together
+      wire gate = clk_n & wen;
       for (bi = 0; bi < 8; bi = bi + 1) begin : gen_bit_lo
         sg13g2_dlhrq_1 u_follower (
           .D(w_data_held[bi]),
-          .GATE(gate_lo),
+          .GATE(gate),
           .RESET_B(rst_n),
           .Q(regs[gi][bi])
         );
       end
       for (bi = 0; bi < 8; bi = bi + 1) begin : gen_bit_hi
         sg13g2_dlhrq_1 u_follower (
-          .D(w_data_held[bi]),
-          .GATE(gate_hi),
+          .D(w_data_held[bi+8]),
+          .GATE(gate),
           .RESET_B(rst_n),
           .Q(regs[gi][bi+8])
         );
@@ -130,24 +115,21 @@ module riscyv02_regfile (
   // EPC register (entry 8): written when w_sel[3]=1
   wire [15:0] regs_epc;
   wire wen_epc = w_we_held && w_sel_held[3];
-  wire write_epc_lo = wen_epc & ~w_hi_held;
-  wire write_epc_hi = wen_epc & w_hi_held;
-  wire gate_epc_lo = clk_n & write_epc_lo;
-  wire gate_epc_hi = clk_n & write_epc_hi;
+  wire gate_epc = clk_n & wen_epc;
 
   generate
     for (bi = 0; bi < 8; bi = bi + 1) begin : gen_epc_lo
       sg13g2_dlhrq_1 u_follower (
         .D(w_data_held[bi]),
-        .GATE(gate_epc_lo),
+        .GATE(gate_epc),
         .RESET_B(rst_n),
         .Q(regs_epc[bi])
       );
     end
     for (bi = 0; bi < 8; bi = bi + 1) begin : gen_epc_hi
       sg13g2_dlhrq_1 u_follower (
-        .D(w_data_held[bi]),
-        .GATE(gate_epc_hi),
+        .D(w_data_held[bi+8]),
+        .GATE(gate_epc),
         .RESET_B(rst_n),
         .Q(regs_epc[bi+8])
       );
@@ -164,12 +146,10 @@ module riscyv02_regfile (
   endgenerate
   assign regs_ext[8] = regs_epc;
 
-  // Port 1: 9:1 mux (r1_sel[3] selects EPC)
-  wire [15:0] r_full = regs_ext[r1_sel];
-  assign r1 = r1_hi ? r_full[15:8] : r_full[7:0];
+  // Port 1: 9:1 mux (r1_sel[3] selects EPC) — full 16-bit output
+  assign r1 = regs_ext[r1_sel];
 
-  // Port 2: 8:1 mux (GP registers only)
-  wire [15:0] r2_full = regs[r2_sel];
-  assign r2 = r2_hi ? r2_full[15:8] : r2_full[7:0];
+  // Port 2: 8:1 mux (GP registers only) — full 16-bit output
+  assign r2 = regs[r2_sel];
 
 endmodule
