@@ -6,12 +6,11 @@
 `default_nettype none
 
 module riscyv02_alu (
-    input  wire       clk,
-    input  wire       rst_n,
     input  wire [7:0] a,
     input  wire [7:0] b,
     input  wire [2:0] op,      // Operation select
-    input  wire       new_op,  // 1 = new operation (ci=0/1), 0 = continue (ci=latched carry)
+    input  wire       new_op,  // 1 = new operation (ci=0/1), 0 = continue (ci=ci_ext)
+    input  wire       ci_ext,  // External carry-in (from tmp[8] in execute unit)
     output wire       co,
     output reg  [7:0] result
 );
@@ -23,8 +22,7 @@ module riscyv02_alu (
 
   wire sub = (op == OP_SUB);
   wire [7:0] b_eff = b ^ {8{sub}};   // invert b for subtraction
-  reg carry;
-  wire ci = new_op ? sub : carry;     // SUB: ci=1 for new_op (two's complement)
+  wire ci = new_op ? sub : ci_ext;    // SUB: ci=1 for new_op (two's complement)
   wire [7:0] sum;
   assign {co, sum} = a + b_eff + ci;
 
@@ -35,8 +33,4 @@ module riscyv02_alu (
       OP_XOR:  result = a ^ b;
       default: result = sum;    // OP_ADD, OP_SUB
     endcase
-
-  always @(negedge clk or negedge rst_n)
-    if (!rst_n) carry <= 1'b0;
-    else        carry <= co;
 endmodule

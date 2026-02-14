@@ -256,12 +256,11 @@ module riscyv02_execute (
   wire       alu_co;
 
   riscyv02_alu u_alu (
-    .clk    (clk),
-    .rst_n  (rst_n),
     .a      (alu_a),
     .b      (alu_b),
     .op     (alu_op),
     .new_op (alu_new_op),
+    .ci_ext (tmp[8]),
     .co     (alu_co),
     .result (alu_result)
   );
@@ -581,8 +580,8 @@ module riscyv02_execute (
             alu_a      = pc[15:8];
             alu_b      = {8{ir[10]}};           // sign-extend off8 bit 7
             alu_new_op = 1'b0;
-            // BZ/BNZ: full 16-bit zero check via |r1 saved in tmp[8]
-            if (!tmp[8] ^ is_bnz) begin
+            // BZ/BNZ: full 16-bit zero check (r1[15:0] stable, no write in LO)
+            if (!(|r1) ^ is_bnz) begin
               jump    = 1'b1;
               next_pc = {alu_result, tmp[7:0]};
             end
@@ -676,7 +675,7 @@ module riscyv02_execute (
           if (is_sei) i_bit <= 1'b1;
           if (is_cli) i_bit <= 1'b0;
           tmp[7:0] <= next_tmp_lo;
-          if (is_branch) tmp[8] <= |r1;       // Full 16-bit nonzero check for BZ/BNZ
+          tmp[8] <= alu_co;  // ALU carry for E_EXEC_HI continuation
           if (!is_system_1cyc)
             state <= E_EXEC_HI;
           else
