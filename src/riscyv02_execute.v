@@ -181,8 +181,7 @@ module riscyv02_execute (
   wire is_jump_imm = is_j || is_jal;
   wire is_jr_jalr  = is_jr || is_jalr;
 
-  // System single-cycle ops (SEI, CLI complete in E_EXEC_LO; WAI/STP hold in E_IDLE)
-  wire is_system_1cyc = is_sei || is_cli || is_wai || is_stp;
+  // WAI/STP hold in E_IDLE after executing through E_EXEC_HI
 
   // ==========================================================================
   // Shared Infrastructure
@@ -413,10 +412,6 @@ module riscyv02_execute (
         end else if (is_jump_imm) begin
           alu_a      = pc[7:0];
           alu_b      = {ir[6:0], 1'b0};     // off10[6:0] << 1
-        end else begin
-          // System single-cycle (SEI, CLI, WAI, STP)
-          if (!is_wai && !is_stp)
-            insn_completing = 1'b1;
         end
       end
 
@@ -454,7 +449,7 @@ module riscyv02_execute (
             w_we    = 1'b1;
             jump    = 1'b1;
             next_pc = {13'b0, ir[1:0] + 2'd1, 1'b0};
-          end else begin
+          end else if (!is_stp && !is_wai && !is_sei && !is_cli) begin
           // Execute high byte: completes this cycle
           insn_completing = 1'b1;
           if (is_addi) begin
@@ -621,14 +616,9 @@ module riscyv02_execute (
         E_IDLE: ;
 
         E_EXEC_LO: begin
-          if (is_sei) i_bit <= 1'b1;
-          if (is_cli) i_bit <= 1'b0;
           tmp[7:0] <= next_tmp_lo;
           tmp[8] <= alu_co;  // ALU carry for E_EXEC_HI continuation
-          if (!is_system_1cyc)
-            state <= E_EXEC_HI;
-          else
-            state <= E_IDLE;
+          state <= E_EXEC_HI;
         end
 
         E_EXEC_HI: begin
@@ -636,6 +626,8 @@ module riscyv02_execute (
             tmp[15:8] <= alu_result;
             state     <= is_auipc ? E_IDLE : E_MEM_LO;
           end else begin
+            if (is_sei) i_bit <= 1'b1;
+            if (is_cli) i_bit <= 1'b0;
             if (is_reti) i_bit <= r1[0];
             if (jump) pc <= next_pc;
             state <= E_IDLE;

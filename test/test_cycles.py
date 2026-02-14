@@ -47,16 +47,16 @@ async def test_cycle_count_jr(dut):
 
 @cocotb.test()
 async def test_cycle_count_sei(dut):
-    """SEI takes 2 cycles."""
+    """SEI takes 3 cycles."""
     prog = {}
     _place(prog, 0x0000, _encode_sei())
     _place(prog, 0x0002, _spin(0x0002))
-    await _measure_instruction_cycles(dut, prog, 2, "SEI")
+    await _measure_instruction_cycles(dut, prog, 3, "SEI")
 
 
 @cocotb.test()
 async def test_cycle_count_cli(dut):
-    """CLI takes 2 cycles."""
+    """CLI takes 3 cycles."""
     prog = {}
     _place(prog, 0x0000, _encode_cli())
     _place(prog, 0x0002, _spin(0x0002))
@@ -87,8 +87,8 @@ async def test_cycle_count_cli(dut):
         cycles += 1
         if get_sync():
             break
-    dut._log.info(f"CLI: {cycles} cycles (expected 2)")
-    assert cycles == 2, f"CLI: expected 2 cycles, got {cycles}"
+    dut._log.info(f"CLI: {cycles} cycles (expected 3)")
+    assert cycles == 3, f"CLI: expected 3 cycles, got {cycles}"
 
 
 @cocotb.test()
@@ -199,7 +199,7 @@ async def test_cycle_count_reti(dut):
 
 @cocotb.test()
 async def test_cycle_count_wai(dut):
-    """WAI with pending masked IRQ takes 2 cycles (wakes immediately)."""
+    """WAI with pending masked IRQ takes 3 cycles (wakes immediately)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -235,8 +235,8 @@ async def test_cycle_count_wai(dut):
         if get_sync():
             break
 
-    dut._log.info(f"WAI: {cycles} cycles (expected 2)")
-    assert cycles == 2, f"WAI: expected 2 cycles, got {cycles}"
+    dut._log.info(f"WAI: {cycles} cycles (expected 3)")
+    assert cycles == 3, f"WAI: expected 3 cycles, got {cycles}"
 
 
 @cocotb.test()

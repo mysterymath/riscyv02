@@ -14,11 +14,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 63.0% | 45.3% |
-| Transistor count (synth) | 16,930 | 13,176 |
-| SRAM-adjusted | 13,146 | 13,176 |
+| Utilization | 61.0% | 45.3% |
+| Transistor count (synth) | 16,660 | 13,176 |
+| SRAM-adjusted | 12,876 | 13,176 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 0.2% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 2.3% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -477,7 +477,8 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| NOP/SEI/CLI/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
+| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
+| SEI/CLI | 3 | 2 execute + 1 idle (i_bit visible before dispatch) |
 | BZ/BNZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (taken) | 4 | 2 execute + 2 fetch after redirect |
 | LB/LBU/LB.RR/LBU.RR | 3 | 2 address + 1 byte read (sign/zero-extend at E_MEM_LO) |
@@ -487,9 +488,9 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | J/JAL | 4 | 2 execute + 2 fetch after redirect |
 | RETI | 4 | 2 execute + 2 fetch after redirect |
 | INT (BRK) | 4 | 2 execute + 2 fetch after redirect |
-| WAI (wake) | 2 | If interrupt already pending |
+| WAI (wake) | 3 | 2 execute + 1 idle (if interrupt already pending) |
 | WAI (halt) | -- | Halted until interrupt arrives |
-| STP | 1 | Dispatch directly to halt |
+| STP | 3 | 2 execute + 1 idle before halt |
 | EPCR/EPCW | 2 | 1 execute + 1 overlapped fetch |
 | IRQ entry | 4 | 2 execute (save EPC) + 2 fetch |
 | NMI entry | 4 | 2 execute (save EPC) + 2 fetch |
