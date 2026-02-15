@@ -497,6 +497,24 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 
 Instructions that redirect (JR, JALR, J, JAL, RETI, branches taken) flush the speculative fetch and must wait for new instruction bytes. Non-redirecting instructions benefit from fetch/execute overlap.
 
+### Self-Modifying Code
+
+Because the fetch of the next instruction is pipelined ahead of the current instruction's memory operations, **a store is never visible to the immediately following instruction fetch**. The next instruction's bytes were already read from memory before the store was committed.
+
+The instruction *after* that — two instructions past the store — sees the stored value, because its fetch happens during the intervening instruction's execution, by which time the store has completed.
+
+To fence, insert any instruction (even a NOP) between the store and the modified code:
+
+```
+SB [target]     ; store writes to 'target' address
+NOP             ; fence — target's fetch happens during NOP's execution
+target:         ; this instruction sees the stored value
+```
+
+Without the fence, `target` would execute the *old* instruction encoding that was fetched in parallel with the store.
+
+This also applies to word stores (SW/SW.RR): both bytes are written before the instruction two past the store is fetched. A single fence instruction is always sufficient.
+
 ## RDY and SYNC Signals
 
 RISCY-V02 provides W65C02S-compatible RDY and SYNC signals for wait-state insertion, DMA, and single-step debugging.
