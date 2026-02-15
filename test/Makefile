@@ -52,7 +52,7 @@ TT_VENV ?= $(HOME)/ttsetup/venv
 
 harden:
 	cd $(PROJECT_DIR) && \
-	  python3 -c "import json; c=json.load(open('src/config.json')); c['CLOCK_PERIOD']=$(CLOCK_PERIOD); c['PNR_SDC_FILE']='dir::timing.sdc'; c['SIGNOFF_SDC_FILE']='dir::timing.sdc'; json.dump(c,open('src/config.json','w'),indent=2)" && \
+	  python3 -c "import json; c=json.load(open('src/config.json')); c['CLOCK_PERIOD']=$(CLOCK_PERIOD); c['PNR_SDC_FILE']='dir::timing.sdc'; c['SIGNOFF_SDC_FILE']='dir::timing.sdc'; c['PL_RESIZER_HOLD_SLACK_MARGIN']=0.2; c['GRT_RESIZER_HOLD_SLACK_MARGIN']=0.1; json.dump(c,open('src/config.json','w'),indent=2)" && \
 	  . $(TT_VENV)/bin/activate && \
 	  python ./tt/tt_tool.py --ihp --create-user-config && \
 	  python ./tt/tt_tool.py --ihp --harden ; \
