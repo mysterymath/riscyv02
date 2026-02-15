@@ -515,11 +515,11 @@ class RISCYV02Sim:
 
             if sub == 0b000001:         # SEI
                 self.i_bit = True
-                return self._stale_addr(next_pc)
+                return []
 
             if sub == 0b000010:         # CLI
                 self.i_bit = False
-                return self._stale_addr(next_pc)
+                return []
 
             if sub == 0b000011:         # RETI
                 self.i_bit = bool(self.epc & 1)

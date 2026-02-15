@@ -478,7 +478,7 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | Instruction | Cycles | Notes |
 |---|---|---|
 | NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
-| SEI/CLI | 3 | 2 execute + 1 idle (i_bit visible before dispatch) |
+| SEI/CLI | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (taken) | 4 | 2 execute + 2 fetch after redirect |
 | LB/LBU/LB.RR/LBU.RR | 3 | 2 address + 1 byte read (sign/zero-extend at E_MEM_LO) |

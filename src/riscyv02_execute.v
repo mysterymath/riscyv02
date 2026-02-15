@@ -306,7 +306,9 @@ module riscyv02_execute (
   // Interrupt control
   wire fsm_ready = state == E_IDLE || insn_completing;
   wire take_nmi = fsm_ready && (nmi_pending || nmi_edge) && !nmi_ack;
-  wire take_irq = fsm_ready && !irqb && !i_bit && !take_nmi;
+  wire take_irq = fsm_ready && !irqb && !(i_bit || is_sei) && !take_nmi;
+  // Forwarded i_bit for pc[0] save: reflects SEI/CLI effect completing this cycle
+  wire i_bit_fwd = (i_bit || is_sei) && !is_cli;
   assign ir_accept      = fsm_ready && ir_valid && !fetch_flush;
   assign waiting = (state == E_IDLE) && is_wai;
   assign stopped = (state == E_IDLE) && is_stp;
@@ -449,7 +451,7 @@ module riscyv02_execute (
             w_we    = 1'b1;
             jump    = 1'b1;
             next_pc = {13'b0, ir[1:0] + 2'd1, 1'b0};
-          end else if (!is_stp && !is_wai && !is_sei && !is_cli) begin
+          end else if (!is_stp && !is_wai) begin
           // Execute high byte: completes this cycle
           insn_completing = 1'b1;
           if (is_addi) begin
@@ -651,7 +653,7 @@ module riscyv02_execute (
       // -----------------------------------------------------------------
       if (take_nmi || take_irq) begin
         ir    <= {10'b1111100000, 1'b1, 3'b000, !take_nmi, 1'b0};
-        pc[0] <= i_bit;
+        pc[0] <= i_bit_fwd;
         i_bit <= 1'b1;
         state <= E_EXEC_LO;
       end
@@ -665,7 +667,7 @@ module riscyv02_execute (
         r2_hi_r  <= 1'b0;
         // BRK/INT detection: system prefix + sub[5]=1
         if (fetch_ir[15:6] == 10'b1111100000 && fetch_ir[5]) begin
-          pc[0] <= i_bit;
+          pc[0] <= i_bit_fwd;
           i_bit <= 1'b1;
         end
         state <= E_EXEC_LO;

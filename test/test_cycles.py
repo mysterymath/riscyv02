@@ -47,16 +47,16 @@ async def test_cycle_count_jr(dut):
 
 @cocotb.test()
 async def test_cycle_count_sei(dut):
-    """SEI takes 3 cycles."""
+    """SEI takes 2 cycles."""
     prog = {}
     _place(prog, 0x0000, _encode_sei())
     _place(prog, 0x0002, _spin(0x0002))
-    await _measure_instruction_cycles(dut, prog, 3, "SEI")
+    await _measure_instruction_cycles(dut, prog, 2, "SEI")
 
 
 @cocotb.test()
 async def test_cycle_count_cli(dut):
-    """CLI takes 3 cycles."""
+    """CLI takes 2 cycles."""
     prog = {}
     _place(prog, 0x0000, _encode_cli())
     _place(prog, 0x0002, _spin(0x0002))
@@ -87,8 +87,8 @@ async def test_cycle_count_cli(dut):
         cycles += 1
         if get_sync():
             break
-    dut._log.info(f"CLI: {cycles} cycles (expected 3)")
-    assert cycles == 3, f"CLI: expected 3 cycles, got {cycles}"
+    dut._log.info(f"CLI: {cycles} cycles (expected 2)")
+    assert cycles == 2, f"CLI: expected 2 cycles, got {cycles}"
 
 
 @cocotb.test()
