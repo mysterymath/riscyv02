@@ -7,15 +7,14 @@
 # from the ISA spec. Used for differential fuzz testing against the RTL.
 #
 # Bus model:
-#   Each instruction produces "execute entries" — the bus transactions that
-#   occur while the instruction runs. For non-redirects, these include the
-#   fetch of the next sequential instruction (pipelined). For redirects,
-#   these are the speculative fetch (wasted, since PC changed).
+#   _execute() returns only memory-phase bus entries (load/store
+#   addresses). _dispatch() prepends the pipelined fetch of the next
+#   instruction and, for redirects, appends the target fetch. This
+#   separation keeps fetch logic out of instruction handlers.
 #
-#   After the execute entries, the CPU becomes interruptible. If no
-#   interrupt fires and the instruction changed PC (redirect), a target
-#   fetch from the new PC is appended automatically. This means redirect
-#   handlers just set PC — the target fetch falls out naturally.
+#   After the execute entries (fetch + mem), the CPU becomes
+#   interruptible. If no interrupt fires and the instruction changed PC
+#   (redirect), a target fetch from the new PC is appended automatically.
 #
 # Store visibility:
 #   An instruction's stores are never visible to the immediately following
@@ -222,10 +221,13 @@ class RISCYV02Sim:
             self.pc = (self.pc & 0xFFFE) | (1 if self.i_bit else 0)
             self.i_bit = True
 
-        # Execute: produces execute-phase bus entries, may set _redirect.
+        # Execute: applies architectural effects, returns memory bus entries.
+        # Dispatch owns the fetch; execute only produces mem-phase entries.
+        next_pc = self.pc
         self._redirect = False
         regs_before = list(self.regs)
-        exec_entries = self._execute(ir)
+        mem_entries = self._execute(ir)
+        exec_entries = self._fetch_seq(next_pc) + mem_entries
 
         # If a redirect occurred, append target fetch from new PC.
         if self._redirect:
@@ -269,10 +271,14 @@ class RISCYV02Sim:
     # ------------------------------------------------------------------
 
     def _execute(self, ir):
-        """Execute one instruction. Returns execute-phase bus entries.
+        """Execute one instruction. Returns memory-phase bus entries.
+
+        Applies architectural effects (register writes, PC changes).
+        Returns only the memory bus entries (load/store addresses);
+        the caller prepends the pipelined fetch and appends target
+        fetch for redirects.
 
         Sets self._redirect = True and changes self.pc for redirects.
-        The caller appends the target fetch automatically.
         """
         next_pc = self.pc   # Already advanced by 2
 
@@ -287,76 +293,73 @@ class RISCYV02Sim:
 
             if prefix5 == 0b00000:      # ADDI
                 self.regs[rs_idx] = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
-                return self._fetch_seq(next_pc)
+                return []
 
             if prefix5 == 0b00001:      # LI
                 self.regs[rs_idx] = sext8(imm8_raw) & 0xFFFF
-                return self._fetch_seq(next_pc)
+                return []
 
             if prefix5 == 0b00010:      # LW (word load, dest=R0)
                 addr = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
                 lo = self.ram[addr]
                 hi = self.ram[(addr + 1) & 0xFFFF]
                 self.regs[0] = (hi << 8) | lo
-                return (self._fetch_seq(next_pc)
-                        + [(addr, True, 0),
-                           ((addr + 1) & 0xFFFF, True, 0)])
+                return [(addr, True, 0),
+                        ((addr + 1) & 0xFFFF, True, 0)]
 
             if prefix5 == 0b00011:      # LB (sign-extend byte load, dest=R0)
                 addr = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
                 byte = self.ram[addr]
                 self.regs[0] = (byte | 0xFF00) if byte & 0x80 else byte
-                return self._fetch_seq(next_pc) + [(addr, True, 0)]
+                return [(addr, True, 0)]
 
             if prefix5 == 0b00100:      # LBU (zero-extend byte load, dest=R0)
                 addr = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
                 self.regs[0] = self.ram[addr]
-                return self._fetch_seq(next_pc) + [(addr, True, 0)]
+                return [(addr, True, 0)]
 
             if prefix5 == 0b00101:      # SW (word store, data=R0)
                 addr = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
                 lo = self.regs[0] & 0xFF
                 hi = (self.regs[0] >> 8) & 0xFF
-                return (self._fetch_seq(next_pc)
-                        + [(addr, False, lo),
-                           ((addr + 1) & 0xFFFF, False, hi)])
+                return [(addr, False, lo),
+                        ((addr + 1) & 0xFFFF, False, hi)]
 
             if prefix5 == 0b00110:      # SB (byte store, data=R0)
                 addr = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
-                return (self._fetch_seq(next_pc)
-                        + [(addr, False, self.regs[0] & 0xFF)])
+                return [(addr, False, self.regs[0] & 0xFF)]
 
             if prefix5 == 0b00111:      # JR
                 self.pc = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
                 self._redirect = True
-                return self._fetch_seq(next_pc)
+                return []
 
             if prefix5 == 0b01000:      # JALR (link to rs)
                 old_rs = self.regs[rs_idx]
                 self.regs[rs_idx] = next_pc
                 self.pc = (old_rs + sext8(imm8_raw)) & 0xFFFF
                 self._redirect = True
-                return self._fetch_seq(next_pc)
+                return []
 
             if prefix5 == 0b01001:      # ANDI (zero-ext imm)
                 self.regs[rs_idx] = self.regs[rs_idx] & imm8_raw
-                return self._fetch_seq(next_pc)
+                return []
 
             if prefix5 == 0b01010:      # ORI (zero-ext imm)
                 self.regs[rs_idx] = self.regs[rs_idx] | imm8_raw
-                return self._fetch_seq(next_pc)
+                return []
 
             if prefix5 == 0b01011:      # XORI (zero-ext imm)
                 self.regs[rs_idx] = self.regs[rs_idx] ^ imm8_raw
-                return self._fetch_seq(next_pc)
+                return []
 
             if prefix5 == 0b01100:      # SLTI (signed, dest=R0)
                 self.regs[0] = 1 if to_signed16(self.regs[rs_idx]) < sext8(imm8_raw) else 0
-                return self._fetch_seq(next_pc)
+                return []
 
             if prefix5 == 0b01101:      # SLTUI (unsigned, dest=R0)
                 self.regs[0] = 1 if self.regs[rs_idx] < (sext8(imm8_raw) & 0xFFFF) else 0
-                return self._fetch_seq(next_pc)
+                return []
 
             if prefix5 == 0b01110:      # BZ
                 scrambled = imm8_raw
@@ -366,7 +369,7 @@ class RISCYV02Sim:
                 if self.regs[rs_idx] == 0:
                     self.pc = (next_pc + sext8(off) * 2) & 0xFFFF
                     self._redirect = True
-                return self._fetch_seq(next_pc)
+                return []
 
             if prefix5 == 0b01111:      # BNZ
                 scrambled = imm8_raw
@@ -376,14 +379,14 @@ class RISCYV02Sim:
                 if self.regs[rs_idx] != 0:
                     self.pc = (next_pc + sext8(off) * 2) & 0xFFFF
                     self._redirect = True
-                return self._fetch_seq(next_pc)
+                return []
 
             if prefix5 == 0b10000:      # XORIF (zero-ext imm, dest=R0)
                 self.regs[0] = self.regs[rs_idx] ^ imm8_raw
-                return self._fetch_seq(next_pc)
+                return []
 
             # Unknown R,8 — treat as NOP
-            return self._fetch_seq(next_pc)
+            return []
 
         # =================================================================
         # R,7 format (6-bit prefix): LUI, AUIPC
@@ -393,13 +396,13 @@ class RISCYV02Sim:
             rd = ir & 7
             imm7 = (ir >> 3) & 0x7F
             self.regs[rd] = (imm7 << 9) & 0xFFFF
-            return self._fetch_seq(next_pc)
+            return []
 
         if prefix6 == 0b110101:     # AUIPC
             rd = ir & 7
             imm7 = (ir >> 3) & 0x7F
             self.regs[rd] = (next_pc + (imm7 << 9)) & 0xFFFF
-            return self._fetch_seq(next_pc)
+            return []
 
         # =================================================================
         # "10" format (6-bit prefix): J, JAL
@@ -408,14 +411,14 @@ class RISCYV02Sim:
             off10 = ir & 0x3FF
             self.pc = (next_pc + sext10(off10) * 2) & 0xFFFF
             self._redirect = True
-            return self._fetch_seq(next_pc)
+            return []
 
         if prefix6 == 0b110111:     # JAL (link to R6)
             off10 = ir & 0x3FF
             self.regs[6] = next_pc
             self.pc = (next_pc + sext10(off10) * 2) & 0xFFFF
             self._redirect = True
-            return self._fetch_seq(next_pc)
+            return []
 
         # =================================================================
         # R,R,R format (7-bit prefix): ADD..SRA
@@ -442,7 +445,7 @@ class RISCYV02Sim:
             elif prefix7 == 0b1111001:                                               # SRA
                 self.regs[rd] = (to_signed16(a) >> (b & 0xF)) & 0xFFFF
 
-            return self._fetch_seq(next_pc)
+            return []
 
         # =================================================================
         # R,4 format (9-bit prefix): SLLI, SRLI, SRAI
@@ -452,19 +455,19 @@ class RISCYV02Sim:
             rd = ir & 7
             shamt = (ir >> 3) & 0xF
             self.regs[rd] = (self.regs[rd] << shamt) & 0xFFFF
-            return self._fetch_seq(next_pc)
+            return []
 
         if prefix9 == 0b111101001:      # SRLI
             rd = ir & 7
             shamt = (ir >> 3) & 0xF
             self.regs[rd] = self.regs[rd] >> shamt
-            return self._fetch_seq(next_pc)
+            return []
 
         if prefix9 == 0b111101010:      # SRAI
             rd = ir & 7
             shamt = (ir >> 3) & 0xF
             self.regs[rd] = (to_signed16(self.regs[rd]) >> shamt) & 0xFFFF
-            return self._fetch_seq(next_pc)
+            return []
 
         # =================================================================
         # R,R format (10-bit prefix): LW.RR..SB.RR
@@ -477,35 +480,32 @@ class RISCYV02Sim:
             lo = self.ram[addr]
             hi = self.ram[(addr + 1) & 0xFFFF]
             self.regs[rd] = (hi << 8) | lo
-            return (self._fetch_seq(next_pc)
-                    + [(addr, True, 0), ((addr + 1) & 0xFFFF, True, 0)])
+            return [(addr, True, 0), ((addr + 1) & 0xFFFF, True, 0)]
 
         if prefix10 == 0b1111010111:    # LB.RR rd, rs
             rd = (ir >> 3) & 7
             addr = self.regs[ir & 7]
             byte = self.ram[addr]
             self.regs[rd] = (byte | 0xFF00) if byte & 0x80 else byte
-            return self._fetch_seq(next_pc) + [(addr, True, 0)]
+            return [(addr, True, 0)]
 
         if prefix10 == 0b1111011000:    # LBU.RR rd, rs
             rd = (ir >> 3) & 7
             addr = self.regs[ir & 7]
             self.regs[rd] = self.ram[addr]
-            return self._fetch_seq(next_pc) + [(addr, True, 0)]
+            return [(addr, True, 0)]
 
         if prefix10 == 0b1111011001:    # SW.RR rd, rs
             rd = (ir >> 3) & 7
             addr = self.regs[ir & 7]
             lo = self.regs[rd] & 0xFF
             hi = (self.regs[rd] >> 8) & 0xFF
-            return (self._fetch_seq(next_pc)
-                    + [(addr, False, lo), ((addr + 1) & 0xFFFF, False, hi)])
+            return [(addr, False, lo), ((addr + 1) & 0xFFFF, False, hi)]
 
         if prefix10 == 0b1111011010:    # SB.RR rd, rs
             rd = (ir >> 3) & 7
             addr = self.regs[ir & 7]
-            return (self._fetch_seq(next_pc)
-                    + [(addr, False, self.regs[rd] & 0xFF)])
+            return [(addr, False, self.regs[rd] & 0xFF)]
 
         # =================================================================
         # System format (10-bit prefix + sub)
@@ -515,33 +515,33 @@ class RISCYV02Sim:
 
             if sub == 0b000001:         # SEI
                 self.i_bit = True
-                return self._fetch_seq(next_pc) + self._stale_addr(next_pc)
+                return self._stale_addr(next_pc)
 
             if sub == 0b000010:         # CLI
                 self.i_bit = False
-                return self._fetch_seq(next_pc) + self._stale_addr(next_pc)
+                return self._stale_addr(next_pc)
 
             if sub == 0b000011:         # RETI
                 self.i_bit = bool(self.epc & 1)
                 self.pc = self.epc & 0xFFFE
                 self._redirect = True
-                return self._fetch_seq(next_pc)
+                return []
 
             if sub == 0b000101:         # WAI
                 self.waiting = True
-                return self._fetch_seq(next_pc) + self._stale_addr(next_pc)
+                return self._stale_addr(next_pc)
 
             if sub == 0b000111:         # STP
                 self.stopped = True
-                return self._fetch_seq(next_pc) + self._stale_addr(next_pc)
+                return self._stale_addr(next_pc)
 
             if (sub >> 3) == 0b010:     # EPCR rd
                 self.regs[sub & 7] = self.epc
-                return self._fetch_seq(next_pc)
+                return []
 
             if (sub >> 3) == 0b011:     # EPCW rs
                 self.epc = self.regs[sub & 7]
-                return self._fetch_seq(next_pc)
+                return []
 
             if sub & 0x20:              # INT/BRK (sub[5]=1)
                 # BRK pc modification already done at dispatch
@@ -549,7 +549,7 @@ class RISCYV02Sim:
                 self.epc = self.pc      # pc has i_bit in bit 0
                 self.pc = ((vector_idx + 1) & 3) << 1
                 self._redirect = True
-                return self._fetch_seq(next_pc)
+                return []
 
         # Unknown instruction — treat as 2-cycle NOP
-        return self._fetch_seq(next_pc)
+        return []
