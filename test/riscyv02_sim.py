@@ -214,7 +214,7 @@ class RISCYV02Sim:
         # BRK/INT detection: system prefix + sub[5]=1
         is_int = (ir >> 6) == 0b1111100000 and (ir >> 5) & 1
         if is_int:
-            self.pc = (self.pc & 0xFFFE) | (1 if self.i_bit else 0)
+            self._saved_i_bit = self.i_bit  # Stash for EPC save in execute
             self.i_bit = True
 
         # Execute: applies architectural effects, returns memory bus entries.
@@ -242,7 +242,8 @@ class RISCYV02Sim:
 
     def _take_interrupt(self, take_nmi):
         """Enter interrupt: save PC to EPC, jump to vector."""
-        modified_pc = (self.pc & 0xFFFE) | (1 if self.i_bit else 0)
+        stale_pc = self.pc              # Always even (15-bit PC, bit 0 = 0)
+        epc_val = stale_pc | (1 if self.i_bit else 0)
         self.i_bit = True
 
         if take_nmi:
@@ -252,14 +253,14 @@ class RISCYV02Sim:
         else:
             vector = 0x0006
 
-        self.epc = modified_pc
+        self.epc = epc_val
         self.pc = vector
-        exec_entries = self._fetch_seq(modified_pc)
+        exec_entries = self._fetch_seq(stale_pc)  # Clean even address
         self._bus_seq = exec_entries + self._fetch_seq(vector)
         self._interrupt_point = len(exec_entries)
         self.last_dispatch = (
             f"{'NMI' if take_nmi else 'IRQ'}"
-            f" epc=0x{modified_pc:04X} vec=0x{vector:04X}"
+            f" epc=0x{epc_val:04X} vec=0x{vector:04X}"
         )
 
     # ------------------------------------------------------------------
@@ -326,14 +327,14 @@ class RISCYV02Sim:
                 return [(addr, False, self.regs[0] & 0xFF)]
 
             if prefix5 == 0b00111:      # JR
-                self.pc = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
+                self.pc = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFE
                 self._redirect = True
                 return []
 
             if prefix5 == 0b01000:      # JALR (link to rs)
                 old_rs = self.regs[rs_idx]
                 self.regs[rs_idx] = next_pc
-                self.pc = (old_rs + sext8(imm8_raw)) & 0xFFFF
+                self.pc = (old_rs + sext8(imm8_raw)) & 0xFFFE
                 self._redirect = True
                 return []
 
@@ -540,9 +541,8 @@ class RISCYV02Sim:
                 return []
 
             if sub & 0x20:              # INT/BRK (sub[5]=1)
-                # BRK pc modification already done at dispatch
                 vector_idx = ir & 3
-                self.epc = self.pc      # pc has i_bit in bit 0
+                self.epc = self.pc | (1 if self._saved_i_bit else 0)
                 self.pc = ((vector_idx + 1) & 3) << 1
                 self._redirect = True
                 return []

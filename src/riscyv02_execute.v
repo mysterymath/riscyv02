@@ -76,7 +76,7 @@ module riscyv02_execute (
   reg [15:0] tmp;       // Cycle-to-cycle temporary (mem addr, branch target, ALU/shift result)
 
   // Interrupt and PC state
-  reg [15:0] pc;        // Program counter (next instruction to fetch; advanced at dispatch)
+  reg [15:1] pc;        // Program counter (word address; byte addr = {pc, 1'b0})
   reg        i_bit;     // Interrupt disable flag (0=enabled, 1=disabled)
 
   // -------------------------------------------------------------------------
@@ -297,7 +297,7 @@ module riscyv02_execute (
   // State-driven signals (computed in state-property block below)
   // -------------------------------------------------------------------------
   reg        insn_completing;
-  reg [15:0] next_pc;
+  reg [15:1] next_pc;
   reg        jump;
 
   // Combinational signal for tmp[7:0] latch at E_EXEC_LO negedge
@@ -317,7 +317,7 @@ module riscyv02_execute (
   // State-Property Block
   // ==========================================================================
 
-  assign fetch_pc = pc;
+  assign fetch_pc = {pc, 1'b0};
 
   always @(*) begin
     // Defaults
@@ -349,7 +349,7 @@ module riscyv02_execute (
           alu_b      = ir[10:3];            // imm[7:0]
         end else if (is_auipc) begin
           // pc + (sext(imm7) << 9): lo byte is pc + 0
-          alu_a       = pc[7:0];
+          alu_a       = {pc[7:1], 1'b0};
           alu_b       = 8'h00;
           next_tmp_lo = alu_result;
         end else if (is_rr_load || is_rr_store) begin
@@ -406,11 +406,11 @@ module riscyv02_execute (
         end else if (is_lui) begin
           next_tmp_lo = 8'h00;           // lo byte = 0 (sext(imm7) << 9)
         end else if (is_branch) begin
-          alu_a      = pc[7:0];
+          alu_a      = {pc[7:1], 1'b0};
           alu_b      = {ir[3], ir[9:4], 1'b0};  // RISC-V trick: off[6],off[5:0],0
 
         end else if (is_jump_imm) begin
-          alu_a      = pc[7:0];
+          alu_a      = {pc[7:1], 1'b0};
           alu_b      = {ir[6:0], 1'b0};     // off10[6:0] << 1
         end
       end
@@ -434,21 +434,21 @@ module riscyv02_execute (
           alu_a           = r1[15:8];
           alu_b           = {8{ir[10]}};
           jump            = 1'b1;
-          next_pc         = {alu_result, tmp[7:0]};
+          next_pc         = {alu_result, tmp[7:1]};
           insn_completing = 1'b1;
           if (is_jalr) begin
-            w_data = pc;
+            w_data = {pc, 1'b0};
             w_we   = 1'b1;
           end
         end else begin
           if (is_reti) begin
             jump    = 1'b1;
-            next_pc = {r1[15:8], r1[7:1], 1'b0};
+            next_pc = {r1[15:8], r1[7:1]};
           end else if (is_int) begin
-            w_data  = pc;
+            w_data  = {pc, tmp[15]};
             w_we    = 1'b1;
             jump    = 1'b1;
-            next_pc = {13'b0, ir[1:0] + 2'd1, 1'b0};
+            next_pc = {13'b0, ir[1:0] + 2'd1};
           end else begin
           // Execute high byte: completes this cycle
           insn_completing = 1'b1;
@@ -529,15 +529,15 @@ module riscyv02_execute (
             // BZ/BNZ: full 16-bit zero check (r1[15:0] stable, no write in LO)
             if (!(|r1) ^ is_bnz) begin
               jump    = 1'b1;
-              next_pc = {alu_result, tmp[7:0]};
+              next_pc = {alu_result, tmp[7:1]};
             end
           end else if (is_jump_imm) begin
             alu_a      = pc[15:8];
             alu_b      = {{6{ir[9]}}, ir[8], ir[7]};  // sext(off10[9:7])
             jump       = 1'b1;
-            next_pc    = {alu_result, tmp[7:0]};
+            next_pc    = {alu_result, tmp[7:1]};
             if (is_jal) begin
-              w_data = pc;
+              w_data = {pc, 1'b0};
               w_we   = 1'b1;
             end
           end else if (is_epcr || is_epcw) begin
@@ -599,7 +599,7 @@ module riscyv02_execute (
       state       <= E_IDLE;
       ir          <= 16'h0000;
       tmp         <= 16'h0000;
-      pc          <= 16'h0000;
+      pc          <= 15'h0000;
       i_bit       <= 1'b1;
       nmi_ack     <= 1'b0;
       r2_hi_r     <= 1'b0;
@@ -650,10 +650,11 @@ module riscyv02_execute (
       // -----------------------------------------------------------------
       // Interrupt entry: synthesize INT instruction in ir.
       // System prefix + sub[5]=1, vector in ir[1:0].
+      // i_bit stashed in tmp[15] (survives E_EXEC_LO; read at E_EXEC_HI).
       // -----------------------------------------------------------------
       if (take_nmi || take_irq) begin
-        ir    <= {10'b1111100000, 1'b1, 3'b000, !take_nmi, 1'b0};
-        pc[0] <= i_bit_fwd;
+        ir     <= {10'b1111100000, 1'b1, 3'b000, !take_nmi, 1'b0};
+        tmp[15] <= i_bit_fwd;
         i_bit <= 1'b1;
         state <= E_EXEC_LO;
       end
@@ -662,12 +663,12 @@ module riscyv02_execute (
       // Instruction dispatch
       // -----------------------------------------------------------------
       if (ir_accept) begin
-        pc <= pc + 16'd2;
+        pc <= pc + 15'd1;
         ir <= fetch_ir;
         r2_hi_r  <= 1'b0;
         // BRK/INT detection: system prefix + sub[5]=1
         if (fetch_ir[15:6] == 10'b1111100000 && fetch_ir[5]) begin
-          pc[0] <= i_bit_fwd;
+          tmp[15] <= i_bit_fwd;
           i_bit <= 1'b1;
         end
         state <= E_EXEC_LO;

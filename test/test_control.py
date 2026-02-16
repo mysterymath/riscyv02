@@ -330,3 +330,25 @@ async def test_bnz_not_taken(dut):
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
     assert val == 0x0007, f"Expected 0x0007, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_jr_ignores_low_bit(dut):
+    """JR ignores bit 0 of the computed target address."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+    prog = {}
+    # R1 = 0x0011 (odd)
+    _place(prog, 0x0000, _encode_li(rd=1, imm=0x11))
+    # JR R1, 0 → should jump to 0x0010 (bit 0 ignored), not 0x0011
+    _place(prog, 0x0002, _encode_jr(rs=1, imm=0))
+    # At 0x0010: identifiable instruction proves we arrived correctly
+    _place(prog, 0x0010, _encode_li(rd=0, imm=0x42))
+    _place(prog, 0x0012, _encode_sw(rs=7, imm=0x40))
+    _place(prog, 0x0014, _spin(0x0014))
+    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+    val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    assert val == 0x0042, f"JR should ignore bit 0: expected 0x0042, got {val:#06x}"
