@@ -186,10 +186,6 @@ class RISCYV02Sim:
         """Fetch sequence: lo byte, hi byte."""
         return [(pc & 0xFFFF, True, 0), ((pc | 1) & 0xFFFF, True, 0)]
 
-    def _stale_addr(self, pc):
-        """Stale address hold (3-cycle instructions re-present fetch addr)."""
-        return [(pc & 0xFFFF, True, 0)]
-
     # ------------------------------------------------------------------
     # Dispatch — fetch and execute one instruction
     # ------------------------------------------------------------------
@@ -529,11 +525,11 @@ class RISCYV02Sim:
 
             if sub == 0b000101:         # WAI
                 self.waiting = True
-                return self._stale_addr(next_pc)
+                return []
 
             if sub == 0b000111:         # STP
                 self.stopped = True
-                return self._stale_addr(next_pc)
+                return []
 
             if (sub >> 3) == 0b010:     # EPCR rd
                 self.regs[sub & 7] = self.epc

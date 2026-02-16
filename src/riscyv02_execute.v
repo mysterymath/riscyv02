@@ -181,7 +181,7 @@ module riscyv02_execute (
   wire is_jump_imm = is_j || is_jal;
   wire is_jr_jalr  = is_jr || is_jalr;
 
-  // WAI/STP hold in E_IDLE after executing through E_EXEC_HI
+  // WAI/STP go directly from E_EXEC_LO to E_IDLE (2-cycle, no E_EXEC_HI visit)
 
   // ==========================================================================
   // Shared Infrastructure
@@ -304,12 +304,12 @@ module riscyv02_execute (
   reg [7:0]  next_tmp_lo;
 
   // Interrupt control
-  wire fsm_ready = state == E_IDLE || insn_completing;
+  wire fsm_ready = (state == E_IDLE) || insn_completing;
   wire take_nmi = fsm_ready && (nmi_pending || nmi_edge) && !nmi_ack;
   wire take_irq = fsm_ready && !irqb && !(i_bit || is_sei) && !take_nmi;
   // Forwarded i_bit for pc[0] save: reflects SEI/CLI effect completing this cycle
   wire i_bit_fwd = (i_bit || is_sei) && !is_cli;
-  assign ir_accept      = fsm_ready && ir_valid && !fetch_flush;
+  assign ir_accept = fsm_ready && ir_valid && !fetch_flush;
   assign waiting = (state == E_IDLE) && is_wai;
   assign stopped = (state == E_IDLE) && is_stp;
 
@@ -337,8 +337,6 @@ module riscyv02_execute (
     next_tmp_lo  = alu_result;
 
     case (state)
-      E_IDLE: ;
-
       E_EXEC_LO: begin
         if (is_reti) begin
           // EPC available on r1[15:0]; no action needed in LO
@@ -451,7 +449,7 @@ module riscyv02_execute (
             w_we    = 1'b1;
             jump    = 1'b1;
             next_pc = {13'b0, ir[1:0] + 2'd1, 1'b0};
-          end else if (!is_stp && !is_wai) begin
+          end else begin
           // Execute high byte: completes this cycle
           insn_completing = 1'b1;
           if (is_addi) begin
@@ -546,8 +544,8 @@ module riscyv02_execute (
             w_data = r1;
             w_we   = 1'b1;
           end
-          end // inner else (insn_completing path)
-        end // outer else (not mem, not jr_jalr)
+          end
+        end
       end
 
       E_MEM_LO: begin
@@ -615,18 +613,18 @@ module riscyv02_execute (
       // State machine
       // -----------------------------------------------------------------
       case (state)
-        E_IDLE: ;
-
         E_EXEC_LO: begin
           tmp[7:0] <= next_tmp_lo;
           tmp[8] <= alu_co;  // ALU carry for E_EXEC_HI continuation
-          state <= E_EXEC_HI;
+          if (is_wai || is_stp) state <= E_IDLE;
+          else                  state <= E_EXEC_HI;
         end
 
         E_EXEC_HI: begin
           if (is_r9_load || is_r9_store || is_auipc || is_rr_load || is_rr_store) begin
             tmp[15:8] <= alu_result;
-            state     <= is_auipc ? E_IDLE : E_MEM_LO;
+            if (is_auipc) state <= E_IDLE;
+            else          state <= E_MEM_LO;
           end else begin
             if (is_sei) i_bit <= 1'b1;
             if (is_cli) i_bit <= 1'b0;
@@ -643,6 +641,8 @@ module riscyv02_execute (
         end
 
         E_MEM_HI: state <= E_IDLE;
+
+        E_IDLE: ;
 
         default: state <= 3'bx;
       endcase
@@ -672,6 +672,7 @@ module riscyv02_execute (
         end
         state <= E_EXEC_LO;
       end
+
     end
   end
 

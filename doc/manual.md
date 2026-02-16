@@ -14,11 +14,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 61.6% | 45.3% |
-| Transistor count (synth) | 16,472 | 13,176 |
-| SRAM-adjusted | 12,688 | 13,176 |
+| Utilization | 61.9% | 45.3% |
+| Transistor count (synth) | 16,594 | 13,176 |
+| SRAM-adjusted | 12,810 | 13,176 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 3.7% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 2.8% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -459,13 +459,13 @@ Halts execution until an interrupt signal arrives. The PC is advanced past WAI b
 - **IRQ with I=0:** Taken (vectors to $0006). RETI returns past WAI.
 - **IRQ with I=1:** WAI wakes and resumes at the next instruction without entering a handler (65C02-style hint behavior).
 
-**Cycle count:** 2 (if interrupt already pending); otherwise halted until wake.
+**Cycle count:** 2 (1 execute + 1 overlapped fetch, if interrupt already pending); otherwise halted until wake.
 
 #### STP -- Stop
 
 Halts the processor permanently. No interrupt can wake it. Only a hardware reset recovers. Both WAI and STP halt via internal clock gating, reducing dynamic power to zero.
 
-**Cycle count:** 1 (execute then halt)
+**Cycle count:** 1 (1 execute then halt)
 
 ## Pipeline and Timing
 
@@ -488,9 +488,9 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | J/JAL | 4 | 2 execute + 2 fetch after redirect |
 | RETI | 4 | 2 execute + 2 fetch after redirect |
 | INT (BRK) | 4 | 2 execute + 2 fetch after redirect |
-| WAI (wake) | 3 | 2 execute + 1 idle (if interrupt already pending) |
+| WAI (wake) | 2 | 1 execute + 1 overlapped fetch |
 | WAI (halt) | -- | Halted until interrupt arrives |
-| STP | 3 | 2 execute + 1 idle before halt |
+| STP | 1 | 1 execute then halt |
 | EPCR/EPCW | 2 | 1 execute + 1 overlapped fetch |
 | IRQ entry | 4 | 2 execute (save EPC) + 2 fetch |
 | NMI entry | 4 | 2 execute (save EPC) + 2 fetch |
