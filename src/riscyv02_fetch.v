@@ -16,6 +16,11 @@
 // Instruction holding: fetch holds the instruction until execute accepts it.
 // F_HI: instruction available combinationally from {uio_in, ir_r[7:0]}
 // F_HOLD: instruction fully registered in ir_r, waiting for execute to accept
+//
+// ir_r uses gated latches (sg13g2_dlhrq_1) instead of DFFs.
+// D = uio_in always; GATE = gated clk.  The latch's native hold
+// behavior replaces the Q→D feedback mux that DFFs need for
+// conditional writes.
 // =========================================================================
 module riscyv02_fetch (
     input  wire        clk,
@@ -35,7 +40,32 @@ module riscyv02_fetch (
   localparam F_HOLD = 2'd2;
 
   reg [1:0]  state;
-  reg [15:0] ir_r;    // Low byte in F_HI, full instruction in F_HOLD
+
+  // Latch-based instruction register: D = uio_in, GATE selects when to
+  // capture.  Low byte captured at F_LO, high byte at F_HI.  All other
+  // states hold via GATE=0 — no feedback mux needed.
+  //
+  // ICG cells gate the clock properly: the ICG's internal latch captures
+  // the enable at the falling edge of clk, producing a glitch-free gated
+  // clock with correct STA timing arcs.
+  wire [15:0] ir_r;
+  wire gclk_lo, gclk_hi;
+  sg13g2_lgcp_1 u_icg_lo (.CLK(clk), .GATE((state == F_LO) & bus_free), .GCLK(gclk_lo));
+  sg13g2_lgcp_1 u_icg_hi (.CLK(clk), .GATE((state == F_HI) & bus_free), .GCLK(gclk_hi));
+
+  generate
+    genvar bi;
+    for (bi = 0; bi < 8; bi = bi + 1) begin : gen_ir_lo
+      sg13g2_dlhrq_1 u_ir (
+        .D(uio_in[bi]), .GATE(gclk_lo), .RESET_B(rst_n), .Q(ir_r[bi])
+      );
+    end
+    for (bi = 0; bi < 8; bi = bi + 1) begin : gen_ir_hi
+      sg13g2_dlhrq_1 u_ir (
+        .D(uio_in[bi]), .GATE(gclk_hi), .RESET_B(rst_n), .Q(ir_r[bi+8])
+      );
+    end
+  endgenerate
 
   // Bus address: derived from execute's fetch_pc
   assign ab = (state == F_HI) ? {fetch_pc[15:1], 1'b1} : fetch_pc;
@@ -47,24 +77,19 @@ module riscyv02_fetch (
   assign ir_valid = ((state == F_HI) && bus_free) || (state == F_HOLD);
 
   always @(negedge clk or negedge rst_n) begin
-    if (!rst_n) begin
+    if (!rst_n)
       state <= F_LO;
-      ir_r  <= 16'h0000;
-    end else if (flush)
+    else if (flush)
       state <= F_LO;
     else case (state)
-      F_LO: if (bus_free) begin
-        ir_r[7:0] <= uio_in;
-        state     <= F_HI;
-      end
+      F_LO: if (bus_free)
+        state <= F_HI;
 
       F_HI: if (bus_free) begin
         if (ir_accept)
           state <= F_LO;
-        else begin
-          ir_r  <= {uio_in, ir_r[7:0]};
+        else
           state <= F_HOLD;
-        end
       end
 
       F_HOLD: if (ir_accept)
