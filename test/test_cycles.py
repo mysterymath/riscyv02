@@ -322,3 +322,39 @@ async def test_cycle_count_lbu(dut):
     _place(prog, 0x0000, _encode_lbu(rs=7, imm=0))
     _place(prog, 0x0002, _spin(0x0002))
     await _measure_instruction_cycles(dut, prog, 3, "LBU")
+
+
+@cocotb.test()
+async def test_cycle_count_lw_s(dut):
+    """LW.S takes 4 cycles (same as LW)."""
+    prog = {}
+    _place(prog, 0x0000, _encode_lw_s(rd=1, imm=0x30))
+    _place(prog, 0x0002, _spin(0x0002))
+    await _measure_instruction_cycles(dut, prog, 4, "LW.S")
+
+
+@cocotb.test()
+async def test_cycle_count_sw_s(dut):
+    """SW.S takes 4 cycles (same as SW)."""
+    prog = {}
+    _place(prog, 0x0000, _encode_sw_s(rd=1, imm=0x30))
+    _place(prog, 0x0002, _spin(0x0002))
+    await _measure_instruction_cycles(dut, prog, 4, "SW.S")
+
+
+@cocotb.test()
+async def test_cycle_count_lb_s(dut):
+    """LB.S takes 3 cycles (same as LB)."""
+    prog = {}
+    _place(prog, 0x0000, _encode_lb_s(rd=1, imm=0x30))
+    _place(prog, 0x0002, _spin(0x0002))
+    await _measure_instruction_cycles(dut, prog, 3, "LB.S")
+
+
+@cocotb.test()
+async def test_cycle_count_sb_s(dut):
+    """SB.S takes 3 cycles (same as SB)."""
+    prog = {}
+    _place(prog, 0x0000, _encode_sb_s(rd=1, imm=0x30))
+    _place(prog, 0x0002, _spin(0x0002))
+    await _measure_instruction_cycles(dut, prog, 3, "SB.S")

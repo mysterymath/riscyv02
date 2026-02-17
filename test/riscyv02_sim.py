@@ -284,7 +284,7 @@ class RISCYV02Sim:
         # =================================================================
         # R,8 format (5-bit prefix): ADDI..XORIF
         # =================================================================
-        if prefix5 <= 0b10000:
+        if prefix5 <= 0b10101:
             rs_idx = ir & 7
             imm8_raw = (ir >> 3) & 0xFF
 
@@ -381,6 +381,34 @@ class RISCYV02Sim:
             if prefix5 == 0b10000:      # XORIF (zero-ext imm, dest=R0)
                 self.regs[0] = self.regs[rs_idx] ^ imm8_raw
                 return []
+
+            if prefix5 == 0b10001:      # LW.S (word load, base=R7)
+                addr = (self.regs[7] + sext8(imm8_raw)) & 0xFFFF
+                lo = self.ram[addr]
+                hi = self.ram[(addr + 1) & 0xFFFF]
+                self.regs[rs_idx] = (hi << 8) | lo
+                return [(addr, True, 0), ((addr + 1) & 0xFFFF, True, 0)]
+
+            if prefix5 == 0b10010:      # LB.S (sign-extend byte load, base=R7)
+                addr = (self.regs[7] + sext8(imm8_raw)) & 0xFFFF
+                byte = self.ram[addr]
+                self.regs[rs_idx] = (byte | 0xFF00) if byte & 0x80 else byte
+                return [(addr, True, 0)]
+
+            if prefix5 == 0b10011:      # LBU.S (zero-extend byte load, base=R7)
+                addr = (self.regs[7] + sext8(imm8_raw)) & 0xFFFF
+                self.regs[rs_idx] = self.ram[addr]
+                return [(addr, True, 0)]
+
+            if prefix5 == 0b10100:      # SW.S (word store, base=R7)
+                addr = (self.regs[7] + sext8(imm8_raw)) & 0xFFFF
+                lo = self.regs[rs_idx] & 0xFF
+                hi = (self.regs[rs_idx] >> 8) & 0xFF
+                return [(addr, False, lo), ((addr + 1) & 0xFFFF, False, hi)]
+
+            if prefix5 == 0b10101:      # SB.S (byte store, base=R7)
+                addr = (self.regs[7] + sext8(imm8_raw)) & 0xFFFF
+                return [(addr, False, self.regs[rs_idx] & 0xFF)]
 
             # Unknown R,8 — treat as NOP
             return []

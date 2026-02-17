@@ -33,6 +33,8 @@ __all__ = [
     '_encode_sys', '_encode_sei', '_encode_cli', '_encode_reti',
     '_encode_epcr', '_encode_epcw',
     '_encode_brk', '_encode_wai', '_encode_stp', '_encode_nop',
+    '_encode_lw_s', '_encode_lb_s', '_encode_lbu_s',
+    '_encode_sw_s', '_encode_sb_s',
 ]
 
 
@@ -171,6 +173,31 @@ def _encode_xorif(rs, imm):
     """XORIF: R0 = rs ^ zext(imm). Dest is R0."""
     assert 0 <= imm <= 255, f"imm out of range: {imm}"
     return _encode_r8(0b10000, imm, rs)
+
+def _encode_lw_s(rd, imm):
+    """LW.S: rd = mem16[R7 + sext(imm)]. Base is R7 (SP)."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b10001, imm, rd)
+
+def _encode_lb_s(rd, imm):
+    """LB.S: rd = sext(mem[R7 + sext(imm)]). Base is R7 (SP)."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b10010, imm, rd)
+
+def _encode_lbu_s(rd, imm):
+    """LBU.S: rd = zext(mem[R7 + sext(imm)]). Base is R7 (SP)."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b10011, imm, rd)
+
+def _encode_sw_s(rd, imm):
+    """SW.S: mem16[R7 + sext(imm)] = rd. Base is R7 (SP)."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b10100, imm, rd)
+
+def _encode_sb_s(rd, imm):
+    """SB.S: mem[R7 + sext(imm)] = rd[7:0]. Base is R7 (SP)."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_r8(0b10101, imm, rd)
 
 # R,7 format: [prefix:6 @ 15:10][imm7:7 @ 9:3][reg:3 @ 2:0]
 def _encode_r7(prefix, imm7, reg):

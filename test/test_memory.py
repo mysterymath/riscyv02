@@ -164,3 +164,118 @@ async def test_byte_negative_offset(dut):
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
     assert val == 0x007F, f"Expected 0x007F, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_sp_lw_sw(dut):
+    """LW.S/SW.S: word load/store via R7 (SP) with offset."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Set R7 (SP) = 0x0100
+    _place(prog, 0x0000, _encode_li(rd=7, imm=0))
+    _place(prog, 0x0002, _encode_lui(rd=7, imm7=0))  # R7 = 0
+    _place(prog, 0x0004, _encode_addi(rd=7, imm=0))   # keep R7=0, use LI for 0x0100 below
+    # Actually: LI sets 8-bit sext. Use LUI + ADDI for 0x0100.
+    # LUI R7, 0 = R7 = 0; then ORI R7, 0 won't help. Let's just use LI 0 + ADDI.
+    # Simpler: LI R7, 0 then use SLLI to shift. But we can also just:
+    # Put data at low addresses within sext(imm8) range of R7=0.
+    prog[0x0030] = 0xEF
+    prog[0x0031] = 0xBE
+    # LW.S R1, 0x30 — load from R7+0x30 = 0x0030
+    _place(prog, 0x0000, _encode_lw_s(rd=1, imm=0x30))
+    # SW.S R1, 0x50 — store to R7+0x50 = 0x0050
+    _place(prog, 0x0002, _encode_sw_s(rd=1, imm=0x50))
+    _place(prog, 0x0004, _spin(0x0004))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    val = _read_ram(dut, 0x0050) | (_read_ram(dut, 0x0051) << 8)
+    assert val == 0xBEEF, f"SP LW/SW: expected 0xBEEF, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_sp_lb_sb(dut):
+    """LB.S/LBU.S/SB.S: byte load/store via R7 (SP)."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0030] = 0x85
+
+    # LB.S R1, 0x30 — sign-extend load from R7+0x30
+    _place(prog, 0x0000, _encode_lb_s(rd=1, imm=0x30))
+    # SW R7, 0x40 — store R0 (should be unmodified; use R,R store to dump R1)
+    _place(prog, 0x0002, _encode_sw_rr(rd=1, rs=7))  # store R1 at R7=0x0000? No, addr=R7=0
+    # Better: use SW.S to store R1 at offset 0x40
+    _place(prog, 0x0002, _encode_sw_s(rd=1, imm=0x40))
+    # LBU.S R2, 0x30 — zero-extend load from R7+0x30
+    _place(prog, 0x0004, _encode_lbu_s(rd=2, imm=0x30))
+    _place(prog, 0x0006, _encode_sw_s(rd=2, imm=0x42))
+    # SB.S R1, 0x44 — store low byte of R1
+    _place(prog, 0x0008, _encode_sb_s(rd=1, imm=0x44))
+    _place(prog, 0x000A, _spin(0x000A))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    v_lb = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    v_lbu = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
+    v_sb = _read_ram(dut, 0x0044)
+    assert v_lb == 0xFF85, f"LB.S: expected 0xFF85, got {v_lb:#06x}"
+    assert v_lbu == 0x0085, f"LBU.S: expected 0x0085, got {v_lbu:#06x}"
+    assert v_sb == 0x85, f"SB.S: expected 0x85, got {v_sb:#04x}"
+
+
+@cocotb.test()
+async def test_sp_negative_offset(dut):
+    """SP load/store with negative offset."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    # Set R7 = 0x50
+    _place(prog, 0x0000, _encode_li(rd=7, imm=0x50))
+    # Store data: LI R1, 0x42; SW.S R1, -2 → stores at R7-2 = 0x4E
+    _place(prog, 0x0002, _encode_li(rd=1, imm=0x42))
+    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=-2))
+    # Load it back: LW.S R2, -2 → loads from 0x4E
+    _place(prog, 0x0006, _encode_lw_s(rd=2, imm=-2))
+    # Store R2 to a known location for checking
+    _place(prog, 0x0008, _encode_sw_s(rd=2, imm=0x10))  # R7+0x10 = 0x60
+    _place(prog, 0x000A, _spin(0x000A))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+
+    val = _read_ram(dut, 0x0060) | (_read_ram(dut, 0x0061) << 8)
+    assert val == 0x0042, f"SP neg offset: expected 0x0042, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_sp_arbitrary_register(dut):
+    """SP loads/stores work with any register, not just R0."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    prog = {}
+    prog[0x0030] = 0xCD
+    prog[0x0031] = 0xAB
+
+    # Load to R5 (not R0): LW.S R5, 0x30
+    _place(prog, 0x0000, _encode_lw_s(rd=5, imm=0x30))
+    # Store from R5: SW.S R5, 0x50
+    _place(prog, 0x0002, _encode_sw_s(rd=5, imm=0x50))
+    _place(prog, 0x0004, _spin(0x0004))
+
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+
+    val = _read_ram(dut, 0x0050) | (_read_ram(dut, 0x0051) << 8)
+    assert val == 0xABCD, f"SP arb reg: expected 0xABCD, got {val:#06x}"

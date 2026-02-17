@@ -103,6 +103,11 @@ module riscyv02_execute (
   wire is_bz    = ir[15:11] == 5'b01110;
   wire is_bnz   = ir[15:11] == 5'b01111;
   wire is_xorif = ir[15:11] == 5'b10000;
+  wire is_lw_s  = ir[15:11] == 5'b10001;
+  wire is_lb_s  = ir[15:11] == 5'b10010;
+  wire is_lbu_s = ir[15:11] == 5'b10011;
+  wire is_sw_s  = ir[15:11] == 5'b10100;
+  wire is_sb_s  = ir[15:11] == 5'b10101;
 
   // --- R,7 / "10" format (6-bit prefix @ [15:10]) ---
   wire is_lui   = ir[15:10] == 6'b110100;
@@ -154,11 +159,13 @@ module riscyv02_execute (
   wire is_r9_store = is_sw || is_sb;
   wire is_rr_load  = is_lw_rr || is_lb_rr || is_lbu_rr;
   wire is_rr_store = is_sw_rr || is_sb_rr;
+  wire is_sp_load  = is_lw_s || is_lb_s || is_lbu_s;
+  wire is_sp_store = is_sw_s || is_sb_s;
   // Combined memory properties for E_MEM and r_hi
-  wire mem_is_store      = is_r9_store || is_rr_store;
-  wire mem_is_byte_load  = is_lb || is_lbu || is_lb_rr || is_lbu_rr;
-  wire mem_is_byte_store = is_sb || is_sb_rr;
-  wire mem_is_lbu        = is_lbu || is_lbu_rr;
+  wire mem_is_store      = is_r9_store || is_rr_store || is_sp_store;
+  wire mem_is_byte_load  = is_lb || is_lbu || is_lb_rr || is_lbu_rr || is_lb_s || is_lbu_s;
+  wire mem_is_byte_store = is_sb || is_sb_rr || is_sb_s;
+  wire mem_is_lbu        = is_lbu || is_lbu_rr || is_lbu_s;
 
   // R,R,R group
   wire is_rrr = is_add || is_sub || is_and || is_or || is_xor
@@ -218,7 +225,13 @@ module riscyv02_execute (
   // r2_sel: read port 2 register select
   //   Default ir[5:3] works for R,R,R (rs2) and R,R loads/stores (rd/data).
   //   Override to R0 for R,8-format memory (implicit data/dest = R0).
-  wire [2:0] r2_sel = (is_r9_load || is_r9_store) ? 3'd0 : ir[5:3];
+  //   Override to ir[2:0] for SP stores (data reg in R,8 reg field).
+  reg [2:0] r2_sel;
+  always @(*) begin
+    if (is_r9_load || is_r9_store) r2_sel = 3'd0;
+    else if (is_sp_store)          r2_sel = ir[2:0];
+    else                           r2_sel = ir[5:3];
+  end
   reg        r2_hi_r;   // dout byte select: 0=r2[7:0], 1=r2[15:8]
 
   riscyv02_regfile u_regfile (
@@ -283,12 +296,16 @@ module riscyv02_execute (
 
   // r1_sel: read port 1 register select
   //   Default ir[2:0] works for all formats: reg/rs1/rs is always at [2:0].
-  //   Sign-extension readback for loads uses port 2.
+  //   SP loads/stores override to R7 during execute, ir[2:0] during E_MEM readback.
   always @(*) begin
-    if (is_mem_phase && !mem_is_store)
-      r1_sel = is_r9_load ? 4'd0 : {1'b0, ir[5:3]};   // Load dest for readback
-    else if (is_reti || is_epcr)
+    if (is_mem_phase && !mem_is_store) begin
+      if (is_r9_load)       r1_sel = 4'd0;             // R,9 load dest = R0
+      else if (is_sp_load)  r1_sel = {1'b0, ir[2:0]};  // SP load dest = ir[2:0]
+      else                  r1_sel = {1'b0, ir[5:3]};   // R,R load dest = ir[5:3]
+    end else if (is_reti || is_epcr)
       r1_sel = 4'd8;                                   // EPC (entry 8)
+    else if (is_sp_load || is_sp_store)
+      r1_sel = 4'd7;                                   // SP (R7) for address
     else
       r1_sel = {1'b0, ir[2:0]};                        // Default: reg at [2:0]
   end
@@ -344,7 +361,7 @@ module riscyv02_execute (
           // Deferred to E_EXEC_HI
         end else if (is_epcr || is_epcw) begin
           // Deferred to E_EXEC_HI — r1 is stable
-        end else if (is_r9_load || is_r9_store) begin
+        end else if (is_r9_load || is_r9_store || is_sp_load || is_sp_store) begin
           // Address: base + sext(imm8), byte offset (no shift)
           alu_b      = ir[10:3];            // imm[7:0]
         end else if (is_auipc) begin
@@ -416,7 +433,7 @@ module riscyv02_execute (
       end
 
       E_EXEC_HI: begin
-        if (is_r9_load || is_r9_store) begin
+        if (is_r9_load || is_r9_store || is_sp_load || is_sp_store) begin
           // Address high byte: sign-extend imm bit 7
           alu_a      = r1[15:8];
           alu_b      = {8{ir[10]}};
@@ -621,7 +638,7 @@ module riscyv02_execute (
         end
 
         E_EXEC_HI: begin
-          if (is_r9_load || is_r9_store || is_auipc || is_rr_load || is_rr_store) begin
+          if (is_r9_load || is_r9_store || is_auipc || is_rr_load || is_rr_store || is_sp_load || is_sp_store) begin
             tmp[15:8] <= alu_result;
             if (is_auipc) state <= E_IDLE;
             else          state <= E_MEM_LO;
