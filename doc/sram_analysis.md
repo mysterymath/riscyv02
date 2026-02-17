@@ -17,38 +17,40 @@ The Arlet 6502 has no regular arrays — its registers (A, X, Y, SP) are asymmet
 
 ## Standard Cell Register File (Synthesized)
 
-The register file is a single Verilog module (`riscyv02_regfile`) that synthesizes standalone. All 165 latches in the full design belong to this module. Standalone synthesis (Yosys 0.55, IHP sg13g2 typ 1.20V 25C) gives:
+The register file is a single Verilog module (`riscyv02_regfile`) that synthesizes standalone. It contains only storage (follower latches) and read/write peripherals — no pipeline staging. Write inputs (w_data, w_sel, w_we) must be stable during clk=0; the execute module's pipeline registers guarantee this. Standalone synthesis (Yosys 0.54, IHP sg13g2 typ 1.20V 25C) gives:
 
 | Cell Type | Description | Count | Tx/Cell | Transistors |
 |---|---|---|---|---|
-| sg13g2_dlhrq_1 | D-latch (high, w/ reset) | 165 | 20 | 3,300 |
-| sg13g2_a22oi_1 | AOI22 | 56 | 8 | 448 |
-| sg13g2_a221oi_1 | AOI221 | 42 | 10 | 420 |
-| sg13g2_and2_1 | AND2 | 50 | 6 | 300 |
-| sg13g2_nand4_1 | NAND4 | 24 | 8 | 192 |
-| sg13g2_nor3_1 | NOR3 | 29 | 6 | 174 |
-| sg13g2_and3_1 | AND3 | 12 | 8 | 96 |
-| sg13g2_nor2_1 | NOR2 | 23 | 4 | 92 |
-| sg13g2_nand2_1 | NAND2 | 21 | 4 | 84 |
-| sg13g2_nand2b_1 | NAND2 (1 inv) | 10 | 6 | 60 |
-| sg13g2_inv_1 | Inverter | 29 | 2 | 58 |
+| sg13g2_dlhrq_1 | D-latch (high, w/ reset) | 144 | 20 | 2,880 |
+| sg13g2_a22oi_1 | AOI22 | 57 | 8 | 456 |
+| sg13g2_a221oi_1 | AOI221 | 44 | 10 | 440 |
+| sg13g2_nand4_1 | NAND4 | 31 | 8 | 248 |
+| sg13g2_nor3_1 | NOR3 | 36 | 6 | 216 |
+| sg13g2_and2_1 | AND2 | 25 | 6 | 150 |
+| sg13g2_nand2_1 | NAND2 | 29 | 4 | 116 |
+| sg13g2_inv_1 | Inverter | 36 | 2 | 72 |
 | sg13g2_o21ai_1 | OAI21 | 9 | 6 | 54 |
-| sg13g2_nand3_1 | NAND3 | 8 | 6 | 48 |
-| sg13g2_nor4_1 | NOR4 | 4 | 8 | 32 |
-| sg13g2_nand3b_1 | NAND3 (1 inv) | 2 | 8 | 16 |
+| sg13g2_nor2_1 | NOR2 | 12 | 4 | 48 |
+| sg13g2_nand2b_1 | NAND2 (1 inv) | 7 | 6 | 42 |
+| sg13g2_and3_1 | AND3 | 3 | 8 | 24 |
 | sg13g2_or2_1 | OR2 | 2 | 6 | 12 |
-| sg13g2_xor2_1 | XOR2 | 1 | 10 | 10 |
-| **Total** | | **487** | | **5,396** |
+| sg13g2_nor2b_1 | NOR2 (1 inv) | 2 | 6 | 12 |
+| sg13g2_xnor2_1 | XNOR2 | 1 | 10 | 10 |
+| sg13g2_nand3b_1 | NAND3 (1 inv) | 1 | 8 | 8 |
+| sg13g2_or3_1 | OR3 | 1 | 8 | 8 |
+| sg13g2_nand3_1 | NAND3 | 1 | 6 | 6 |
+| **Total** | | **441** | | **4,802** |
 
-Synthesis area: 3,171 um² (combinational only; latch area unknown to this liberty).
+Synthesis area: 2,910 um² (combinational only; latch area unknown to this liberty).
 
 Tx/cell counts are from the PDK's CDL SPICE netlist (one M-line = one MOSFET), the same source used for all transistor count estimates in this project.
 
 ### Functional Breakdown
 
-- **144 follower latches** (8 regs x 16 bits + 1 EPC x 16 bits): pure storage array, perfectly regular
-- **21 leader latches**: write pipeline (captures w_data[15:0], w_sel[3:0], w_we at negedge)
-- **322 combinational cells**: write decode (3-to-8 + sel[3] gating + enable) and 2 read mux trees (9:1 x 16 bits on port 1, 8:1 x 16 bits on port 2)
+- **144 follower latches** (8 regs × 16 bits + 1 EPC × 16 bits): pure storage array, perfectly regular
+- **297 combinational cells**: write decode (3-to-8 + sel[3] gating + enable) and 2 read mux trees (9:1 × 16 bits on port 1, 8:1 × 16 bits on port 2)
+
+Note: The write pipeline registers (21 latches capturing w_data, w_sel, w_we at negedge) live in the execute module, not the register file. Every pipelined RISC CPU has equivalent staging — this is pipeline infrastructure, not register-file overhead. See `riscyv02_execute.v` for details.
 
 ## 8T SRAM Register File Design
 
@@ -174,23 +176,25 @@ All counts use standard CMOS complementary logic:
 
 | | Standard Cell | 8T SRAM |
 |---|---|---|
-| Storage | 165 latches x 20T = 3,300 | 144 cells x 8T = 1,152 |
-| Peripherals | 322 combo cells = 2,096 | Decode + drivers = 460 |
-| **Total** | **5,396** | **1,612** |
-| **Discount** | | **3,784** |
+| Storage | 144 latches × 20T = 2,880 | 144 cells × 8T = 1,152 |
+| Peripherals | 297 combo cells = 1,922 | Decode + drivers = 460 |
+| **Total** | **4,802** | **1,612** |
+| **Discount** | | **3,190** |
 
 The SRAM saves on both storage (8T vs 20T per bit) and peripherals (word-line decode replaces explicit mux trees — asserting one word line selects all 16 bits of one register, eliminating the 8:1 mux per bit that standard cells require). The 16-bit port widening further reduces peripherals by eliminating byte-select muxes on both read and write paths.
+
+Note: Write pipeline registers (21 latches, 420T) are excluded from both sides of this comparison. They live in the execute module and are present in any pipelined implementation regardless of whether the register file uses SRAM or standard cells.
 
 ## SRAM-Adjusted Figures
 
 | Metric | Value |
 |---|---|
-| Standard cell (synthesis) | 17,688 |
-| Register file (standard cell) | 5,396 |
+| Standard cell (synthesis) | 16,918 |
+| Register file (standard cell) | 4,802 |
 | Register file (8T SRAM equivalent) | 1,612 |
-| SRAM discount | -3,784 |
-| **SRAM-adjusted total** | **13,904** |
-| vs Arlet 6502 (13,176) | +5.5% |
+| SRAM discount | -3,190 |
+| **SRAM-adjusted total** | **13,728** |
+| vs Arlet 6502 (13,176) | +4.2% |
 
 ## Methodology Notes
 

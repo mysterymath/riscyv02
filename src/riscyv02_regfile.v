@@ -2,25 +2,17 @@
  * Copyright (c) 2024 mysterymath
  * SPDX-License-Identifier: Apache-2.0
  *
- * Two-phase latch register file: 8 x 16-bit GP registers with 16-bit ports,
- * plus a 9th entry for the Exception PC (EPC) register.
+ * Register file: 8 x 16-bit GP registers plus a 9th entry for the
+ * Exception PC (EPC) register.  2 read ports (16-bit) + 1 write port (16-bit).
  *
- * The EPC is accessible as entry 8 via 4-bit select lines on port 1 and the
+ * EPC is accessible as entry 8 via 4-bit select lines on port 1 and the
  * write port. Port 2 remains 3-bit (GP registers only).
  *
- * Leader latches (sg13g2_dlhrq_1, transparent-high) capture w_data[15:0],
- * w_sel, and w_we at the falling clock edge.  Follower latches
- * (also sg13g2_dlhrq_1) use GATE = ~clk & write_enable to pass the
- * leader's captured value to the selected register during clk=0.
+ * Storage uses sg13g2_dlhrq_1 follower latches: GATE = ~clk & write_enable.
+ * Write inputs (w_data, w_sel, w_we) must be stable during clk=0; the
+ * execute module's pipeline registers guarantee this.
  *
- * Both phases use sg13g2_dlhrq_1 (27.22 um²) rather than sg13g2_dllrq_1
- * (29.03 um²) for followers, saving ~232 um² across 128 follower latches.
- * The ~clk inverter in the follower gate path actually improves hold-time
- * margin: leaders close (clk falls) before followers open (~clk rises
- * through the inverter), providing a natural non-overlap guarantee.
- *
- * Single read port: execute only.  Fetch no longer needs register
- * access since JR is handled by execute.
+ * Read ports are purely combinational (mux trees on latch outputs).
  */
 
 `default_nettype none
@@ -29,7 +21,7 @@ module riscyv02_regfile (
     input  wire        clk,
     input  wire        rst_n,
 
-    // Write port (16-bit)
+    // Write port (16-bit) — inputs must be registered (stable during clk=0)
     input  wire [3:0]  w_sel,      // Bit 3 selects EPC (entry 8)
     input  wire [15:0] w_data,
     input  wire        w_we,
@@ -43,46 +35,9 @@ module riscyv02_regfile (
     output wire [15:0] r2
 );
 
-  // Phase 1 — Leader latches (sg13g2_dlhrq_1): transparent when GATE=clk=1,
-  // capture at negedge. These hold w_data/w_sel/w_we stable during clk=0
-  // so follower inputs never depend on live combinational paths.
-  wire [15:0] w_data_held;
-  wire [3:0] w_sel_held;
-  wire       w_we_held;
-
-  generate
-    genvar li;
-    for (li = 0; li < 16; li = li + 1) begin : gen_leader_data
-      sg13g2_dlhrq_1 u_leader (
-        .D(w_data[li]),
-        .GATE(clk),
-        .RESET_B(rst_n),
-        .Q(w_data_held[li])
-      );
-    end
-    for (li = 0; li < 4; li = li + 1) begin : gen_leader_sel
-      sg13g2_dlhrq_1 u_leader (
-        .D(w_sel[li]),
-        .GATE(clk),
-        .RESET_B(rst_n),
-        .Q(w_sel_held[li])
-      );
-    end
-  endgenerate
-
-  sg13g2_dlhrq_1 u_leader_we (
-    .D(w_we),
-    .GATE(clk),
-    .RESET_B(rst_n),
-    .Q(w_we_held)
-  );
-
-  // Phase 2 — Follower latches (sg13g2_dlhrq_1): transparent when GATE=1,
-  // i.e. when ~clk & write_enable. Selected register passes leader's
-  // captured value during clk=0; all others hold.
-  //
-  // The ~clk inverter provides natural non-overlap: leaders close at negedge
-  // before followers open through the inverter delay.
+  // Storage latches (sg13g2_dlhrq_1): transparent when GATE=1,
+  // i.e. when ~clk & write_enable. Selected register passes
+  // write data during clk=0; all others hold.
   wire [15:0] regs [0:7];
   wire clk_n = ~clk;
 
@@ -90,12 +45,12 @@ module riscyv02_regfile (
     genvar gi, bi;
     for (gi = 0; gi < 8; gi = gi + 1) begin : gen_reg
       // GP register selected for write? Only when w_sel[3]=0 (not EPC).
-      wire wen = w_we_held && !w_sel_held[3] && (w_sel_held[2:0] == gi[2:0]);
+      wire wen = w_we && !w_sel[3] && (w_sel[2:0] == gi[2:0]);
       // Single gate: both bytes written together
       wire gate = clk_n & wen;
       for (bi = 0; bi < 8; bi = bi + 1) begin : gen_bit_lo
         sg13g2_dlhrq_1 u_follower (
-          .D(w_data_held[bi]),
+          .D(w_data[bi]),
           .GATE(gate),
           .RESET_B(rst_n),
           .Q(regs[gi][bi])
@@ -103,7 +58,7 @@ module riscyv02_regfile (
       end
       for (bi = 0; bi < 8; bi = bi + 1) begin : gen_bit_hi
         sg13g2_dlhrq_1 u_follower (
-          .D(w_data_held[bi+8]),
+          .D(w_data[bi+8]),
           .GATE(gate),
           .RESET_B(rst_n),
           .Q(regs[gi][bi+8])
@@ -114,13 +69,13 @@ module riscyv02_regfile (
 
   // EPC register (entry 8): written when w_sel[3]=1
   wire [15:0] regs_epc;
-  wire wen_epc = w_we_held && w_sel_held[3];
+  wire wen_epc = w_we && w_sel[3];
   wire gate_epc = clk_n & wen_epc;
 
   generate
     for (bi = 0; bi < 8; bi = bi + 1) begin : gen_epc_lo
       sg13g2_dlhrq_1 u_follower (
-        .D(w_data_held[bi]),
+        .D(w_data[bi]),
         .GATE(gate_epc),
         .RESET_B(rst_n),
         .Q(regs_epc[bi])
@@ -128,7 +83,7 @@ module riscyv02_regfile (
     end
     for (bi = 0; bi < 8; bi = bi + 1) begin : gen_epc_hi
       sg13g2_dlhrq_1 u_follower (
-        .D(w_data_held[bi+8]),
+        .D(w_data[bi+8]),
         .GATE(gate_epc),
         .RESET_B(rst_n),
         .Q(regs_epc[bi+8])

@@ -203,6 +203,33 @@ module riscyv02_execute (
   reg         w_we;
   reg  [15:0] w_data;
 
+  // Pipeline registers (transparent-high latches): capture write signals at
+  // negedge for the register file.  These bridge the compute phase (clk=1)
+  // to the write phase (clk=0), providing stable inputs during writes.
+  // Every pipelined RISC CPU has equivalent staging; this is pipeline
+  // infrastructure, not register-file overhead.
+  wire [15:0] w_data_r;
+  wire [3:0]  w_sel_r;
+  wire        w_we_r;
+
+  generate
+    genvar pi;
+    for (pi = 0; pi < 16; pi = pi + 1) begin : gen_wr_data
+      sg13g2_dlhrq_1 u_wr_data (
+        .D(w_data[pi]), .GATE(clk), .RESET_B(rst_n), .Q(w_data_r[pi])
+      );
+    end
+    for (pi = 0; pi < 4; pi = pi + 1) begin : gen_wr_sel
+      sg13g2_dlhrq_1 u_wr_sel (
+        .D(w_sel_mux[pi]), .GATE(clk), .RESET_B(rst_n), .Q(w_sel_r[pi])
+      );
+    end
+  endgenerate
+
+  sg13g2_dlhrq_1 u_wr_we (
+    .D(w_we), .GATE(clk), .RESET_B(rst_n), .Q(w_we_r)
+  );
+
   wire is_mem_phase = (state == E_MEM_LO || state == E_MEM_HI);
 
   // w_sel: write port register select (4-bit: bit 3 selects EPC)
@@ -237,9 +264,9 @@ module riscyv02_execute (
   riscyv02_regfile u_regfile (
     .clk    (clk),
     .rst_n  (rst_n),
-    .w_sel  (w_sel_mux),
-    .w_data (w_data),
-    .w_we   (w_we),
+    .w_sel  (w_sel_r),
+    .w_data (w_data_r),
+    .w_we   (w_we_r),
     .r1_sel (r1_sel),
     .r1     (r1),
     .r2_sel (r2_sel),
