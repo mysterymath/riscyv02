@@ -73,7 +73,14 @@ module riscyv02_execute (
 
   reg [2:0]  state;
   reg [15:0] ir;        // Instruction register (raw or synthesized for interrupts)
-  reg [15:0] tmp;       // Cycle-to-cycle temporary (mem addr, branch target, ALU/shift result)
+  // Cycle-to-cycle temporary (mem addr, branch target, ALU/shift result).
+  // All bits use gated latches — zero DFFs.
+  wire [7:0] tmp_lo;      // Latched at E_EXEC_LO (lo-byte result / addr lo)
+  wire [7:0] tmp_hi;      // Latched at E_EXEC_HI (hi-byte addr)
+  reg        carry_r;     // ALU carry (DFF — feeds ci_ext, can't be latch)
+  reg        mem_carry;   // Low-byte all-ones carry for E_MEM_HI increment
+  wire       saved_i_bit; // i_bit save for INT, latched when fsm_ready
+  wire [15:0] tmp = {tmp_hi, tmp_lo};
 
   // Interrupt and PC state
   reg [15:1] pc;        // Program counter (word address; byte addr = {pc, 1'b0})
@@ -230,6 +237,36 @@ module riscyv02_execute (
     .D(w_we), .GATE(clk), .RESET_B(rst_n), .Q(w_we_r)
   );
 
+  // -------------------------------------------------------------------------
+  // Temporary register: gated latches + 1 DFF (carry_r).
+  //   tmp_lo[7:0]:  ICG at E_EXEC_LO
+  //   tmp_hi[7:0]:  ICG at E_EXEC_HI
+  //   carry_r:      DFF (feeds ALU ci_ext — latch would create STA false path)
+  //   saved_i_bit:  ICG at fsm_ready (captures i_bit_fwd at dispatch)
+  // -------------------------------------------------------------------------
+  wire gclk_tmp_lo, gclk_tmp_hi, gclk_ibit;
+  sg13g2_lgcp_1 u_icg_tmp_lo (.CLK(clk), .GATE(state == E_EXEC_LO), .GCLK(gclk_tmp_lo));
+  sg13g2_lgcp_1 u_icg_tmp_hi (.CLK(clk), .GATE(state == E_EXEC_HI), .GCLK(gclk_tmp_hi));
+  sg13g2_lgcp_1 u_icg_ibit   (.CLK(clk), .GATE(fsm_ready),          .GCLK(gclk_ibit));
+
+  sg13g2_dlhrq_1 u_saved_i_bit (
+    .D(i_bit_fwd), .GATE(gclk_ibit), .RESET_B(rst_n), .Q(saved_i_bit)
+  );
+
+  generate
+    genvar ti;
+    for (ti = 0; ti < 8; ti = ti + 1) begin : gen_tmp_lo
+      sg13g2_dlhrq_1 u_tmp (
+        .D(next_tmp_lo[ti]), .GATE(gclk_tmp_lo), .RESET_B(rst_n), .Q(tmp_lo[ti])
+      );
+    end
+    for (ti = 0; ti < 8; ti = ti + 1) begin : gen_tmp_hi
+      sg13g2_dlhrq_1 u_tmp (
+        .D(alu_result[ti]), .GATE(gclk_tmp_hi), .RESET_B(rst_n), .Q(tmp_hi[ti])
+      );
+    end
+  endgenerate
+
   wire is_mem_phase = (state == E_MEM_LO || state == E_MEM_HI);
 
   // w_sel: write port register select (4-bit: bit 3 selects EPC)
@@ -290,7 +327,7 @@ module riscyv02_execute (
     .b      (alu_b),
     .op     (alu_op),
     .new_op (alu_new_op),
-    .ci_ext (tmp[8]),
+    .ci_ext (carry_r),
     .co     (alu_co),
     .result (alu_result)
   );
@@ -489,7 +526,7 @@ module riscyv02_execute (
             jump    = 1'b1;
             next_pc = {r1[15:8], r1[7:1]};
           end else if (is_int) begin
-            w_data  = {pc, tmp[15]};
+            w_data  = {pc, saved_i_bit};
             w_we    = 1'b1;
             jump    = 1'b1;
             next_pc = {13'b0, ir[1:0] + 2'd1};
@@ -615,7 +652,7 @@ module riscyv02_execute (
       E_MEM_HI: begin
         insn_completing = 1'b1;
         bus_active      = 1'b1;
-        ab              = tmp;          // Already incremented at E_MEM_LO negedge
+        ab              = {tmp[15:8] + {7'd0, mem_carry}, tmp[7:0] + 8'd1};
         w_data          = {uio_in, r1[7:0]};
         w_we            = !mem_is_store;
       end
@@ -642,7 +679,7 @@ module riscyv02_execute (
     if (!rst_n) begin
       state       <= E_IDLE;
       ir          <= 16'h0000;
-      tmp         <= 16'h0000;
+      carry_r     <= 1'b0;
       pc          <= 15'h0000;
       i_bit       <= 1'b1;
       nmi_ack     <= 1'b0;
@@ -658,15 +695,13 @@ module riscyv02_execute (
       // -----------------------------------------------------------------
       case (state)
         E_EXEC_LO: begin
-          tmp[7:0] <= next_tmp_lo;
-          tmp[8] <= alu_co;  // ALU carry for E_EXEC_HI continuation
+          carry_r <= alu_co;
           if (is_wai || is_stp) state <= E_IDLE;
           else                  state <= E_EXEC_HI;
         end
 
         E_EXEC_HI: begin
           if (is_r9_load || is_r9_store || is_auipc || is_rr_load || is_rr_store || is_sp_load || is_sp_store) begin
-            tmp[15:8] <= alu_result;
             if (is_auipc) state <= E_IDLE;
             else          state <= E_MEM_LO;
           end else begin
@@ -679,9 +714,9 @@ module riscyv02_execute (
         end
 
         E_MEM_LO: begin
-          r2_hi_r <= mem_is_store;            // Stores: hi byte for dout
-          tmp     <= tmp + 16'd1;             // Increment address for E_MEM_HI
-          state   <= (mem_is_byte_store || mem_is_byte_load) ? E_IDLE : E_MEM_HI;
+          r2_hi_r   <= mem_is_store;            // Stores: hi byte for dout
+          mem_carry <= &tmp[7:0];               // Carry for E_MEM_HI address increment
+          state     <= (mem_is_byte_store || mem_is_byte_load) ? E_IDLE : E_MEM_HI;
         end
 
         E_MEM_HI: state <= E_IDLE;
@@ -694,11 +729,10 @@ module riscyv02_execute (
       // -----------------------------------------------------------------
       // Interrupt entry: synthesize INT instruction in ir.
       // System prefix + sub[5]=1, vector in ir[1:0].
-      // i_bit stashed in tmp[15] (survives E_EXEC_LO; read at E_EXEC_HI).
+      // i_bit captured by saved_i_bit latch (survives E_EXEC_LO; read at E_EXEC_HI).
       // -----------------------------------------------------------------
       if (take_nmi || take_irq) begin
         ir     <= {10'b1111100000, 1'b1, 3'b000, !take_nmi, 1'b0};
-        tmp[15] <= i_bit_fwd;
         i_bit <= 1'b1;
         state <= E_EXEC_LO;
       end
@@ -711,10 +745,8 @@ module riscyv02_execute (
         ir <= fetch_ir;
         r2_hi_r  <= 1'b0;
         // BRK/INT detection: system prefix + sub[5]=1
-        if (fetch_ir[15:6] == 10'b1111100000 && fetch_ir[5]) begin
-          tmp[15] <= i_bit_fwd;
+        if (fetch_ir[15:6] == 10'b1111100000 && fetch_ir[5])
           i_bit <= 1'b1;
-        end
         state <= E_EXEC_LO;
       end
 

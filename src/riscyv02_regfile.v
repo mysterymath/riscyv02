@@ -17,6 +17,7 @@
 
 `default_nettype none
 
+(* keep_hierarchy *)
 module riscyv02_regfile (
     input  wire        clk,
     input  wire        rst_n,

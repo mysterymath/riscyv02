@@ -132,11 +132,26 @@ def main():
     # The register file (riscyv02_regfile) is a regular 8x16-bit 2R1W array.
     # In a real chip this would be 8T SRAM, not standard cell latches.
     # See doc/sram_analysis.md for full design and justification.
-    REGFILE_STDCELL_TX = 4802   # Standalone synthesis: 144 latches + 297 combo cells (9-entry with EPC, 16-bit ports)
-    REGFILE_SRAM_TX    = 1612   # 8T SRAM design (144x8T + 460T peripherals, 9-entry with EPC, 16-bit ports)
-    ARLET_6502_TX      = 13176  # comparison baseline (original decode + bus_keep)
+    #
+    # The regfile uses (* keep_hierarchy *) so its cell counts appear as a
+    # sub-module in stat.json — extracted from the same synthesis run as the
+    # total, eliminating cross-run non-determinism.
+    REGFILE_MODULE = "riscyv02_regfile"
+    REGFILE_SRAM_TX = 1612   # 8T SRAM design (144x8T + 460T peripherals, 9-entry with EPC, 16-bit ports)
+    ARLET_6502_TX   = 13176  # comparison baseline (original decode + bus_keep)
 
-    discount = REGFILE_STDCELL_TX - REGFILE_SRAM_TX
+    regfile_key = f"\\{REGFILE_MODULE}"
+    if regfile_key in modules:
+        regfile_cells = modules[regfile_key]["num_cells_by_type"]
+        regfile_stdcell_tx = sum(
+            count * cdl_counts.get(cell, 0) for cell, count in regfile_cells.items()
+        )
+    else:
+        print(f"WARNING: {REGFILE_MODULE} not found as sub-module in stat.json.", file=sys.stderr)
+        print("         Is (* keep_hierarchy *) set on the module?", file=sys.stderr)
+        regfile_stdcell_tx = 0
+
+    discount = regfile_stdcell_tx - REGFILE_SRAM_TX
     adjusted_tx = total_tx - discount
     vs_6502_std = (total_tx - ARLET_6502_TX) / ARLET_6502_TX * 100
     vs_6502_adj = (adjusted_tx - ARLET_6502_TX) / ARLET_6502_TX * 100
@@ -145,7 +160,7 @@ def main():
     print("SRAM-Adjusted Transistor Count")
     print("─" * 62)
     print(f"  {'Standard cell (synthesis):':<40s} {total_tx:>10,d}")
-    print(f"  {'Register file (standard cell):':<40s} {REGFILE_STDCELL_TX:>10,d}")
+    print(f"  {'Register file (standard cell):':<40s} {regfile_stdcell_tx:>10,d}")
     print(f"  {'Register file (8T SRAM equivalent):':<40s} {REGFILE_SRAM_TX:>10,d}")
     print(f"  {'SRAM discount:':<40s} {-discount:>10,d}")
     print(f"  {'SRAM-adjusted total:':<40s} {adjusted_tx:>10,d}")
