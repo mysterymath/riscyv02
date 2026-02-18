@@ -79,7 +79,7 @@ module riscyv02_execute (
   wire [7:0] tmp_hi;      // Latched at E_EXEC_HI (hi-byte addr)
   reg        carry_r;     // ALU carry (DFF — feeds ci_ext, can't be latch)
   reg        mem_carry;   // Low-byte all-ones carry for E_MEM_HI increment
-  wire       saved_i_bit; // i_bit save for INT, latched when fsm_ready
+  reg        saved_i_bit; // i_bit save for INT, captured at negedge when fsm_ready
   wire [15:0] tmp = {tmp_hi, tmp_lo};
 
   // Interrupt and PC state
@@ -242,16 +242,12 @@ module riscyv02_execute (
   //   tmp_lo[7:0]:  ICG at E_EXEC_LO
   //   tmp_hi[7:0]:  ICG at E_EXEC_HI
   //   carry_r:      DFF (feeds ALU ci_ext — latch would create STA false path)
-  //   saved_i_bit:  ICG at fsm_ready (captures i_bit_fwd at dispatch)
+  //   saved_i_bit:  DFF at negedge (full-period constraint avoids half-period
+  //                 ICG path through ALU carry chain → insn_completing → fsm_ready)
   // -------------------------------------------------------------------------
-  wire gclk_tmp_lo, gclk_tmp_hi, gclk_ibit;
+  wire gclk_tmp_lo, gclk_tmp_hi;
   sg13g2_lgcp_1 u_icg_tmp_lo (.CLK(clk), .GATE(state == E_EXEC_LO), .GCLK(gclk_tmp_lo));
   sg13g2_lgcp_1 u_icg_tmp_hi (.CLK(clk), .GATE(state == E_EXEC_HI), .GCLK(gclk_tmp_hi));
-  sg13g2_lgcp_1 u_icg_ibit   (.CLK(clk), .GATE(fsm_ready),          .GCLK(gclk_ibit));
-
-  sg13g2_dlhrq_1 u_saved_i_bit (
-    .D(i_bit_fwd), .GATE(gclk_ibit), .RESET_B(rst_n), .Q(saved_i_bit)
-  );
 
   generate
     genvar ti;
@@ -439,6 +435,12 @@ module riscyv02_execute (
         end else if (is_jr_jalr) begin
           // JR/JALR: rs + sext(imm8) (byte offset, no shift)
           alu_b      = ir[10:3];            // imm[7:0]
+          // JR same-page: high byte unchanged, 1 exec cycle
+          if (is_jr && (alu_co == ir[10])) begin
+            jump            = 1'b1;
+            next_pc         = {r1[15:8], alu_result[7:1]};
+            insn_completing = 1'b1;
+          end
         end else if (is_addi) begin
           alu_b       = ir[10:3];            // imm[7:0]
           next_tmp_lo = alu_result;
@@ -489,10 +491,21 @@ module riscyv02_execute (
         end else if (is_branch) begin
           alu_a      = {pc[7:1], 1'b0};
           alu_b      = {ir[3], ir[9:4], 1'b0};  // RISC-V trick: off[6],off[5:0],0
-
+          // Same-page taken: high byte unchanged, 1 exec cycle (3 total)
+          if ((!(|r1) ^ is_bnz) && (alu_co == ir[10])) begin
+            jump            = 1'b1;
+            next_pc         = {pc[15:8], alu_result[7:1]};
+            insn_completing = 1'b1;
+          end
         end else if (is_jump_imm) begin
           alu_a      = {pc[7:1], 1'b0};
           alu_b      = {ir[6:0], 1'b0};     // off10[6:0] << 1
+          // J same-page (small offset): high byte unchanged, 1 exec cycle
+          if (is_j && ir[8:7] == {2{ir[9]}} && (alu_co == ir[9])) begin
+            jump            = 1'b1;
+            next_pc         = {pc[15:8], alu_result[7:1]};
+            insn_completing = 1'b1;
+          end
         end
       end
 
@@ -682,6 +695,7 @@ module riscyv02_execute (
       carry_r     <= 1'b0;
       pc          <= 15'h0000;
       i_bit       <= 1'b1;
+      saved_i_bit <= 1'b1;
       nmi_ack     <= 1'b0;
       r2_hi_r     <= 1'b0;
     end else begin
@@ -690,14 +704,22 @@ module riscyv02_execute (
       if (take_nmi) nmi_ack <= 1'b1;
       else if (!nmi_pending) nmi_ack <= 1'b0;
 
+      // Capture i_bit_fwd at dispatch (negedge DFF: full-period constraint).
+      if (fsm_ready) saved_i_bit <= i_bit_fwd;
+
       // -----------------------------------------------------------------
       // State machine
       // -----------------------------------------------------------------
       case (state)
         E_EXEC_LO: begin
           carry_r <= alu_co;
-          if (is_wai || is_stp) state <= E_IDLE;
-          else                  state <= E_EXEC_HI;
+          if (is_wai || is_stp)
+            state <= E_IDLE;
+          else if (insn_completing) begin
+            if (jump) pc <= next_pc;
+            state <= E_IDLE;
+          end else
+            state <= E_EXEC_HI;
         end
 
         E_EXEC_HI: begin
@@ -729,7 +751,7 @@ module riscyv02_execute (
       // -----------------------------------------------------------------
       // Interrupt entry: synthesize INT instruction in ir.
       // System prefix + sub[5]=1, vector in ir[1:0].
-      // i_bit captured by saved_i_bit latch (survives E_EXEC_LO; read at E_EXEC_HI).
+      // i_bit captured by saved_i_bit DFF at dispatch (stable through E_EXEC_HI).
       // -----------------------------------------------------------------
       if (take_nmi || take_irq) begin
         ir     <= {10'b1111100000, 1'b1, 3'b000, !take_nmi, 1'b0};

@@ -221,9 +221,14 @@ class RISCYV02Sim:
         # Dispatch owns the fetch; execute only produces mem-phase entries.
         next_pc = self.pc
         self._redirect = False
+        self._fast_redirect = False
         regs_before = list(self.regs)
         mem_entries = self._execute(ir)
-        exec_entries = self._fetch_seq(next_pc) + mem_entries
+        # Same-page redirect: 1 wasted fetch entry (3-cycle), else 2 (4-cycle)
+        if self._fast_redirect:
+            exec_entries = [(next_pc & 0xFFFF, True, 0)] + mem_entries
+        else:
+            exec_entries = self._fetch_seq(next_pc) + mem_entries
 
         # If a redirect occurred, append target fetch from new PC.
         if self._redirect:
@@ -327,7 +332,9 @@ class RISCYV02Sim:
                 return [(addr, False, self.regs[0] & 0xFF)]
 
             if prefix5 == 0b00111:      # JR
-                self.pc = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFE
+                target = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFE
+                self._fast_redirect = (self.regs[rs_idx] & 0xFF00) == (target & 0xFF00)
+                self.pc = target
                 self._redirect = True
                 return []
 
@@ -364,7 +371,9 @@ class RISCYV02Sim:
                        (scrambled & 1) << 6 |
                        (scrambled >> 1) & 0x3F)
                 if self.regs[rs_idx] == 0:
-                    self.pc = (next_pc + sext8(off) * 2) & 0xFFFF
+                    target = (next_pc + sext8(off) * 2) & 0xFFFF
+                    self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
+                    self.pc = target
                     self._redirect = True
                 return []
 
@@ -374,7 +383,9 @@ class RISCYV02Sim:
                        (scrambled & 1) << 6 |
                        (scrambled >> 1) & 0x3F)
                 if self.regs[rs_idx] != 0:
-                    self.pc = (next_pc + sext8(off) * 2) & 0xFFFF
+                    target = (next_pc + sext8(off) * 2) & 0xFFFF
+                    self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
+                    self.pc = target
                     self._redirect = True
                 return []
 
@@ -434,7 +445,12 @@ class RISCYV02Sim:
         # =================================================================
         if prefix6 == 0b110110:     # J
             off10 = ir & 0x3FF
-            self.pc = (next_pc + sext10(off10) * 2) & 0xFFFF
+            target = (next_pc + sext10(off10) * 2) & 0xFFFF
+            # Same-page for small offsets (high byte is pure sign extension)
+            off_bytes = sext10(off10) * 2
+            is_small = -256 <= off_bytes <= 254
+            self._fast_redirect = is_small and (next_pc & 0xFF00) == (target & 0xFF00)
+            self.pc = target
             self._redirect = True
             return []
 

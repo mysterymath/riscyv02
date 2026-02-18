@@ -38,11 +38,11 @@ async def test_cycle_count_sw(dut):
 
 @cocotb.test()
 async def test_cycle_count_jr(dut):
-    """JR takes 4 cycles."""
+    """JR (same page) takes 3 cycles."""
     prog = {}
-    # JR R7, 0 → PC = 0+0 = 0x0000 (spin at self)
+    # JR R7, 0 → PC = 0+0 = 0x0000 (spin at self), same page = 3 cycles
     _place(prog, 0x0000, _encode_jr(rs=7, imm=0))
-    await _measure_instruction_cycles(dut, prog, 4, "JR")
+    await _measure_instruction_cycles(dut, prog, 3, "JR")
 
 
 @cocotb.test()
@@ -148,12 +148,31 @@ async def test_cycle_count_auipc(dut):
 
 @cocotb.test()
 async def test_cycle_count_branch_taken(dut):
-    """BZ taken takes 4 cycles."""
+    """BZ taken (same page) takes 3 cycles."""
     prog = {}
-    # R0 = 0 from reset, BZ R0 is always taken
-    _place(prog, 0x0000, _encode_bz(rs=0, imm=1))  # jump to 0x0004+2=0x0006
-    _place(prog, 0x0006, _spin(0x0006))
-    await _measure_instruction_cycles(dut, prog, 4, "BZ taken")
+    # R0 = 0 from reset, BZ R0 is always taken, same page = 3 cycles
+    _place(prog, 0x0000, _encode_bz(rs=0, imm=1))
+    _place(prog, 0x0004, _spin(0x0004))
+    await _measure_instruction_cycles(dut, prog, 3, "BZ taken (same page)")
+
+
+@cocotb.test()
+async def test_cycle_count_branch_taken_page_cross(dut):
+    """BZ taken (page cross) takes 4 cycles."""
+    prog = {}
+    # BZ R0, 127: next_pc=0x0002, target=0x0002+127*2=0x0100 (page cross)
+    _place(prog, 0x0000, _encode_bz(rs=0, imm=127))
+    _place(prog, 0x0100, _spin(0x0100))
+    await _measure_instruction_cycles(dut, prog, 4, "BZ taken (page cross)")
+
+
+@cocotb.test()
+async def test_cycle_count_j(dut):
+    """J (same page, small offset) takes 3 cycles."""
+    prog = {}
+    # J -1: target = next_pc - 2 = 0x0000, same page, small offset
+    _place(prog, 0x0000, _encode_j(off10=-1))
+    await _measure_instruction_cycles(dut, prog, 3, "J (same page)")
 
 
 @cocotb.test()
