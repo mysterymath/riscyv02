@@ -255,6 +255,33 @@ async def test_slti_sltui_xorif(dut):
 
 
 @cocotb.test()
+async def test_andif(dut):
+    """ANDIF: non-destructive bit mask, result to R1."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+    prog = {}
+    # R2 = 0x005A via LI (0x5A = 90, in signed range)
+    _place(prog, 0x0000, _encode_li(rd=2, imm=0x5A))
+    # ANDIF R2, 0xF0 → R1 = 0x0050, R2 unchanged
+    _place(prog, 0x0002, _encode_andif(rs=2, imm=0xF0))
+    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
+    _place(prog, 0x0006, _encode_sw_s(rd=2, imm=0x42))
+    # ANDIF R2, 0x00 → R1 = 0x0000
+    _place(prog, 0x0008, _encode_andif(rs=2, imm=0x00))
+    _place(prog, 0x000A, _encode_sw_s(rd=1, imm=0x44))
+    _place(prog, 0x000C, _spin(0x000C))
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+    v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    v2 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
+    v3 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
+    assert v1 == 0x0050, f"ANDIF 0x5A&0xF0: expected 0x0050, got {v1:#06x}"
+    assert v2 == 0x005A, f"R2 should be unchanged: expected 0x005A, got {v2:#06x}"
+    assert v3 == 0x0000, f"ANDIF 0x5A&0x00: expected 0x0000, got {v3:#06x}"
+
+
+@cocotb.test()
 async def test_shift_rr(dut):
     """SLL, SRL, SRA with register shift amounts."""
     clock = Clock(dut.clk, 10, unit="us")

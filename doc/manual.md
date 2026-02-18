@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LWS**, **SWS**, **LBS**, **LBUS**, **SBS**, **LWR**, **LBR**, **LBUR**, **SWR**, **SBR**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTI**, **SLTUI**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **EPCR**, **EPCW**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling saves the return address to the Exception PC (EPC) register; EPCR/EPCW allow handlers to read and modify it. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. R,8-format loads/stores use R0 as an implicit base address register (like R7 for SP-relative ops), while R,R-format loads/stores allow explicit register selection. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LWS**, **SWS**, **LBS**, **LBUS**, **SBS**, **LWR**, **LBR**, **LBUR**, **SWR**, **SBR**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTI**, **SLTUI**, **XORIF**, **ANDIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **EPCR**, **EPCW**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling saves the return address to the Exception PC (EPC) register; EPCR/EPCW allow handlers to read and modify it. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. R,8-format loads/stores use R0 as an implicit base address register (like R7 for SP-relative ops), while R,R-format loads/stores allow explicit register selection. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -14,11 +14,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 60.4% | 45.3% |
-| Transistor count (synth) | 16,244 | 13,176 |
-| SRAM-adjusted | 12,920 | 13,176 |
+| Utilization | 59.6% | 45.3% |
+| Transistor count (synth) | 16,074 | 13,176 |
+| SRAM-adjusted | 12,750 | 13,176 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 1.9% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF, ANDIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 3.2% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -109,7 +109,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | Register | Name | Suggested Purpose |
 |---|---|---|
 | R0 | a0 | Accumulator / implicit base address (R,8 format loads/stores) |
-| R1 | a1 | Argument / comparison result (SLTI/SLTUI/XORIF dest) |
+| R1 | a1 | Argument / comparison result (SLTI/SLTUI/XORIF/ANDIF dest) |
 | R2 | t0 | Temporary 0 |
 | R3 | t1 | Temporary 1 |
 | R4 | s0 | Saved register 0 |
@@ -117,7 +117,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | R6 | ra | Return address (link register) |
 | R7 | sp | Stack pointer |
 
-R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. SLTI, SLTUI, and XORIF write their result to R1 (non-destructive compare/test patterns that preserve both R0 and the source register). R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
+R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. SLTI, SLTUI, XORIF, and ANDIF write their result to R1 (non-destructive compare/test patterns that preserve both R0 and the source register). R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
 
 ### Link Register (R6)
 
@@ -131,17 +131,17 @@ All instructions are 16 bits. The encoding uses a **variable-width prefix-free**
 
 ### Encoding Overview
 
-**52 instructions defined. Free: 10,507 of 65,536 encodings (16.0%).**
+**53 instructions defined. 8,459 of 65,536 encodings free (12.9%).**
 
-| Format | Prefix | Layout | Used | Capacity |
-|---|---|---|---|---|
-| R,8 | 5-bit | `[imm8:8\|reg:3]` | 22 | 5 |
-| R,7 | 6-bit | `[imm7:7\|reg:3]` | 2 | 10 |
-| "10" | 6-bit | `[off10:10]` | 2 | 10 |
-| R,R,R | 7-bit | `[rd:3\|rs2:3\|rs1:3]` | 10 | 20 |
-| R,4 | 9-bit | `[shamt:4\|reg:3]` | 3 | 82 |
-| R,R | 10-bit | `[rd:3\|rs:3]` | 5 | 164 |
-| System | 11-16 bit | various | 8 | 10,507 |
+| Format | Prefix | Layout | Used |
+|---|---|---|---|
+| R,8 | 5-bit | `[imm8:8\|reg:3]` | 23 |
+| R,7 | 6-bit | `[imm7:7\|reg:3]` | 2 |
+| "10" | 6-bit | `[off10:10]` | 2 |
+| R,R,R | 7-bit | `[rd:3\|rs2:3\|rs1:3]` | 10 |
+| R,4 | 9-bit | `[shamt:4\|reg:3]` | 3 |
+| R,R | 10-bit | `[rd:3\|rs:3]` | 5 |
+| System | 11-16 bit | various | 8 |
 
 Capacity = how many instructions of that format could fit in the total free space. Mutually exclusive: one R,8 uses the space of 4 R,R,R or 32 R,R. Fields are packed MSB-first: prefix at top, register at LSB.
 
@@ -168,6 +168,7 @@ Capacity = how many instructions of that format could fit in the total free spac
 01110   BZ      if rs == 0, pc += sext(imm8) << 1
 01111   BNZ     if rs != 0, pc += sext(imm8) << 1
 10000   XORIF   R1 = rs ^ zext(imm8)
+10110   ANDIF   R1 = rs & zext(imm8)
 10001   LWS    rd = mem16[R7 + sext(imm8)]
 10010   LBS    rd = sext(mem[R7 + sext(imm8)])
 10011   LBUS   rd = zext(mem[R7 + sext(imm8)])
@@ -326,6 +327,12 @@ Branches to a PC-relative target if the source register is non-zero. Pairs with 
 
 Bitwise XOR of the source register with a zero-extended 8-bit immediate, writing the result to R1 while preserving both R0 and the source register. Useful for equality testing: if rs equals zext(imm8), R1 will be zero. Pattern: `XORIF rs, val; BZ R1, equal_label`.
 
+#### ANDIF -- And Immediate (Fixed-Destination)
+
+`R1 = rs & zext(imm8)` -- 2 cycles
+
+Bitwise AND of the source register with a zero-extended 8-bit immediate, writing the result to R1 while preserving the source register. Useful for bit testing: if any masked bits are set, R1 will be non-zero. Pattern: `ANDIF rs, 0x80; BNZ R1, bit7_set`.
+
 ### R,7 Format -- Upper Immediate
 
 #### LUI -- Load Upper Immediate
@@ -476,7 +483,7 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
+| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/ANDIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
 | SEI/CLI | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (taken) | 4 | 2 execute + 2 fetch after redirect |

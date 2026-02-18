@@ -287,9 +287,9 @@ class RISCYV02Sim:
         prefix5 = ir >> 11
 
         # =================================================================
-        # R,8 format (5-bit prefix): ADDI..XORIF
+        # R,8 format (5-bit prefix): ADDI..ANDIF
         # =================================================================
-        if prefix5 <= 0b10101:
+        if prefix5 <= 0b10110:
             rs_idx = ir & 7
             imm8_raw = (ir >> 3) & 0xFF
 
@@ -420,6 +420,10 @@ class RISCYV02Sim:
             if prefix5 == 0b10101:      # SBS (byte store, base=R7)
                 addr = (self.regs[7] + sext8(imm8_raw)) & 0xFFFF
                 return [(addr, False, self.regs[rs_idx] & 0xFF)]
+
+            if prefix5 == 0b10110:      # ANDIF (zero-ext imm, dest=R1)
+                self.regs[1] = self.regs[rs_idx] & imm8_raw
+                return []
 
             # Unknown R,8 — treat as NOP
             return []

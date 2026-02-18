@@ -27,7 +27,7 @@
 // Prefix at MSB, registers at LSB for fixed positions.
 //
 //   Level  Format  Layout                             Instructions
-//   5      R,8     [prefix:5|imm8:8|reg:3]            22: ADDI..SBS
+//   5      R,8     [prefix:5|imm8:8|reg:3]            23: ADDI..ANDIF
 //   6      R,7     [prefix:6|imm7:7|reg:3]            2: LUI,AUIPC
 //   6      "10"    [prefix:6|imm10:10]                 2: J,JAL
 //   7      R,R,R   [prefix:7|rd:3|rs2:3|rs1:3]       10: ADD..SRA
@@ -115,6 +115,7 @@ module riscyv02_execute (
   wire is_lbu_s = ir[15:11] == 5'b10011;
   wire is_sw_s  = ir[15:11] == 5'b10100;
   wire is_sb_s  = ir[15:11] == 5'b10101;
+  wire is_andif = ir[15:11] == 5'b10110;
 
   // --- R,7 / "10" format (6-bit prefix @ [15:10]) ---
   wire is_lui   = ir[15:10] == 6'b110100;
@@ -187,7 +188,7 @@ module riscyv02_execute (
   wire is_arith_shift = is_sra || is_srai;
 
   // Writes to R1: SLTI, SLTUI, XORIF
-  wire is_r1_dest = is_slti || is_sltui || is_xorif;
+  wire is_r1_dest = is_slti || is_sltui || is_xorif || is_andif;
 
   // Jump/branch
   wire is_branch   = is_bz || is_bnz;
@@ -454,7 +455,7 @@ module riscyv02_execute (
           alu_op     = 3'd1;                // SUB for comparison
           alu_b      = r2[7:0];
           // No write — just save borrow for E_EXEC_HI
-        end else if (is_andi) begin
+        end else if (is_andi || is_andif) begin
           alu_op      = 3'd2;
           alu_b       = ir[10:3];            // imm8 (zero-extended: hi byte = 0 in HI)
           next_tmp_lo = alu_result;
@@ -567,7 +568,7 @@ module riscyv02_execute (
               w_data = {8'h00, 7'b0, ~alu_co};
             else
               w_data = {8'h00, 7'b0, (r1[15] ^ r2[15]) ? r1[15] : alu_result[7]};
-          end else if (is_andi) begin
+          end else if (is_andi || is_andif) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd2;
             alu_b      = 8'h00;                 // zero-extend

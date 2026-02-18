@@ -20,7 +20,7 @@ __all__ = [
     '_encode_lw', '_encode_lb', '_encode_lbu', '_encode_sw', '_encode_sb',
     '_encode_jr', '_encode_jalr',
     '_encode_andi', '_encode_ori', '_encode_xori',
-    '_encode_slti', '_encode_sltui', '_encode_bz', '_encode_bnz', '_encode_xorif',
+    '_encode_slti', '_encode_sltui', '_encode_bz', '_encode_bnz', '_encode_xorif', '_encode_andif',
     '_encode_r7', '_encode_lui', '_encode_auipc',
     '_encode_10', '_encode_j', '_encode_jal',
     '_encode_rrr', '_encode_add', '_encode_sub',
@@ -173,6 +173,11 @@ def _encode_xorif(rs, imm):
     """XORIF: R0 = rs ^ zext(imm). Dest is R0."""
     assert 0 <= imm <= 255, f"imm out of range: {imm}"
     return _encode_r8(0b10000, imm, rs)
+
+def _encode_andif(rs, imm):
+    """ANDIF: R1 = rs & zext(imm). Dest is R1."""
+    assert 0 <= imm <= 255, f"imm out of range: {imm}"
+    return _encode_r8(0b10110, imm, rs)
 
 def _encode_lw_s(rd, imm):
     """LWS: rd = mem16[R7 + sext(imm)]. Base is R7 (SP)."""
