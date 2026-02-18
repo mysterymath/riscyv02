@@ -11,7 +11,7 @@ from test_helpers import *
 
 @cocotb.test()
 async def test_lw_sw_jr_basic(dut):
-    """LW from memory, SW to memory, JR to spin loop."""
+    """LW from memory, SW to memory, J.R to spin loop."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 

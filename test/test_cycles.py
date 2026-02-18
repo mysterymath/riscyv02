@@ -11,7 +11,7 @@ from test_helpers import *
 
 @cocotb.test()
 async def test_cycle_count_nop(dut):
-    """NOP (ADDI R0, 0) takes 2 cycles."""
+    """NOP (ADD.I R0, 0) takes 2 cycles."""
     prog = {}
     _place(prog, 0x0000, _encode_nop())
     _place(prog, 0x0002, _spin(0x0002))
@@ -38,11 +38,11 @@ async def test_cycle_count_sw(dut):
 
 @cocotb.test()
 async def test_cycle_count_jr(dut):
-    """JR (same page) takes 3 cycles."""
+    """J.R (same page) takes 3 cycles."""
     prog = {}
-    # JR R7, 0 → PC = 0+0 = 0x0000 (spin at self), same page = 3 cycles
+    # J.R R7, 0 → PC = 0+0 = 0x0000 (spin at self), same page = 3 cycles
     _place(prog, 0x0000, _encode_jr(rs=7, imm=0))
-    await _measure_instruction_cycles(dut, prog, 3, "JR")
+    await _measure_instruction_cycles(dut, prog, 3, "J.R")
 
 
 @cocotb.test()
@@ -130,11 +130,11 @@ async def test_cycle_count_sb(dut):
 
 @cocotb.test()
 async def test_cycle_count_addi(dut):
-    """ADDI takes 2 cycles (no memory phase)."""
+    """ADD.I takes 2 cycles (no memory phase)."""
     prog = {}
     _place(prog, 0x0000, _encode_addi(rd=1, imm=5))
     _place(prog, 0x0002, _spin(0x0002))
-    await _measure_instruction_cycles(dut, prog, 2, "ADDI")
+    await _measure_instruction_cycles(dut, prog, 2, "ADD.I")
 
 
 @cocotb.test()

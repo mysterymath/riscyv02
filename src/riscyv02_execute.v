@@ -27,15 +27,15 @@
 // Prefix at MSB, registers at LSB for fixed positions.
 //
 //   Level  Format  Layout                             Instructions
-//   5      R,8     [prefix:5|imm8:8|reg:3]            17: ADDI..XORIF
+//   5      R,8     [prefix:5|imm8:8|reg:3]            22: ADD.I..SB.S
 //   6      R,7     [prefix:6|imm7:7|reg:3]            2: LUI,AUIPC
 //   6      "10"    [prefix:6|imm10:10]                 2: J,JAL
 //   7      R,R,R   [prefix:7|rd:3|rs2:3|rs1:3]       10: ADD..SRA
-//   9      R,4     [prefix:9|shamt:4|reg:3]            3: SLLI,SRLI,SRAI
-//  10      R,R     [prefix:10|rd:3|rs:3]               5: LW.RR..SB.RR
-//  10+     System  [prefix:10|sub:6]                   6: SEI..STP
+//   9      R,4     [prefix:9|shamt:4|reg:3]            3: SLL.I,SRL.I,SRA.I
+//  10      R,R     [prefix:10|rd:3|rs:3]               5: LW.R..SB.R
+//  11-16   System  (full-width decode)                  8: SEI..STP
 //
-// ADDI has prefix 0000 so that 0x0000 = ADDI R0, 0 = NOP.
+// ADD.I has prefix 0000 so that 0x0000 = ADD.I R0, 0 = NOP.
 // ============================================================================
 
 module riscyv02_execute (
@@ -146,16 +146,15 @@ module riscyv02_execute (
   wire is_sw_rr  = ir[15:6] == 10'b1111011001;
   wire is_sb_rr  = ir[15:6] == 10'b1111011010;
 
-  // --- System format (10-bit prefix @ [15:6] + sub @ [5:0]) ---
-  wire is_system_grp = ir[15:6] == 10'b1111100000;
-  wire is_sei  = is_system_grp && ir[5:0] == 6'b000001;
-  wire is_cli  = is_system_grp && ir[5:0] == 6'b000010;
-  wire is_reti = is_system_grp && ir[5:0] == 6'b000011;
-  wire is_int  = is_system_grp && ir[5];                  // sub[5]=1: INT
-  wire is_epcr = is_system_grp && ir[5:3] == 3'b010;
-  wire is_epcw = is_system_grp && ir[5:3] == 3'b011;
-  wire is_wai  = is_system_grp && ir[5:0] == 6'b000101;
-  wire is_stp  = is_system_grp && ir[5:0] == 6'b000111;
+  // --- System format (full-width decode) ---
+  wire is_sei  = ir == 16'b1111100000000001;
+  wire is_cli  = ir == 16'b1111100000000010;
+  wire is_reti = ir == 16'b1111100000000011;
+  wire is_wai  = ir == 16'b1111100000000101;
+  wire is_stp  = ir == 16'b1111100000000111;
+  wire is_epcr = ir[15:3] == 13'b1111100000010;
+  wire is_epcw = ir[15:3] == 13'b1111100000011;
+  wire is_int  = ir[15:5] == 11'b11111000001;
 
   // --- Behavioral groups ---
 
@@ -187,7 +186,7 @@ module riscyv02_execute (
   wire is_right_shift = is_srl || is_sra || is_srli || is_srai;
   wire is_arith_shift = is_sra || is_srai;
 
-  // Writes to R1: SLTI, SLTUI, XORIF
+  // Writes to R1: SLT.I, SLTU.I, XOR.IF
   wire is_r1_dest = is_slti || is_sltui || is_xorif;
 
   // Jump/branch
@@ -277,7 +276,7 @@ module riscyv02_execute (
     else if (is_mem_phase && is_rr_load)
       w_sel_mux = {1'b0, ir[5:3]};                             // R,R loads: rd at [5:3]
     else if (is_r1_dest)
-      w_sel_mux = 4'd1;                                        // SLTI/SLTUI/XORIF → R1
+      w_sel_mux = 4'd1;                                        // SLT.I/SLTU.I/XOR.IF → R1
     else
       w_sel_mux = {1'b0, ir[2:0]};                             // Default: reg at [2:0]
   end
@@ -434,9 +433,9 @@ module riscyv02_execute (
           // Address = rs, no offset
           alu_b      = 8'd0;
         end else if (is_jr_jalr) begin
-          // JR/JALR: rs + sext(imm8) (byte offset, no shift)
+          // J.R/JAL.R: rs + sext(imm8) (byte offset, no shift)
           alu_b      = ir[10:3];            // imm[7:0]
-          // JR same-page: high byte unchanged, 1 exec cycle
+          // J.R same-page: high byte unchanged, 1 exec cycle
           if (is_jr && (alu_co == ir[10])) begin
             jump            = 1'b1;
             next_pc         = {r1[15:8], alu_result[7:1]};
@@ -525,7 +524,7 @@ module riscyv02_execute (
           alu_a      = r1[15:8];
           alu_b      = 8'd0;
         end else if (is_jr_jalr) begin
-          // JR/JALR high byte: sign-extend imm bit 7
+          // J.R/JAL.R high byte: sign-extend imm bit 7
           alu_a           = r1[15:8];
           alu_b           = {8{ir[10]}};
           jump            = 1'b1;
@@ -767,8 +766,8 @@ module riscyv02_execute (
         pc <= pc + 15'd1;
         ir <= fetch_ir;
         r2_hi_r  <= 1'b0;
-        // BRK/INT detection: system prefix + sub[5]=1
-        if (fetch_ir[15:6] == 10'b1111100000 && fetch_ir[5])
+        // BRK/INT detection
+        if (fetch_ir[15:5] == 11'b11111000001)
           i_bit <= 1'b1;
         state <= E_EXEC_LO;
       end

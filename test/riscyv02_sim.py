@@ -287,13 +287,13 @@ class RISCYV02Sim:
         prefix5 = ir >> 11
 
         # =================================================================
-        # R,8 format (5-bit prefix): ADDI..XORIF
+        # R,8 format (5-bit prefix): ADD.I..XOR.IF
         # =================================================================
         if prefix5 <= 0b10101:
             rs_idx = ir & 7
             imm8_raw = (ir >> 3) & 0xFF
 
-            if prefix5 == 0b00000:      # ADDI
+            if prefix5 == 0b00000:      # ADD.I
                 self.regs[rs_idx] = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
                 return []
 
@@ -331,37 +331,37 @@ class RISCYV02Sim:
                 addr = (self.regs[0] + sext8(imm8_raw)) & 0xFFFF
                 return [(addr, False, self.regs[rs_idx] & 0xFF)]
 
-            if prefix5 == 0b00111:      # JR
+            if prefix5 == 0b00111:      # J.R
                 target = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFE
                 self._fast_redirect = (self.regs[rs_idx] & 0xFF00) == (target & 0xFF00)
                 self.pc = target
                 self._redirect = True
                 return []
 
-            if prefix5 == 0b01000:      # JALR (link to rs)
+            if prefix5 == 0b01000:      # JAL.R (link to rs)
                 old_rs = self.regs[rs_idx]
                 self.regs[rs_idx] = next_pc
                 self.pc = (old_rs + sext8(imm8_raw)) & 0xFFFE
                 self._redirect = True
                 return []
 
-            if prefix5 == 0b01001:      # ANDI (zero-ext imm)
+            if prefix5 == 0b01001:      # AND.I (zero-ext imm)
                 self.regs[rs_idx] = self.regs[rs_idx] & imm8_raw
                 return []
 
-            if prefix5 == 0b01010:      # ORI (zero-ext imm)
+            if prefix5 == 0b01010:      # OR.I (zero-ext imm)
                 self.regs[rs_idx] = self.regs[rs_idx] | imm8_raw
                 return []
 
-            if prefix5 == 0b01011:      # XORI (zero-ext imm)
+            if prefix5 == 0b01011:      # XOR.I (zero-ext imm)
                 self.regs[rs_idx] = self.regs[rs_idx] ^ imm8_raw
                 return []
 
-            if prefix5 == 0b01100:      # SLTI (signed, dest=R1)
+            if prefix5 == 0b01100:      # SLT.I (signed, dest=R1)
                 self.regs[1] = 1 if to_signed16(self.regs[rs_idx]) < sext8(imm8_raw) else 0
                 return []
 
-            if prefix5 == 0b01101:      # SLTUI (unsigned, dest=R1)
+            if prefix5 == 0b01101:      # SLTU.I (unsigned, dest=R1)
                 self.regs[1] = 1 if self.regs[rs_idx] < (sext8(imm8_raw) & 0xFFFF) else 0
                 return []
 
@@ -389,7 +389,7 @@ class RISCYV02Sim:
                     self._redirect = True
                 return []
 
-            if prefix5 == 0b10000:      # XORIF (zero-ext imm, dest=R1)
+            if prefix5 == 0b10000:      # XOR.IF (zero-ext imm, dest=R1)
                 self.regs[1] = self.regs[rs_idx] ^ imm8_raw
                 return []
 
@@ -489,32 +489,32 @@ class RISCYV02Sim:
             return []
 
         # =================================================================
-        # R,4 format (9-bit prefix): SLLI, SRLI, SRAI
+        # R,4 format (9-bit prefix): SLL.I, SRL.I, SRA.I
         # =================================================================
         prefix9 = ir >> 7
-        if prefix9 == 0b111101000:      # SLLI
+        if prefix9 == 0b111101000:      # SLL.I
             rd = ir & 7
             shamt = (ir >> 3) & 0xF
             self.regs[rd] = (self.regs[rd] << shamt) & 0xFFFF
             return []
 
-        if prefix9 == 0b111101001:      # SRLI
+        if prefix9 == 0b111101001:      # SRL.I
             rd = ir & 7
             shamt = (ir >> 3) & 0xF
             self.regs[rd] = self.regs[rd] >> shamt
             return []
 
-        if prefix9 == 0b111101010:      # SRAI
+        if prefix9 == 0b111101010:      # SRA.I
             rd = ir & 7
             shamt = (ir >> 3) & 0xF
             self.regs[rd] = (to_signed16(self.regs[rd]) >> shamt) & 0xFFFF
             return []
 
         # =================================================================
-        # R,R format (10-bit prefix): LW.RR..SB.RR
+        # R,R format (10-bit prefix): LW.R..SB.R
         # =================================================================
         prefix10 = ir >> 6
-        if prefix10 == 0b1111010110:    # LW.RR rd, rs
+        if prefix10 == 0b1111010110:    # LW.R rd, rs
             rd = (ir >> 3) & 7
             rs = ir & 7
             addr = self.regs[rs]
@@ -523,27 +523,27 @@ class RISCYV02Sim:
             self.regs[rd] = (hi << 8) | lo
             return [(addr, True, 0), ((addr + 1) & 0xFFFF, True, 0)]
 
-        if prefix10 == 0b1111010111:    # LB.RR rd, rs
+        if prefix10 == 0b1111010111:    # LB.R rd, rs
             rd = (ir >> 3) & 7
             addr = self.regs[ir & 7]
             byte = self.ram[addr]
             self.regs[rd] = (byte | 0xFF00) if byte & 0x80 else byte
             return [(addr, True, 0)]
 
-        if prefix10 == 0b1111011000:    # LBU.RR rd, rs
+        if prefix10 == 0b1111011000:    # LBU.R rd, rs
             rd = (ir >> 3) & 7
             addr = self.regs[ir & 7]
             self.regs[rd] = self.ram[addr]
             return [(addr, True, 0)]
 
-        if prefix10 == 0b1111011001:    # SW.RR rd, rs
+        if prefix10 == 0b1111011001:    # SW.R rd, rs
             rd = (ir >> 3) & 7
             addr = self.regs[ir & 7]
             lo = self.regs[rd] & 0xFF
             hi = (self.regs[rd] >> 8) & 0xFF
             return [(addr, False, lo), ((addr + 1) & 0xFFFF, False, hi)]
 
-        if prefix10 == 0b1111011010:    # SB.RR rd, rs
+        if prefix10 == 0b1111011010:    # SB.R rd, rs
             rd = (ir >> 3) & 7
             addr = self.regs[ir & 7]
             return [(addr, False, self.regs[rd] & 0xFF)]

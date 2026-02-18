@@ -99,7 +99,7 @@ async def test_reset_pin_trace(dut):
 
 @cocotb.test()
 async def test_reset_with_nop_program(dut):
-    """Same trace but with all-NOP RAM (ADDI R0, 0 = 0x0000).
+    """Same trace but with all-NOP RAM (ADD.I R0, 0 = 0x0000).
 
     Sequential NOPs exercise the basic pipeline without any control flow.
     """

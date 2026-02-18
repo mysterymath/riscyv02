@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2024 mysterymath
 # SPDX-License-Identifier: Apache-2.0
 #
-# Branch and jump tests: JR, JALR, J, JAL, BZ/BNZ, single-step.
+# Branch and jump tests: J.R, JAL.R, J, JAL, BZ/BNZ, single-step.
 
 import cocotb
 from cocotb.clock import Clock
@@ -11,7 +11,7 @@ from test_helpers import *
 
 @cocotb.test()
 async def test_jr_computed(dut):
-    """Load an address into a register, then JR to it."""
+    """Load an address into a register, then J.R to it."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -37,7 +37,7 @@ async def test_jr_computed(dut):
 
 @cocotb.test()
 async def test_jr_after_lw(dut):
-    """JR using a register value loaded by the immediately preceding LW."""
+    """J.R using a register value loaded by the immediately preceding LW."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -61,7 +61,7 @@ async def test_jr_after_lw(dut):
     lo = _read_ram(dut, 0x0050)
     hi = _read_ram(dut, 0x0051)
     assert lo == 0x00 and hi == 0x00, \
-        f"SW at JR target did not execute (expected 0x0000, got {lo:#04x}{hi:#04x})"
+        f"SW at J.R target did not execute (expected 0x0000, got {lo:#04x}{hi:#04x})"
 
 
 @cocotb.test()
@@ -120,7 +120,7 @@ async def test_j_jal(dut):
 
 @cocotb.test()
 async def test_jalr(dut):
-    """JALR: jump to rs+off, save return addr in rs."""
+    """JAL.R: jump to rs+off, save return addr in rs."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -137,7 +137,7 @@ async def test_jalr(dut):
     await ClockCycles(dut.clk, 200)
 
     val = _read_ram(dut, 0x0050) | (_read_ram(dut, 0x0051) << 8)
-    assert val == 0x0004, f"JALR link: expected 0x0004, got {val:#06x}"
+    assert val == 0x0004, f"JAL.R link: expected 0x0004, got {val:#06x}"
 
 
 @cocotb.test()
@@ -319,13 +319,13 @@ async def test_bnz_not_taken(dut):
 
 @cocotb.test()
 async def test_jr_ignores_low_bit(dut):
-    """JR ignores bit 0 of the computed target address."""
+    """J.R ignores bit 0 of the computed target address."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     # R1 = 0x0011 (odd)
     _place(prog, 0x0000, _encode_li(rd=1, imm=0x11))
-    # JR R1, 0 → should jump to 0x0010 (bit 0 ignored), not 0x0011
+    # J.R R1, 0 → should jump to 0x0010 (bit 0 ignored), not 0x0011
     _place(prog, 0x0002, _encode_jr(rs=1, imm=0))
     # At 0x0010: identifiable instruction proves we arrived correctly
     _place(prog, 0x0010, _encode_li(rd=3, imm=0x42))
@@ -336,4 +336,4 @@ async def test_jr_ignores_low_bit(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0x0042, f"JR should ignore bit 0: expected 0x0042, got {val:#06x}"
+    assert val == 0x0042, f"J.R should ignore bit 0: expected 0x0042, got {val:#06x}"

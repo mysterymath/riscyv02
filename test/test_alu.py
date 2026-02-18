@@ -76,7 +76,7 @@ async def test_li_basic(dut):
 
 @cocotb.test()
 async def test_addi_basic(dut):
-    """ADDI rd, imm9 adds immediate to register."""
+    """ADD.I rd, imm9 adds immediate to register."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -96,7 +96,7 @@ async def test_addi_basic(dut):
 
 @cocotb.test()
 async def test_logic_imm(dut):
-    """ANDI, ORI, XORI with 8-bit zero-extended immediates."""
+    """AND.I, OR.I, XOR.I with 8-bit zero-extended immediates."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -119,9 +119,9 @@ async def test_logic_imm(dut):
     v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
     v2 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
     v3 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
-    assert v1 == 0x000F, f"ANDI: expected 0x000F, got {v1:#06x}"
-    assert v2 == 0x0013, f"ORI: expected 0x0013, got {v2:#06x}"
-    assert v3 == 0x00FF, f"XORI: expected 0x0055, got {v3:#06x}"
+    assert v1 == 0x000F, f"AND.I: expected 0x000F, got {v1:#06x}"
+    assert v2 == 0x0013, f"OR.I: expected 0x0013, got {v2:#06x}"
+    assert v3 == 0x00FF, f"XOR.I: expected 0x0055, got {v3:#06x}"
 
 
 @cocotb.test()
@@ -149,7 +149,7 @@ async def test_lui(dut):
 
 @cocotb.test()
 async def test_shifts(dut):
-    """SLLI, SRLI, SRAI basic."""
+    """SLL.I, SRL.I, SRA.I basic."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -173,9 +173,9 @@ async def test_shifts(dut):
     v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
     v2 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
     v3 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
-    assert v1 == 16, f"SLLI 1<<4: expected 16, got {v1}"
-    assert v2 == 0x10, f"SRLI 0x100>>4: expected 0x10, got {v2:#06x}"
-    assert v3 == 0xFFFC, f"SRAI -16>>2: expected 0xFFFC, got {v3:#06x}"
+    assert v1 == 16, f"SLL.I 1<<4: expected 16, got {v1}"
+    assert v2 == 0x10, f"SRL.I 0x100>>4: expected 0x10, got {v2:#06x}"
+    assert v3 == 0xFFFC, f"SRA.I -16>>2: expected 0xFFFC, got {v3:#06x}"
 
 
 @cocotb.test()
@@ -224,7 +224,7 @@ async def test_auipc(dut):
 
 @cocotb.test()
 async def test_slti_sltui_xorif(dut):
-    """SLTI, SLTUI, XORIF all write result to R1."""
+    """SLT.I, SLTU.I, XOR.IF all write result to R1."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -248,10 +248,10 @@ async def test_slti_sltui_xorif(dut):
     v2 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
     v3 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
     v4 = _read_ram(dut, 0x0046) | (_read_ram(dut, 0x0047) << 8)
-    assert v1 == 1, f"SLTI 5<10: expected 1, got {v1}"
-    assert v2 == 0, f"SLTI 5<3: expected 0, got {v2}"
-    assert v3 == 0, f"XORIF 5^5: expected 0, got {v3}"
-    assert v4 == 6, f"XORIF 5^3: expected 6, got {v4}"
+    assert v1 == 1, f"SLT.I 5<10: expected 1, got {v1}"
+    assert v2 == 0, f"SLT.I 5<3: expected 0, got {v2}"
+    assert v3 == 0, f"XOR.IF 5^5: expected 0, got {v3}"
+    assert v4 == 6, f"XOR.IF 5^3: expected 6, got {v4}"
 
 
 @cocotb.test()
@@ -306,7 +306,7 @@ async def test_sub_borrow(dut):
 
 @cocotb.test()
 async def test_addi_negative(dut):
-    """ADDI with negative immediate."""
+    """ADD.I with negative immediate."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -319,12 +319,12 @@ async def test_addi_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 7, f"ADDI -3 failed! Got {val}"
+    assert val == 7, f"ADD.I -3 failed! Got {val}"
 
 
 @cocotb.test()
 async def test_addi_overflow(dut):
-    """ADDI overflow wraps at 16 bits."""
+    """ADD.I overflow wraps at 16 bits."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -338,7 +338,7 @@ async def test_addi_overflow(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0x0001, f"ADDI overflow! Got {val:#06x}"
+    assert val == 0x0001, f"ADD.I overflow! Got {val:#06x}"
 
 
 @cocotb.test()
@@ -417,7 +417,7 @@ async def test_sra_negative(dut):
 
 @cocotb.test()
 async def test_slli_by_8(dut):
-    """SLLI by 8 crosses byte boundary."""
+    """SLL.I by 8 crosses byte boundary."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -430,12 +430,12 @@ async def test_slli_by_8(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0x2B00, f"SLLI by 8 failed! Got {val:#06x}"
+    assert val == 0x2B00, f"SLL.I by 8 failed! Got {val:#06x}"
 
 
 @cocotb.test()
 async def test_srai_negative(dut):
-    """SRAI preserves sign for negative numbers."""
+    """SRA.I preserves sign for negative numbers."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -449,7 +449,7 @@ async def test_srai_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0xF800, f"SRAI negative failed! Got {val:#06x}"
+    assert val == 0xF800, f"SRA.I negative failed! Got {val:#06x}"
 
 
 @cocotb.test()
@@ -703,7 +703,7 @@ async def test_li_zero(dut):
 
 @cocotb.test()
 async def test_andi_all_ones(dut):
-    """ANDI R1, 0xFF: 0xABCD & 0x00FF = 0x00CD (zero-ext imm8)."""
+    """AND.I R1, 0xFF: 0xABCD & 0x00FF = 0x00CD (zero-ext imm8)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -722,7 +722,7 @@ async def test_andi_all_ones(dut):
 
 @cocotb.test()
 async def test_ori_all_ones(dut):
-    """ORI R1, 0xFF: 0x1234 | 0x00FF = 0x12FF (zero-ext imm8)."""
+    """OR.I R1, 0xFF: 0x1234 | 0x00FF = 0x12FF (zero-ext imm8)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -741,7 +741,7 @@ async def test_ori_all_ones(dut):
 
 @cocotb.test()
 async def test_xori_all_ones(dut):
-    """XORI R1, 0xFF: 0x1234 ^ 0x00FF = 0x12CB (zero-ext imm8)."""
+    """XOR.I R1, 0xFF: 0x1234 ^ 0x00FF = 0x12CB (zero-ext imm8)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -760,7 +760,7 @@ async def test_xori_all_ones(dut):
 
 @cocotb.test()
 async def test_slti_negative(dut):
-    """SLTI: -2 < -1 -> R1 = 1 (signed compare)."""
+    """SLT.I: -2 < -1 -> R1 = 1 (signed compare)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -778,7 +778,7 @@ async def test_slti_negative(dut):
 
 @cocotb.test()
 async def test_slti_equal(dut):
-    """SLTI: 5 < 5 -> R1 = 0."""
+    """SLT.I: 5 < 5 -> R1 = 0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -796,7 +796,7 @@ async def test_slti_equal(dut):
 
 @cocotb.test()
 async def test_sltui_true(dut):
-    """SLTUI: 5 <u 10 -> R1 = 1."""
+    """SLTU.I: 5 <u 10 -> R1 = 1."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -814,7 +814,7 @@ async def test_sltui_true(dut):
 
 @cocotb.test()
 async def test_sltui_false(dut):
-    """SLTUI: 0xFFFF <u sext(3)=3 -> R1 = 0."""
+    """SLTU.I: 0xFFFF <u sext(3)=3 -> R1 = 0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -832,7 +832,7 @@ async def test_sltui_false(dut):
 
 @cocotb.test()
 async def test_xorif_equality(dut):
-    """XORIF: 5 ^ 5 = 0 (equality test pattern)."""
+    """XOR.IF: 5 ^ 5 = 0 (equality test pattern)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -1028,7 +1028,7 @@ async def test_sra_by_15_negative(dut):
 
 @cocotb.test()
 async def test_srli_by_8(dut):
-    """SRLI R1, 8: 0xAB00 >> 8 = 0x00AB."""
+    """SRL.I R1, 8: 0xAB00 >> 8 = 0x00AB."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -1047,7 +1047,7 @@ async def test_srli_by_8(dut):
 
 @cocotb.test()
 async def test_srai_by_15_negative(dut):
-    """SRAI R1, 15: 0x8000 >>s 15 = 0xFFFF."""
+    """SRA.I R1, 15: 0x8000 >>s 15 = 0xFFFF."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
