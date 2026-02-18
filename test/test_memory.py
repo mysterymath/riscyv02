@@ -11,7 +11,7 @@ from test_helpers import *
 
 @cocotb.test()
 async def test_lw_sw_jr_basic(dut):
-    """LW from memory, SW to memory, J.R to spin loop."""
+    """LW from memory, SW to memory, JR to spin loop."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -165,16 +165,16 @@ async def test_byte_negative_offset(dut):
 
 @cocotb.test()
 async def test_sp_lw_sw(dut):
-    """LW.S/SW.S: word load/store via R7 (SP) with offset."""
+    """LWS/SWS: word load/store via R7 (SP) with offset."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     prog = {}
     prog[0x0030] = 0xEF
     prog[0x0031] = 0xBE
-    # LW.S R1, 0x30 — load from R7+0x30 = 0x0030
+    # LWS R1, 0x30 — load from R7+0x30 = 0x0030
     _place(prog, 0x0000, _encode_lw_s(rd=1, imm=0x30))
-    # SW.S R1, 0x50 — store to R7+0x50 = 0x0050
+    # SWS R1, 0x50 — store to R7+0x50 = 0x0050
     _place(prog, 0x0002, _encode_sw_s(rd=1, imm=0x50))
     _place(prog, 0x0004, _spin(0x0004))
 
@@ -188,20 +188,20 @@ async def test_sp_lw_sw(dut):
 
 @cocotb.test()
 async def test_sp_lb_sb(dut):
-    """LB.S/LBU.S/SB.S: byte load/store via R7 (SP)."""
+    """LBS/LBUS/SBS: byte load/store via R7 (SP)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     prog = {}
     prog[0x0030] = 0x85
 
-    # LB.S R1, 0x30 — sign-extend load from R7+0x30
+    # LBS R1, 0x30 — sign-extend load from R7+0x30
     _place(prog, 0x0000, _encode_lb_s(rd=1, imm=0x30))
     _place(prog, 0x0002, _encode_sw_s(rd=1, imm=0x40))
-    # LBU.S R2, 0x30 — zero-extend load from R7+0x30
+    # LBUS R2, 0x30 — zero-extend load from R7+0x30
     _place(prog, 0x0004, _encode_lbu_s(rd=2, imm=0x30))
     _place(prog, 0x0006, _encode_sw_s(rd=2, imm=0x42))
-    # SB.S R1, 0x44 — store low byte of R1
+    # SBS R1, 0x44 — store low byte of R1
     _place(prog, 0x0008, _encode_sb_s(rd=1, imm=0x44))
     _place(prog, 0x000A, _spin(0x000A))
 
@@ -212,9 +212,9 @@ async def test_sp_lb_sb(dut):
     v_lb = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
     v_lbu = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
     v_sb = _read_ram(dut, 0x0044)
-    assert v_lb == 0xFF85, f"LB.S: expected 0xFF85, got {v_lb:#06x}"
-    assert v_lbu == 0x0085, f"LBU.S: expected 0x0085, got {v_lbu:#06x}"
-    assert v_sb == 0x85, f"SB.S: expected 0x85, got {v_sb:#04x}"
+    assert v_lb == 0xFF85, f"LBS: expected 0xFF85, got {v_lb:#06x}"
+    assert v_lbu == 0x0085, f"LBUS: expected 0x0085, got {v_lbu:#06x}"
+    assert v_sb == 0x85, f"SBS: expected 0x85, got {v_sb:#04x}"
 
 
 @cocotb.test()
@@ -226,10 +226,10 @@ async def test_sp_negative_offset(dut):
     prog = {}
     # Set R7 = 0x50
     _place(prog, 0x0000, _encode_li(rd=7, imm=0x50))
-    # Store data: LI R1, 0x42; SW.S R1, -2 → stores at R7-2 = 0x4E
+    # Store data: LI R1, 0x42; SWS R1, -2 → stores at R7-2 = 0x4E
     _place(prog, 0x0002, _encode_li(rd=1, imm=0x42))
     _place(prog, 0x0004, _encode_sw_s(rd=1, imm=-2))
-    # Load it back: LW.S R2, -2 → loads from 0x4E
+    # Load it back: LWS R2, -2 → loads from 0x4E
     _place(prog, 0x0006, _encode_lw_s(rd=2, imm=-2))
     # Store R2 to a known location for checking
     _place(prog, 0x0008, _encode_sw_s(rd=2, imm=0x10))  # R7+0x10 = 0x60
@@ -253,9 +253,9 @@ async def test_sp_arbitrary_register(dut):
     prog[0x0030] = 0xCD
     prog[0x0031] = 0xAB
 
-    # Load to R5 (not R0): LW.S R5, 0x30
+    # Load to R5 (not R0): LWS R5, 0x30
     _place(prog, 0x0000, _encode_lw_s(rd=5, imm=0x30))
-    # Store from R5: SW.S R5, 0x50
+    # Store from R5: SWS R5, 0x50
     _place(prog, 0x0002, _encode_sw_s(rd=5, imm=0x50))
     _place(prog, 0x0004, _spin(0x0004))
 

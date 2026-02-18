@@ -82,11 +82,11 @@ async def test_sltu_rd_eq_rs2(dut):
 
 @cocotb.test()
 async def test_slti_rd_eq_rs(dut):
-    """SLT.I R1, 1: source R1 == dest R1. Hi byte corrupted by pre-clear."""
+    """SLTI R1, 1: source R1 == dest R1. Hi byte corrupted by pre-clear."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
-    # R1 = 0x0100 (256). SLT.I R1, 1: signed 256 < 1 → false → R1 = 0.
+    # R1 = 0x0100 (256). SLTI R1, 1: signed 256 < 1 → false → R1 = 0.
     # Bug: R1_hi cleared → comparison becomes 0 < 1 → true → 1.
     pc = _load_r16(prog, 0x0000, 0x60, rd=1, val=0x0100)
     _place(prog, pc, _encode_slti(rs=1, imm=1)); pc += 2
@@ -97,7 +97,7 @@ async def test_slti_rd_eq_rs(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x40) | (_read_ram(dut, 0x41) << 8)
-    assert val == 0x0000, f"SLT.I rd==rs: expected 0 (256 not < 1), got {val:#06x}"
+    assert val == 0x0000, f"SLTI rd==rs: expected 0 (256 not < 1), got {val:#06x}"
 
 
 @cocotb.test()
@@ -167,11 +167,11 @@ async def test_sub_rd_eq_rs2(dut):
 
 @cocotb.test()
 async def test_addi_self(dut):
-    """ADD.I R1, 3: always self-overlapping. Safe (lo then hi)."""
+    """ADDI R1, 3: always self-overlapping. Safe (lo then hi)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
-    # R1 = 0x0100. ADD.I R1, 3. Expected: 0x0103.
+    # R1 = 0x0100. ADDI R1, 3. Expected: 0x0103.
     pc = _load_r16(prog, 0x0000, 0x60, rd=1, val=0x0100)
     _place(prog, pc, _encode_addi(rd=1, imm=3)); pc += 2
     pc = _store_r16(prog, pc, 0x40, rs=1)
@@ -181,7 +181,7 @@ async def test_addi_self(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x40) | (_read_ram(dut, 0x41) << 8)
-    assert val == 0x0103, f"ADD.I self: expected 0x0103, got {val:#06x}"
+    assert val == 0x0103, f"ADDI self: expected 0x0103, got {val:#06x}"
 
 
 @cocotb.test()
@@ -206,11 +206,11 @@ async def test_srl_rr_rd_eq_rs2(dut):
 
 @cocotb.test()
 async def test_slli_self(dut):
-    """SLL.I R1, 4: R,4 always self-overlapping. Safe (uses tmp)."""
+    """SLLI R1, 4: R,4 always self-overlapping. Safe (uses tmp)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
-    # R1 = 0x00FF. SLL.I R1, 4. Expected: 0x0FF0.
+    # R1 = 0x00FF. SLLI R1, 4. Expected: 0x0FF0.
     pc = _load_r16(prog, 0x0000, 0x60, rd=1, val=0x00FF)
     _place(prog, pc, _encode_slli(rd=1, shamt=4)); pc += 2
     pc = _store_r16(prog, pc, 0x40, rs=1)
@@ -220,16 +220,16 @@ async def test_slli_self(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x40) | (_read_ram(dut, 0x41) << 8)
-    assert val == 0x0FF0, f"SLL.I self: expected 0x0FF0, got {val:#06x}"
+    assert val == 0x0FF0, f"SLLI self: expected 0x0FF0, got {val:#06x}"
 
 
 @cocotb.test()
 async def test_jalr_link_overlap(dut):
-    """JAL.R R6: jump target register == link register. Safe (lo/hi split)."""
+    """JALR R6: jump target register == link register. Safe (lo/hi split)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
-    # R6 = 0x0040. JAL.R R6, 0 → jump to 0x0040, save return addr to R6.
+    # R6 = 0x0040. JALR R6, 0 → jump to 0x0040, save return addr to R6.
     pc = _load_r16(prog, 0x0000, 0x60, rd=6, val=0x0040)
     jalr_pc = pc
     _place(prog, pc, _encode_jalr(rs=6, imm=0)); pc += 2
@@ -242,12 +242,12 @@ async def test_jalr_link_overlap(dut):
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x50) | (_read_ram(dut, 0x51) << 8)
     expected = jalr_pc + 2
-    assert val == expected, f"JAL.R R6: expected {expected:#06x}, got {val:#06x}"
+    assert val == expected, f"JALR R6: expected {expected:#06x}, got {val:#06x}"
 
 
 @cocotb.test()
 async def test_lw_rr_rd_eq_rs(dut):
-    """LW.R R1, R1: rd == rs. Load overwrites pointer (defined behavior)."""
+    """LWR R1, R1: rd == rs. Load overwrites pointer (defined behavior)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
@@ -263,4 +263,4 @@ async def test_lw_rr_rd_eq_rs(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x40) | (_read_ram(dut, 0x41) << 8)
-    assert val == 0xBEEF, f"LW.R rd==rs: expected 0xBEEF, got {val:#06x}"
+    assert val == 0xBEEF, f"LWR rd==rs: expected 0xBEEF, got {val:#06x}"

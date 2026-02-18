@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LW.S**, **SW.S**, **LB.S**, **LBU.S**, **SB.S**, **LW.R**, **LB.R**, **LBU.R**, **SW.R**, **SB.R**, **J.R**, **JAL.R**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADD.I**, **AND.I**, **OR.I**, **XOR.I**, **SLT.I**, **SLTU.I**, **XOR.IF**, **SLL.I**, **SRL.I**, **SRA.I**, **RETI**, **EPCR**, **EPCW**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling saves the return address to the Exception PC (EPC) register; EPCR/EPCW allow handlers to read and modify it. JAL/JAL.R write return addresses to R6 (the link register); subroutine return is `J.R R6, 0`. R,8-format loads/stores use R0 as an implicit base address register (like R7 for SP-relative ops), while R,R-format loads/stores allow explicit register selection. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LWS**, **SWS**, **LBS**, **LBUS**, **SBS**, **LWR**, **LBR**, **LBUR**, **SWR**, **SBR**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTI**, **SLTUI**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **EPCR**, **EPCW**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling saves the return address to the Exception PC (EPC) register; EPCR/EPCW allow handlers to read and modify it. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. R,8-format loads/stores use R0 as an implicit base address register (like R7 for SP-relative ops), while R,R-format loads/stores allow explicit register selection. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -18,7 +18,7 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 | Transistor count (synth) | 16,244 | 13,176 |
 | SRAM-adjusted | 12,920 | 13,176 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JAL.R + J.R R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADD.I, AND.I, OR.I, XOR.I, SLT.I, SLTU.I, XOR.IF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 1.9% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 1.9% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -69,7 +69,7 @@ RISCY-V02 supports maskable IRQ and non-maskable NMI interrupts.
 | 1 (BRK) | $0004 | BRK instruction, unconditional |
 | 2 (IRQ) | $0006 | IRQB low, level-sensitive, masked by I=1 |
 
-Vector addresses are computed as `(vector_id + 1) * 2`. Each vector slot is one instruction (2 bytes) -- enough for a J.R trampoline to reach the actual handler. IRQ is placed last so its handler can run inline without a jump, since nothing follows it.
+Vector addresses are computed as `(vector_id + 1) * 2`. Each vector slot is one instruction (2 bytes) -- enough for a JR trampoline to reach the actual handler. IRQ is placed last so its handler can run inline without a jump, since nothing follows it.
 
 **Instruction synthesis:** All interrupt entry (IRQ, NMI, BRK) uses the same mechanism. The hardware writes a synthetic INT instruction into the instruction register (ir) encoding the vector ID and destination register (R6). This synthetic instruction then executes through the normal decode path -- no special-case interrupt logic in the execute unit. IRQ and NMI are *internal opcodes*: they use instruction encodings synthesized by the interrupt controller rather than fetched from memory. BRK is the software-accessible form of the same instruction family. Since all three share the same encoding format, software can also trigger IRQ/NMI vectors directly by encoding the corresponding INT instruction.
 
@@ -109,7 +109,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | Register | Name | Suggested Purpose |
 |---|---|---|
 | R0 | a0 | Accumulator / implicit base address (R,8 format loads/stores) |
-| R1 | a1 | Argument / comparison result (SLT.I/SLTU.I/XOR.IF dest) |
+| R1 | a1 | Argument / comparison result (SLTI/SLTUI/XORIF dest) |
 | R2 | t0 | Temporary 0 |
 | R3 | t1 | Temporary 1 |
 | R4 | s0 | Saved register 0 |
@@ -117,17 +117,17 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | R6 | ra | Return address (link register) |
 | R7 | sp | Stack pointer |
 
-R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. SLT.I, SLTU.I, and XOR.IF write their result to R1 (non-destructive compare/test patterns that preserve both R0 and the source register). R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
+R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. SLTI, SLTUI, and XORIF write their result to R1 (non-destructive compare/test patterns that preserve both R0 and the source register). R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
 
 ### Link Register (R6)
 
-R6 serves as the link register. JAL and JAL.R write the return address (PC+2) to R6. Subroutine return is `J.R R6, 0`. Since R6 is a regular GPR, it can be saved/restored with normal load/store instructions. R6 is callee-saved: any function that makes calls must save R6 on entry and restore it before returning.
+R6 serves as the link register. JAL and JALR write the return address (PC+2) to R6. Subroutine return is `JR R6, 0`. Since R6 is a regular GPR, it can be saved/restored with normal load/store instructions. R6 is callee-saved: any function that makes calls must save R6 on entry and restore it before returning.
 
 R6 is a normal register in all contexts, including interrupt handlers. The interrupt return address is stored in the EPC register (see Interrupts section), not in R6. Interrupt handlers that need to use R6 (or any other register) must save and restore it manually.
 
 ## Instruction Encoding
 
-All instructions are 16 bits. The encoding uses a **variable-width prefix-free** scheme: shorter prefixes for more common instructions. The word `0x0000` is ADD.I R0, 0 = NOP.
+All instructions are 16 bits. The encoding uses a **variable-width prefix-free** scheme: shorter prefixes for more common instructions. The word `0x0000` is ADDI R0, 0 = NOP.
 
 ### Encoding Overview
 
@@ -149,30 +149,30 @@ Capacity = how many instructions of that format could fit in the total free spac
 
 ```
 --- R,8 format (5-bit prefix) ---
-00000   ADD.I    rd = rd + sext(imm8)
+00000   ADDI    rd = rd + sext(imm8)
 00001   LI      rd = sext(imm8)
 00010   LW      rd = mem16[R0 + sext(imm8)]
 00011   LB      rd = sext(mem[R0 + sext(imm8)])
 00100   LBU     rd = zext(mem[R0 + sext(imm8)])
 00101   SW      mem16[R0 + sext(imm8)] = rs
 00110   SB      mem[R0 + sext(imm8)] = rs[7:0]
-00111   J.R      pc = rs + sext(imm8) << 1
-01000   JAL.R    rs = pc+2; pc = rs + sext(imm8) << 1
+00111   JR      pc = rs + sext(imm8) << 1
+01000   JALR    rs = pc+2; pc = rs + sext(imm8) << 1
 
 
-01001   AND.I    rd = rd & zext(imm8)
-01010   OR.I     rd = rd | zext(imm8)
-01011   XOR.I    rd = rd ^ zext(imm8)
-01100   SLT.I    R1 = (rs < sext(imm8)) ? 1 : 0   (signed)
-01101   SLTU.I   R1 = (rs <u sext(imm8)) ? 1 : 0  (unsigned)
+01001   ANDI    rd = rd & zext(imm8)
+01010   ORI     rd = rd | zext(imm8)
+01011   XORI    rd = rd ^ zext(imm8)
+01100   SLTI    R1 = (rs < sext(imm8)) ? 1 : 0   (signed)
+01101   SLTUI   R1 = (rs <u sext(imm8)) ? 1 : 0  (unsigned)
 01110   BZ      if rs == 0, pc += sext(imm8) << 1
 01111   BNZ     if rs != 0, pc += sext(imm8) << 1
-10000   XOR.IF   R1 = rs ^ zext(imm8)
-10001   LW.S    rd = mem16[R7 + sext(imm8)]
-10010   LB.S    rd = sext(mem[R7 + sext(imm8)])
-10011   LBU.S   rd = zext(mem[R7 + sext(imm8)])
-10100   SW.S    mem16[R7 + sext(imm8)] = rs
-10101   SB.S    mem[R7 + sext(imm8)] = rs[7:0]
+10000   XORIF   R1 = rs ^ zext(imm8)
+10001   LWS    rd = mem16[R7 + sext(imm8)]
+10010   LBS    rd = sext(mem[R7 + sext(imm8)])
+10011   LBUS   rd = zext(mem[R7 + sext(imm8)])
+10100   SWS    mem16[R7 + sext(imm8)] = rs
+10101   SBS    mem[R7 + sext(imm8)] = rs[7:0]
 
 --- R,7 format (6-bit prefix) ---
 110100  LUI     rd = sext(imm7) << 9
@@ -195,16 +195,16 @@ Capacity = how many instructions of that format could fit in the total free spac
 1111001 SRA     rd = rs1 >>s rs2[3:0]
 
 --- R,4 format (9-bit prefix) ---
-111101000  SLL.I   rd = rd << shamt
-111101001  SRL.I   rd = rd >>u shamt
-111101010  SRA.I   rd = rd >>s shamt
+111101000  SLLI   rd = rd << shamt
+111101001  SRLI   rd = rd >>u shamt
+111101010  SRAI   rd = rd >>s shamt
 
 --- R,R format (10-bit prefix) ---
-1111010110  LW.R    rd = mem16[rs]
-1111010111  LB.R    rd = sext(mem[rs])
-1111011000  LBU.R   rd = zext(mem[rs])
-1111011001  SW.R    mem16[rs] = rd
-1111011010  SB.R    mem[rs] = rd[7:0]
+1111010110  LWR    rd = mem16[rs]
+1111010111  LBR    rd = sext(mem[rs])
+1111011000  LBUR   rd = zext(mem[rs])
+1111011001  SWR    mem16[rs] = rd
+1111011010  SBR    mem[rs] = rd[7:0]
 
 --- System format (10-bit prefix + sub) ---
 1111100000 000001  SEI    I = 1
@@ -223,11 +223,11 @@ All other encodings execute as NOP (2-cycle no-op).
 
 ### R,9 Format -- Loads, Stores, Immediate, Jumps
 
-#### ADD.I -- Add Immediate
+#### ADDI -- Add Immediate
 
 `rd = rd + sext(imm8)` -- 2 cycles
 
-Adds a sign-extended 8-bit immediate (-128 to +127) to the destination register. `ADD.I R0, 0` (encoding `0x0000`) is the canonical NOP. Useful for stack pointer adjustments and small constant additions. Pairs with LUI for full 16-bit constant loading: `LUI rd, hi; ADD.I rd, lo`.
+Adds a sign-extended 8-bit immediate (-128 to +127) to the destination register. `ADDI R0, 0` (encoding `0x0000`) is the canonical NOP. Useful for stack pointer adjustments and small constant additions. Pairs with LUI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`.
 
 #### LI -- Load Immediate
 
@@ -265,44 +265,44 @@ Stores the register at ir[2:0] as a 16-bit word to memory. R0 is the implicit ba
 
 Stores the low byte of the register at ir[2:0] to memory. R0 is the implicit base address.
 
-#### J.R -- Jump Register
+#### JR -- Jump Register
 
 `PC = rs + sext(imm8) << 1` -- 4 cycles
 
 Unconditional jump to a register plus a scaled signed offset. The 8-bit offset is shifted left by 1, giving a range of -256 to +254 bytes from the register value.
 
-#### JAL.R -- Jump and Link Register
+#### JALR -- Jump and Link Register
 
 `rs = PC+2; PC = rs + sext(imm8) << 1` -- 4 cycles
 
-Register-indirect jump that saves the return address in the source register. In the R,8 format, the single register field serves as both jump base and link destination. The conventional call sequence uses R6: `JAL.R R6, offset` reads the jump target from R6, then writes the return address back to R6. Pairs with AUIPC for full 16-bit PC-relative function calls: `AUIPC t0, upper; JAL.R t0, lower`.
+Register-indirect jump that saves the return address in the source register. In the R,8 format, the single register field serves as both jump base and link destination. The conventional call sequence uses R6: `JALR R6, offset` reads the jump target from R6, then writes the return address back to R6. Pairs with AUIPC for full 16-bit PC-relative function calls: `AUIPC t0, upper; JALR t0, lower`.
 
 
-#### AND.I -- And Immediate
+#### ANDI -- And Immediate
 
 `rd = rd & zext(imm8)` -- 2 cycles
 
 Bitwise AND with a zero-extended 8-bit immediate (0 to 255). Only the low byte is masked; the high byte of rd is always cleared.
 
-#### OR.I -- Or Immediate
+#### ORI -- Or Immediate
 
 `rd = rd | zext(imm8)` -- 2 cycles
 
 Bitwise OR with a zero-extended 8-bit immediate. Sets bits in the low byte without affecting the high byte.
 
-#### XOR.I -- Xor Immediate
+#### XORI -- Xor Immediate
 
 `rd = rd ^ zext(imm8)` -- 2 cycles
 
 Bitwise XOR with a zero-extended 8-bit immediate. Toggles bits in the low byte without affecting the high byte.
 
-#### SLT.I -- Set Less Than Immediate (Signed)
+#### SLTI -- Set Less Than Immediate (Signed)
 
 `R1 = (rs < sext(imm8)) ? 1 : 0` -- 2 cycles
 
-Compares the source register against a sign-extended 8-bit immediate (-128 to +127) as signed integers. The result (0 or 1) is written to R1, preserving both R0 (the base register) and the source register. Pattern: `SLT.I rs, val; BNZ R1, target` (branch if rs < val).
+Compares the source register against a sign-extended 8-bit immediate (-128 to +127) as signed integers. The result (0 or 1) is written to R1, preserving both R0 (the base register) and the source register. Pattern: `SLTI rs, val; BNZ R1, target` (branch if rs < val).
 
-#### SLTU.I -- Set Less Than Immediate (Unsigned)
+#### SLTUI -- Set Less Than Immediate (Unsigned)
 
 `R1 = (rs <u sext(imm8)) ? 1 : 0` -- 2 cycles
 
@@ -320,11 +320,11 @@ Branches to a PC-relative target if the source register is zero. The 8-bit signe
 
 Branches to a PC-relative target if the source register is non-zero. Pairs with SLT/SLTU: `SLT t, a, b; BNZ t, target` (branch if less than).
 
-#### XOR.IF -- Xor Immediate (Fixed-Destination)
+#### XORIF -- Xor Immediate (Fixed-Destination)
 
 `R1 = rs ^ zext(imm8)` -- 2 cycles
 
-Bitwise XOR of the source register with a zero-extended 8-bit immediate, writing the result to R1 while preserving both R0 and the source register. Useful for equality testing: if rs equals zext(imm8), R1 will be zero. Pattern: `XOR.IF rs, val; BZ R1, equal_label`.
+Bitwise XOR of the source register with a zero-extended 8-bit immediate, writing the result to R1 while preserving both R0 and the source register. Useful for equality testing: if rs equals zext(imm8), R1 will be zero. Pattern: `XORIF rs, val; BZ R1, equal_label`.
 
 ### R,7 Format -- Upper Immediate
 
@@ -332,13 +332,13 @@ Bitwise XOR of the source register with a zero-extended 8-bit immediate, writing
 
 `rd = sext(imm7) << 9` -- 2 cycles
 
-Loads a sign-extended 7-bit immediate, shifted left by 9, into a register. The low 9 bits are cleared. The immediate range is -64 to +63, covering the full 16-bit address space when shifted. Pairs with ADD.I for full 16-bit constant loading: `LUI rd, hi; ADD.I rd, lo`.
+Loads a sign-extended 7-bit immediate, shifted left by 9, into a register. The low 9 bits are cleared. The immediate range is -64 to +63, covering the full 16-bit address space when shifted. Pairs with ADDI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`.
 
 #### AUIPC -- Add Upper Immediate to PC
 
 `rd = (PC+2) + (sext(imm7) << 9)` -- 2 cycles
 
-Adds a sign-extended 7-bit immediate, shifted left by 9, to the address of the next instruction (PC+2). Pairs with LW/SW/J.R's offset for PC-relative addressing: AUIPC provides the upper bits and the subsequent load/store/jump provides the lower bits.
+Adds a sign-extended 7-bit immediate, shifted left by 9, to the address of the next instruction (PC+2). Pairs with LW/SW/JR's offset for PC-relative addressing: AUIPC provides the upper bits and the subsequent load/store/jump provides the lower bits.
 
 ### "10" Format -- PC-Relative Jumps
 
@@ -352,7 +352,7 @@ Unconditional PC-relative jump. The 10-bit signed offset is shifted left by 1, g
 
 `R6 = PC+2; PC += sext(off10) << 1` -- 4 cycles
 
-Unconditional PC-relative jump that saves the return address in R6. Used for subroutine calls; return with `J.R R6, 0`.
+Unconditional PC-relative jump that saves the return address in R6. Used for subroutine calls; return with `JR R6, 0`.
 
 ### R,R,R Format -- Register ALU
 
@@ -398,19 +398,19 @@ Shifts rs1 right by the amount in rs2 (low 4 bits). Vacated bits are filled with
 
 All shift immediate instructions are 2 cycles and operate in-place (rd = rd shift shamt).
 
-#### SLL.I -- `rd = rd << shamt` (shamt 0-15)
-#### SRL.I -- `rd = rd >>u shamt` (shamt 0-15)
-#### SRA.I -- `rd = rd >>s shamt` (shamt 0-15)
+#### SLLI -- `rd = rd << shamt` (shamt 0-15)
+#### SRLI -- `rd = rd >>u shamt` (shamt 0-15)
+#### SRAI -- `rd = rd >>s shamt` (shamt 0-15)
 
 ### R,R Format -- Register Load/Store
 
 R,R-format loads and stores use explicit registers for both data and base, with no offset.
 
-#### LW.R -- `rd = MEM16[rs]` -- 4 cycles
-#### LB.R -- `rd = sext(MEM[rs])` -- 3 cycles
-#### LBU.R -- `rd = zext(MEM[rs])` -- 3 cycles
-#### SW.R -- `MEM16[rs] = rd` -- 4 cycles
-#### SB.R -- `MEM[rs] = rd[7:0]` -- 3 cycles
+#### LWR -- `rd = MEM16[rs]` -- 4 cycles
+#### LBR -- `rd = sext(MEM[rs])` -- 3 cycles
+#### LBUR -- `rd = zext(MEM[rs])` -- 3 cycles
+#### SWR -- `MEM16[rs] = rd` -- 4 cycles
+#### SBR -- `MEM[rs] = rd[7:0]` -- 3 cycles
 
 ### System Format
 
@@ -476,14 +476,14 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADD.I/AND.I/OR.I/XOR.I/SLT.I/SLTU.I/XOR.IF/SLL.I/SRL.I/SRA.I | 2 | 1 execute + 1 overlapped fetch |
+| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
 | SEI/CLI | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (taken) | 4 | 2 execute + 2 fetch after redirect |
-| LB/LBU/LB.S/LBU.S/LB.R/LBU.R | 3 | 2 address + 1 byte read (sign/zero-extend at E_MEM_LO) |
-| SB/SB.S/SB.R | 3 | 2 address + 1 byte written |
-| LW/SW/LW.S/SW.S/LW.R/SW.R | 4 | 2 address + 2 bytes transferred |
-| J.R/JAL.R | 4 | 2 execute + 2 fetch after redirect |
+| LB/LBU/LBS/LBUS/LBR/LBUR | 3 | 2 address + 1 byte read (sign/zero-extend at E_MEM_LO) |
+| SB/SBS/SBR | 3 | 2 address + 1 byte written |
+| LW/SW/LWS/SWS/LWR/SWR | 4 | 2 address + 2 bytes transferred |
+| JR/JALR | 4 | 2 execute + 2 fetch after redirect |
 | J/JAL | 4 | 2 execute + 2 fetch after redirect |
 | RETI | 4 | 2 execute + 2 fetch after redirect |
 | INT (BRK) | 4 | 2 execute + 2 fetch after redirect |
@@ -494,7 +494,7 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | IRQ entry | 4 | 2 execute (save EPC) + 2 fetch |
 | NMI entry | 4 | 2 execute (save EPC) + 2 fetch |
 
-Instructions that redirect (J.R, JAL.R, J, JAL, RETI, branches taken) flush the speculative fetch and must wait for new instruction bytes. Non-redirecting instructions benefit from fetch/execute overlap.
+Instructions that redirect (JR, JALR, J, JAL, RETI, branches taken) flush the speculative fetch and must wait for new instruction bytes. Non-redirecting instructions benefit from fetch/execute overlap.
 
 ### Self-Modifying Code
 
@@ -512,7 +512,7 @@ target:         ; this instruction sees the stored value
 
 Without the fence, `target` would execute the *old* instruction encoding that was fetched in parallel with the store.
 
-This also applies to word stores (SW/SW.R): both bytes are written before the instruction two past the store is fetched. A single fence instruction is always sufficient.
+This also applies to word stores (SW/SWR): both bytes are written before the instruction two past the store is fetched. A single fence instruction is always sufficient.
 
 ## RDY and SYNC Signals
 

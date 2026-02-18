@@ -112,12 +112,12 @@ def _encode_sb(rs, imm):
     return _encode_r8(0b00110, imm, rs)
 
 def _encode_jr(rs, imm):
-    """J.R: pc = rs + sext(imm). Byte offset, no shift."""
+    """JR: pc = rs + sext(imm). Byte offset, no shift."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b00111, imm, rs)
 
 def _encode_jalr(rs, imm):
-    """JAL.R: rs=pc+2; pc = rs + sext(imm). Byte offset, no shift."""
+    """JALR: rs=pc+2; pc = rs + sext(imm). Byte offset, no shift."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b01000, imm, rs)
 
@@ -134,12 +134,12 @@ def _encode_xori(rd, imm):
     return _encode_r8(0b01011, imm, rd)
 
 def _encode_slti(rs, imm):
-    """SLT.I: R0 = (rs < sext(imm)) ? 1 : 0. Dest is R0."""
+    """SLTI: R0 = (rs < sext(imm)) ? 1 : 0. Dest is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b01100, imm, rs)
 
 def _encode_sltui(rs, imm):
-    """SLTU.I: R0 = (rs <u sext(imm)) ? 1 : 0. Dest is R0."""
+    """SLTUI: R0 = (rs <u sext(imm)) ? 1 : 0. Dest is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b01101, imm, rs)
 
@@ -170,32 +170,32 @@ def _encode_bnz(rs, imm):
     return _encode_r8(0b01111, scrambled, rs)
 
 def _encode_xorif(rs, imm):
-    """XOR.IF: R0 = rs ^ zext(imm). Dest is R0."""
+    """XORIF: R0 = rs ^ zext(imm). Dest is R0."""
     assert 0 <= imm <= 255, f"imm out of range: {imm}"
     return _encode_r8(0b10000, imm, rs)
 
 def _encode_lw_s(rd, imm):
-    """LW.S: rd = mem16[R7 + sext(imm)]. Base is R7 (SP)."""
+    """LWS: rd = mem16[R7 + sext(imm)]. Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b10001, imm, rd)
 
 def _encode_lb_s(rd, imm):
-    """LB.S: rd = sext(mem[R7 + sext(imm)]). Base is R7 (SP)."""
+    """LBS: rd = sext(mem[R7 + sext(imm)]). Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b10010, imm, rd)
 
 def _encode_lbu_s(rd, imm):
-    """LBU.S: rd = zext(mem[R7 + sext(imm)]). Base is R7 (SP)."""
+    """LBUS: rd = zext(mem[R7 + sext(imm)]). Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b10011, imm, rd)
 
 def _encode_sw_s(rd, imm):
-    """SW.S: mem16[R7 + sext(imm)] = rd. Base is R7 (SP)."""
+    """SWS: mem16[R7 + sext(imm)] = rd. Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b10100, imm, rd)
 
 def _encode_sb_s(rd, imm):
-    """SB.S: mem[R7 + sext(imm)] = rd[7:0]. Base is R7 (SP)."""
+    """SBS: mem[R7 + sext(imm)] = rd[7:0]. Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b10101, imm, rd)
 
@@ -287,7 +287,7 @@ def _encode_wai():  return _encode_sys(0b000101)
 def _encode_stp():  return _encode_sys(0b000111)
 
 def _encode_nop():
-    """NOP = ADD.I R0, 0 = 0x0000."""
+    """NOP = ADDI R0, 0 = 0x0000."""
     return (0x00, 0x00)
 
 def _spin(addr=None):

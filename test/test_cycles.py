@@ -11,7 +11,7 @@ from test_helpers import *
 
 @cocotb.test()
 async def test_cycle_count_nop(dut):
-    """NOP (ADD.I R0, 0) takes 2 cycles."""
+    """NOP (ADDI R0, 0) takes 2 cycles."""
     prog = {}
     _place(prog, 0x0000, _encode_nop())
     _place(prog, 0x0002, _spin(0x0002))
@@ -38,11 +38,11 @@ async def test_cycle_count_sw(dut):
 
 @cocotb.test()
 async def test_cycle_count_jr(dut):
-    """J.R (same page) takes 3 cycles."""
+    """JR (same page) takes 3 cycles."""
     prog = {}
-    # J.R R7, 0 → PC = 0+0 = 0x0000 (spin at self), same page = 3 cycles
+    # JR R7, 0 → PC = 0+0 = 0x0000 (spin at self), same page = 3 cycles
     _place(prog, 0x0000, _encode_jr(rs=7, imm=0))
-    await _measure_instruction_cycles(dut, prog, 3, "J.R")
+    await _measure_instruction_cycles(dut, prog, 3, "JR")
 
 
 @cocotb.test()
@@ -130,11 +130,11 @@ async def test_cycle_count_sb(dut):
 
 @cocotb.test()
 async def test_cycle_count_addi(dut):
-    """ADD.I takes 2 cycles (no memory phase)."""
+    """ADDI takes 2 cycles (no memory phase)."""
     prog = {}
     _place(prog, 0x0000, _encode_addi(rd=1, imm=5))
     _place(prog, 0x0002, _spin(0x0002))
-    await _measure_instruction_cycles(dut, prog, 2, "ADD.I")
+    await _measure_instruction_cycles(dut, prog, 2, "ADDI")
 
 
 @cocotb.test()
@@ -345,35 +345,35 @@ async def test_cycle_count_lbu(dut):
 
 @cocotb.test()
 async def test_cycle_count_lw_s(dut):
-    """LW.S takes 4 cycles (same as LW)."""
+    """LWS takes 4 cycles (same as LW)."""
     prog = {}
     _place(prog, 0x0000, _encode_lw_s(rd=1, imm=0x30))
     _place(prog, 0x0002, _spin(0x0002))
-    await _measure_instruction_cycles(dut, prog, 4, "LW.S")
+    await _measure_instruction_cycles(dut, prog, 4, "LWS")
 
 
 @cocotb.test()
 async def test_cycle_count_sw_s(dut):
-    """SW.S takes 4 cycles (same as SW)."""
+    """SWS takes 4 cycles (same as SW)."""
     prog = {}
     _place(prog, 0x0000, _encode_sw_s(rd=1, imm=0x30))
     _place(prog, 0x0002, _spin(0x0002))
-    await _measure_instruction_cycles(dut, prog, 4, "SW.S")
+    await _measure_instruction_cycles(dut, prog, 4, "SWS")
 
 
 @cocotb.test()
 async def test_cycle_count_lb_s(dut):
-    """LB.S takes 3 cycles (same as LB)."""
+    """LBS takes 3 cycles (same as LB)."""
     prog = {}
     _place(prog, 0x0000, _encode_lb_s(rd=1, imm=0x30))
     _place(prog, 0x0002, _spin(0x0002))
-    await _measure_instruction_cycles(dut, prog, 3, "LB.S")
+    await _measure_instruction_cycles(dut, prog, 3, "LBS")
 
 
 @cocotb.test()
 async def test_cycle_count_sb_s(dut):
-    """SB.S takes 3 cycles (same as SB)."""
+    """SBS takes 3 cycles (same as SB)."""
     prog = {}
     _place(prog, 0x0000, _encode_sb_s(rd=1, imm=0x30))
     _place(prog, 0x0002, _spin(0x0002))
-    await _measure_instruction_cycles(dut, prog, 3, "SB.S")
+    await _measure_instruction_cycles(dut, prog, 3, "SBS")

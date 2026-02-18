@@ -810,7 +810,7 @@ async def test_epcw_i_bit(dut):
 
 @cocotb.test()
 async def test_irq_interrupts_jr(dut):
-    """IRQ fires after J.R completes; RETI must return to J.R target."""
+    """IRQ fires after JR completes; RETI must return to JR target."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -840,4 +840,4 @@ async def test_irq_interrupts_jr(dut):
     irq_marker = _read_ram(dut, 0x0060) | (_read_ram(dut, 0x0061) << 8)
     jr_marker = _read_ram(dut, 0x0062) | (_read_ram(dut, 0x0063) << 8)
     assert irq_marker == 0x005A, f"IRQ handler didn't run! Got {irq_marker:#06x}"
-    assert jr_marker == 0x007E, f"RETI didn't return to J.R target! Got {jr_marker:#06x}"
+    assert jr_marker == 0x007E, f"RETI didn't return to JR target! Got {jr_marker:#06x}"
