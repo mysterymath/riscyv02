@@ -224,20 +224,20 @@ async def test_auipc(dut):
 
 @cocotb.test()
 async def test_slti_sltui_xorif(dut):
-    """SLTI, SLTUI, XORIF all write result to R0."""
+    """SLTI, SLTUI, XORIF all write result to R1."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     prog = {}
-    _place(prog, 0x0000, _encode_li(rd=1, imm=5))
-    _place(prog, 0x0002, _encode_slti(rs=1, imm=10))
-    _place(prog, 0x0004, _encode_sw_s(rd=0, imm=0x40))
-    _place(prog, 0x0006, _encode_slti(rs=1, imm=3))
-    _place(prog, 0x0008, _encode_sw_s(rd=0, imm=0x42))
-    _place(prog, 0x000A, _encode_xorif(rs=1, imm=5))
-    _place(prog, 0x000C, _encode_sw_s(rd=0, imm=0x44))
-    _place(prog, 0x000E, _encode_xorif(rs=1, imm=3))
-    _place(prog, 0x0010, _encode_sw_s(rd=0, imm=0x46))
+    _place(prog, 0x0000, _encode_li(rd=2, imm=5))
+    _place(prog, 0x0002, _encode_slti(rs=2, imm=10))
+    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
+    _place(prog, 0x0006, _encode_slti(rs=2, imm=3))
+    _place(prog, 0x0008, _encode_sw_s(rd=1, imm=0x42))
+    _place(prog, 0x000A, _encode_xorif(rs=2, imm=5))
+    _place(prog, 0x000C, _encode_sw_s(rd=1, imm=0x44))
+    _place(prog, 0x000E, _encode_xorif(rs=2, imm=3))
+    _place(prog, 0x0010, _encode_sw_s(rd=1, imm=0x46))
     _place(prog, 0x0012, _spin(0x0012))
 
     _load_program(dut, prog)
@@ -760,13 +760,13 @@ async def test_xori_all_ones(dut):
 
 @cocotb.test()
 async def test_slti_negative(dut):
-    """SLTI: -2 < -1 -> R0 = 1 (signed compare)."""
+    """SLTI: -2 < -1 -> R1 = 1 (signed compare)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=-2))
     _place(prog, 0x0002, _encode_slti(rs=1, imm=-1))
-    _place(prog, 0x0004, _encode_sw_s(rd=0, imm=0x40))
+    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
     _place(prog, 0x0006, _spin(0x0006))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
@@ -778,13 +778,13 @@ async def test_slti_negative(dut):
 
 @cocotb.test()
 async def test_slti_equal(dut):
-    """SLTI: 5 < 5 -> R0 = 0."""
+    """SLTI: 5 < 5 -> R1 = 0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=5))
     _place(prog, 0x0002, _encode_slti(rs=1, imm=5))
-    _place(prog, 0x0004, _encode_sw_s(rd=0, imm=0x40))
+    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
     _place(prog, 0x0006, _spin(0x0006))
     prog[0x0040] = 0xFF; prog[0x0041] = 0xFF
     _load_program(dut, prog)
@@ -796,13 +796,13 @@ async def test_slti_equal(dut):
 
 @cocotb.test()
 async def test_sltui_true(dut):
-    """SLTUI: 5 <u 10 -> R0 = 1."""
+    """SLTUI: 5 <u 10 -> R1 = 1."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=5))
     _place(prog, 0x0002, _encode_sltui(rs=1, imm=10))
-    _place(prog, 0x0004, _encode_sw_s(rd=0, imm=0x40))
+    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
     _place(prog, 0x0006, _spin(0x0006))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
@@ -814,13 +814,13 @@ async def test_sltui_true(dut):
 
 @cocotb.test()
 async def test_sltui_false(dut):
-    """SLTUI: 0xFFFF <u sext(3)=3 -> R0 = 0."""
+    """SLTUI: 0xFFFF <u sext(3)=3 -> R1 = 0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=-1))
     _place(prog, 0x0002, _encode_sltui(rs=1, imm=3))
-    _place(prog, 0x0004, _encode_sw_s(rd=0, imm=0x40))
+    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
     _place(prog, 0x0006, _spin(0x0006))
     prog[0x0040] = 0xFF; prog[0x0041] = 0xFF
     _load_program(dut, prog)
@@ -838,7 +838,7 @@ async def test_xorif_equality(dut):
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=5))
     _place(prog, 0x0002, _encode_xorif(rs=1, imm=5))
-    _place(prog, 0x0004, _encode_sw_s(rd=0, imm=0x40))
+    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
     _place(prog, 0x0006, _spin(0x0006))
     prog[0x0040] = 0xFF; prog[0x0041] = 0xFF
     _load_program(dut, prog)

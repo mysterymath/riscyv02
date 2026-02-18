@@ -187,8 +187,8 @@ module riscyv02_execute (
   wire is_right_shift = is_srl || is_sra || is_srli || is_srai;
   wire is_arith_shift = is_sra || is_srai;
 
-  // Writes to R0: SLTI, SLTUI, XORIF
-  wire is_r0_dest = is_slti || is_sltui || is_xorif;
+  // Writes to R1: SLTI, SLTUI, XORIF
+  wire is_r1_dest = is_slti || is_sltui || is_xorif;
 
   // Jump/branch
   wire is_branch   = is_bz || is_bnz;
@@ -276,8 +276,8 @@ module riscyv02_execute (
       w_sel_mux = {1'b0, ir[8:6]};                             // R,R,R: rd at [8:6]
     else if (is_mem_phase && is_rr_load)
       w_sel_mux = {1'b0, ir[5:3]};                             // R,R loads: rd at [5:3]
-    else if (is_r0_dest)
-      w_sel_mux = 4'd0;                                        // SLTI/SLTUI/XORIF → R0
+    else if (is_r1_dest)
+      w_sel_mux = 4'd1;                                        // SLTI/SLTUI/XORIF → R1
     else
       w_sel_mux = {1'b0, ir[2:0]};                             // Default: reg at [2:0]
   end

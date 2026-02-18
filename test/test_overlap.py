@@ -81,24 +81,23 @@ async def test_sltu_rd_eq_rs2(dut):
 
 
 @cocotb.test()
-async def test_slti_source_r0(dut):
-    """SLTI with source R0: rd=R0 always, so R0_hi corrupted if nonzero."""
+async def test_slti_rd_eq_rs(dut):
+    """SLTI R1, 1: source R1 == dest R1. Hi byte corrupted by pre-clear."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
-    # R0 = 0x0100 (256). SLTI R0, 1: signed 256 < 1 → false → 0.
-    # Bug: R0_hi cleared → comparison becomes 0 < 1 → true → 1.
-    pc = _load_r16(prog, 0x0000, 0x60, rd=0, val=0x0100)
-    _place(prog, pc, _encode_slti(rs=0, imm=1)); pc += 2
-    # R0 clobbered by SLTI; use SW.S (R7-based) to store
-    _place(prog, pc, _encode_sw_s(rd=0, imm=0x40)); pc += 2
+    # R1 = 0x0100 (256). SLTI R1, 1: signed 256 < 1 → false → R1 = 0.
+    # Bug: R1_hi cleared → comparison becomes 0 < 1 → true → 1.
+    pc = _load_r16(prog, 0x0000, 0x60, rd=1, val=0x0100)
+    _place(prog, pc, _encode_slti(rs=1, imm=1)); pc += 2
+    _place(prog, pc, _encode_sw_s(rd=1, imm=0x40)); pc += 2
     _place(prog, pc, _spin())
     prog[0x40] = 0xFF; prog[0x41] = 0xFF
     _load_program(dut, prog)
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x40) | (_read_ram(dut, 0x41) << 8)
-    assert val == 0x0000, f"SLTI R0: expected 0 (256 not < 1), got {val:#06x}"
+    assert val == 0x0000, f"SLTI rd==rs: expected 0 (256 not < 1), got {val:#06x}"
 
 
 @cocotb.test()

@@ -14,11 +14,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 60.9% | 45.3% |
-| Transistor count (synth) | 16,220 | 13,176 |
-| SRAM-adjusted | 12,896 | 13,176 |
+| Utilization | 60.4% | 45.3% |
+| Transistor count (synth) | 16,244 | 13,176 |
+| SRAM-adjusted | 12,920 | 13,176 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 2.1% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 1.9% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -109,7 +109,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | Register | Name | Suggested Purpose |
 |---|---|---|
 | R0 | a0 | Accumulator / implicit base address (R,8 format loads/stores) |
-| R1 | a1 | Argument / return value 1 |
+| R1 | a1 | Argument / comparison result (SLTI/SLTUI/XORIF dest) |
 | R2 | t0 | Temporary 0 |
 | R3 | t1 | Temporary 1 |
 | R4 | s0 | Saved register 0 |
@@ -117,7 +117,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | R6 | ra | Return address (link register) |
 | R7 | sp | Stack pointer |
 
-R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. SLTI, SLTUI, and XORIF write their result to R0 (non-destructive compare/test patterns). R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
+R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. SLTI, SLTUI, and XORIF write their result to R1 (non-destructive compare/test patterns that preserve both R0 and the source register). R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
 
 ### Link Register (R6)
 
@@ -169,11 +169,11 @@ System:[prefix:10 @ 15:6] [sub:6 @ 5:0]
 01001   ANDI    rd = rd & zext(imm8)
 01010   ORI     rd = rd | zext(imm8)
 01011   XORI    rd = rd ^ zext(imm8)
-01100   SLTI    R0 = (rs < sext(imm8)) ? 1 : 0   (signed)
-01101   SLTUI   R0 = (rs <u sext(imm8)) ? 1 : 0  (unsigned)
+01100   SLTI    R1 = (rs < sext(imm8)) ? 1 : 0   (signed)
+01101   SLTUI   R1 = (rs <u sext(imm8)) ? 1 : 0  (unsigned)
 01110   BZ      if rs == 0, pc += sext(imm8) << 1
 01111   BNZ     if rs != 0, pc += sext(imm8) << 1
-10000   XORIF   R0 = rs ^ zext(imm8)
+10000   XORIF   R1 = rs ^ zext(imm8)
 
 --- R,7 format (6-bit prefix) ---
 110100  LUI     rd = sext(imm7) << 9
@@ -299,15 +299,15 @@ Bitwise XOR with a zero-extended 8-bit immediate. Toggles bits in the low byte w
 
 #### SLTI -- Set Less Than Immediate (Signed)
 
-`R0 = (rs < sext(imm8)) ? 1 : 0` -- 2 cycles
+`R1 = (rs < sext(imm8)) ? 1 : 0` -- 2 cycles
 
-Compares the source register against a sign-extended 8-bit immediate (-128 to +127) as signed integers. The result (0 or 1) is written to R0, preserving the source register. Pattern: `SLTI rs, val; BNZ R0, target` (branch if rs < val).
+Compares the source register against a sign-extended 8-bit immediate (-128 to +127) as signed integers. The result (0 or 1) is written to R1, preserving both R0 (the base register) and the source register. Pattern: `SLTI rs, val; BNZ R1, target` (branch if rs < val).
 
 #### SLTUI -- Set Less Than Immediate (Unsigned)
 
-`R0 = (rs <u sext(imm8)) ? 1 : 0` -- 2 cycles
+`R1 = (rs <u sext(imm8)) ? 1 : 0` -- 2 cycles
 
-Compares the source register against a sign-extended 8-bit immediate as unsigned integers. The immediate is sign-extended then treated as unsigned. The result is written to R0.
+Compares the source register against a sign-extended 8-bit immediate as unsigned integers. The immediate is sign-extended then treated as unsigned. The result is written to R1.
 
 #### BZ -- Branch if Zero
 
@@ -323,9 +323,9 @@ Branches to a PC-relative target if the source register is non-zero. Pairs with 
 
 #### XORIF -- Xor Immediate (Fixed-Destination)
 
-`R0 = rs ^ zext(imm8)` -- 2 cycles
+`R1 = rs ^ zext(imm8)` -- 2 cycles
 
-Bitwise XOR of the source register with a zero-extended 8-bit immediate, writing the result to R0 while preserving the source register. Useful for equality testing: if rs equals zext(imm8), R0 will be zero. Pattern: `XORIF rs, val; BZ R0, equal_label`.
+Bitwise XOR of the source register with a zero-extended 8-bit immediate, writing the result to R1 while preserving both R0 and the source register. Useful for equality testing: if rs equals zext(imm8), R1 will be zero. Pattern: `XORIF rs, val; BZ R1, equal_label`.
 
 ### R,7 Format -- Upper Immediate
 

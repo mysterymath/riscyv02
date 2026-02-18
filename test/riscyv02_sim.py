@@ -357,12 +357,12 @@ class RISCYV02Sim:
                 self.regs[rs_idx] = self.regs[rs_idx] ^ imm8_raw
                 return []
 
-            if prefix5 == 0b01100:      # SLTI (signed, dest=R0)
-                self.regs[0] = 1 if to_signed16(self.regs[rs_idx]) < sext8(imm8_raw) else 0
+            if prefix5 == 0b01100:      # SLTI (signed, dest=R1)
+                self.regs[1] = 1 if to_signed16(self.regs[rs_idx]) < sext8(imm8_raw) else 0
                 return []
 
-            if prefix5 == 0b01101:      # SLTUI (unsigned, dest=R0)
-                self.regs[0] = 1 if self.regs[rs_idx] < (sext8(imm8_raw) & 0xFFFF) else 0
+            if prefix5 == 0b01101:      # SLTUI (unsigned, dest=R1)
+                self.regs[1] = 1 if self.regs[rs_idx] < (sext8(imm8_raw) & 0xFFFF) else 0
                 return []
 
             if prefix5 == 0b01110:      # BZ
@@ -389,8 +389,8 @@ class RISCYV02Sim:
                     self._redirect = True
                 return []
 
-            if prefix5 == 0b10000:      # XORIF (zero-ext imm, dest=R0)
-                self.regs[0] = self.regs[rs_idx] ^ imm8_raw
+            if prefix5 == 0b10000:      # XORIF (zero-ext imm, dest=R1)
+                self.regs[1] = self.regs[rs_idx] ^ imm8_raw
                 return []
 
             if prefix5 == 0b10001:      # LW.S (word load, base=R7)
