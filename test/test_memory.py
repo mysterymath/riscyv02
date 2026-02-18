@@ -19,8 +19,8 @@ async def test_lw_sw_jr_basic(dut):
     prog[0x0030] = 0x34
     prog[0x0031] = 0x12
 
-    _place(prog, 0x0000, _encode_lw(rs=7, imm=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=7, imm=0x32))
+    _place(prog, 0x0000, _encode_lw(rd=1, imm=0x30))
+    _place(prog, 0x0002, _encode_sw(rs=1, imm=0x32))
     _place(prog, 0x0004, _spin(0x0004))
 
     _load_program(dut, prog)
@@ -35,21 +35,18 @@ async def test_lw_sw_jr_basic(dut):
 
 @cocotb.test()
 async def test_negative_offsets(dut):
-    """Use negative offsets and multiple registers."""
+    """Use negative offsets with R0 as base."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     prog = {}
-    prog[0x0030] = 0x50
-    prog[0x0031] = 0x00
     prog[0x004E] = 0xFE
     prog[0x004F] = 0xCA
 
-    _place(prog, 0x0000, _encode_lw(rs=7, imm=0x30))
-    _place(prog, 0x0002, _encode_or_rr(rd=3, rs1=0, rs2=0))
-    _place(prog, 0x0004, _encode_lw(rs=3, imm=-2))
-    _place(prog, 0x0006, _encode_sw(rs=7, imm=0x60))
-    _place(prog, 0x0008, _spin(0x0008))
+    _place(prog, 0x0000, _encode_li(rd=0, imm=0x50))      # R0 = 0x50
+    _place(prog, 0x0002, _encode_lw(rd=1, imm=-2))         # R1 = mem16[R0-2] = mem16[0x4E]
+    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x60))     # mem16[R7+0x60] = R1
+    _place(prog, 0x0006, _spin(0x0006))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -68,11 +65,11 @@ async def test_byte_ops(dut):
     prog = {}
     prog[0x0030] = 0x85
 
-    _place(prog, 0x0000, _encode_lb(rs=7, imm=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=7, imm=0x40))
-    _place(prog, 0x0004, _encode_lbu(rs=7, imm=0x30))
-    _place(prog, 0x0006, _encode_sw(rs=7, imm=0x42))
-    _place(prog, 0x0008, _encode_sb(rs=7, imm=0x44))
+    _place(prog, 0x0000, _encode_lb(rd=1, imm=0x30))
+    _place(prog, 0x0002, _encode_sw(rs=1, imm=0x40))
+    _place(prog, 0x0004, _encode_lbu(rd=2, imm=0x30))
+    _place(prog, 0x0006, _encode_sw(rs=2, imm=0x42))
+    _place(prog, 0x0008, _encode_sb(rs=2, imm=0x44))
     _place(prog, 0x000A, _spin(0x000A))
 
     _load_program(dut, prog)
@@ -118,8 +115,8 @@ async def test_lb_sign_extend(dut):
     cocotb.start_soon(clock.start())
     prog = {}
     prog[0x0030] = 0x80
-    _place(prog, 0x0000, _encode_lb(rs=7, imm=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=7, imm=0x40))
+    _place(prog, 0x0000, _encode_lb(rd=1, imm=0x30))
+    _place(prog, 0x0002, _encode_sw(rs=1, imm=0x40))
     _place(prog, 0x0004, _spin(0x0004))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
@@ -136,8 +133,8 @@ async def test_lbu_zero_extend(dut):
     cocotb.start_soon(clock.start())
     prog = {}
     prog[0x0030] = 0x80
-    _place(prog, 0x0000, _encode_lbu(rs=7, imm=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=7, imm=0x40))
+    _place(prog, 0x0000, _encode_lbu(rd=1, imm=0x30))
+    _place(prog, 0x0002, _encode_sw(rs=1, imm=0x40))
     _place(prog, 0x0004, _spin(0x0004))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
@@ -154,9 +151,9 @@ async def test_byte_negative_offset(dut):
     cocotb.start_soon(clock.start())
     prog = {}
     prog[0x001F] = 0x7F
-    _place(prog, 0x0000, _encode_li(rd=1, imm=0x20))
-    _place(prog, 0x0002, _encode_lb(rs=1, imm=-1))
-    _place(prog, 0x0004, _encode_sw(rs=7, imm=0x40))
+    _place(prog, 0x0000, _encode_li(rd=0, imm=0x20))      # R0 = 0x20
+    _place(prog, 0x0002, _encode_lb(rd=1, imm=-1))         # R1 = sext(mem[R0-1]) = 0x007F
+    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))     # mem16[R7+0x40] = R1
     _place(prog, 0x0006, _spin(0x0006))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
@@ -173,14 +170,6 @@ async def test_sp_lw_sw(dut):
     cocotb.start_soon(clock.start())
 
     prog = {}
-    # Set R7 (SP) = 0x0100
-    _place(prog, 0x0000, _encode_li(rd=7, imm=0))
-    _place(prog, 0x0002, _encode_lui(rd=7, imm7=0))  # R7 = 0
-    _place(prog, 0x0004, _encode_addi(rd=7, imm=0))   # keep R7=0, use LI for 0x0100 below
-    # Actually: LI sets 8-bit sext. Use LUI + ADDI for 0x0100.
-    # LUI R7, 0 = R7 = 0; then ORI R7, 0 won't help. Let's just use LI 0 + ADDI.
-    # Simpler: LI R7, 0 then use SLLI to shift. But we can also just:
-    # Put data at low addresses within sext(imm8) range of R7=0.
     prog[0x0030] = 0xEF
     prog[0x0031] = 0xBE
     # LW.S R1, 0x30 — load from R7+0x30 = 0x0030
@@ -208,9 +197,6 @@ async def test_sp_lb_sb(dut):
 
     # LB.S R1, 0x30 — sign-extend load from R7+0x30
     _place(prog, 0x0000, _encode_lb_s(rd=1, imm=0x30))
-    # SW R7, 0x40 — store R0 (should be unmodified; use R,R store to dump R1)
-    _place(prog, 0x0002, _encode_sw_rr(rd=1, rs=7))  # store R1 at R7=0x0000? No, addr=R7=0
-    # Better: use SW.S to store R1 at offset 0x40
     _place(prog, 0x0002, _encode_sw_s(rd=1, imm=0x40))
     # LBU.S R2, 0x30 — zero-extend load from R7+0x30
     _place(prog, 0x0004, _encode_lbu_s(rd=2, imm=0x30))

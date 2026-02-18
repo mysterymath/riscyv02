@@ -276,21 +276,19 @@ module riscyv02_execute (
       w_sel_mux = {1'b0, ir[8:6]};                             // R,R,R: rd at [8:6]
     else if (is_mem_phase && is_rr_load)
       w_sel_mux = {1'b0, ir[5:3]};                             // R,R loads: rd at [5:3]
-    else if ((is_mem_phase && is_r9_load) || is_r0_dest)
-      w_sel_mux = 4'd0;                                        // R,9 loads/SLTI/SLTUI/XORIF → R0
+    else if (is_r0_dest)
+      w_sel_mux = 4'd0;                                        // SLTI/SLTUI/XORIF → R0
     else
       w_sel_mux = {1'b0, ir[2:0]};                             // Default: reg at [2:0]
   end
 
   // r2_sel: read port 2 register select
   //   Default ir[5:3] works for R,R,R (rs2) and R,R loads/stores (rd/data).
-  //   Override to R0 for R,8-format memory (implicit data/dest = R0).
-  //   Override to ir[2:0] for SP stores (data reg in R,8 reg field).
+  //   Override to ir[2:0] for R,9 and SP stores (data reg in R,8 reg field).
   reg [2:0] r2_sel;
   always @(*) begin
-    if (is_r9_load || is_r9_store) r2_sel = 3'd0;
-    else if (is_sp_store)          r2_sel = ir[2:0];
-    else                           r2_sel = ir[5:3];
+    if (is_r9_store || is_sp_store) r2_sel = ir[2:0];
+    else                            r2_sel = ir[5:3];
   end
   reg        r2_hi_r;   // dout byte select: 0=r2[7:0], 1=r2[15:8]
 
@@ -356,16 +354,19 @@ module riscyv02_execute (
 
   // r1_sel: read port 1 register select
   //   Default ir[2:0] works for all formats: reg/rs1/rs is always at [2:0].
-  //   SP loads/stores override to R7 during execute, ir[2:0] during E_MEM readback.
+  //   R,9 loads/stores override to R0 during execute (base address).
+  //   SP loads/stores override to R7 during execute (base address).
+  //   During E_MEM readback, R,9 and SP loads read ir[2:0] (data register).
   always @(*) begin
     if (is_mem_phase && !mem_is_store) begin
-      if (is_r9_load)       r1_sel = 4'd0;             // R,9 load dest = R0
-      else if (is_sp_load)  r1_sel = {1'b0, ir[2:0]};  // SP load dest = ir[2:0]
-      else                  r1_sel = {1'b0, ir[5:3]};   // R,R load dest = ir[5:3]
+      if (is_r9_load || is_sp_load) r1_sel = {1'b0, ir[2:0]};  // data reg readback
+      else                          r1_sel = {1'b0, ir[5:3]};   // R,R load dest
     end else if (is_reti || is_epcr)
       r1_sel = 4'd8;                                   // EPC (entry 8)
+    else if (is_r9_load || is_r9_store)
+      r1_sel = 4'd0;                                   // R0 base
     else if (is_sp_load || is_sp_store)
-      r1_sel = 4'd7;                                   // SP (R7) for address
+      r1_sel = 4'd7;                                   // SP (R7) base
     else
       r1_sel = {1'b0, ir[2:0]};                        // Default: reg at [2:0]
   end

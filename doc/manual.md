@@ -4,7 +4,7 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Current Status
 
-The processor implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LW.RR**, **LB.RR**, **LBU.RR**, **SW.RR**, **SB.RR**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTI**, **SLTUI**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **EPCR**, **EPCW**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling saves the return address to the Exception PC (EPC) register; EPCR/EPCW allow handlers to read and modify it. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. R,8-format loads/stores use R0 as an implicit data register, while R,R-format loads/stores allow explicit register selection. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The processor implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LW.RR**, **LB.RR**, **LBU.RR**, **SW.RR**, **SB.RR**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTI**, **SLTUI**, **XORIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **EPCR**, **EPCW**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling saves the return address to the Exception PC (EPC) register; EPCR/EPCW allow handlers to read and modify it. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. R,8-format loads/stores use R0 as an implicit base address register (like R7 for SP-relative ops), while R,R-format loads/stores allow explicit register selection. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Comparison with Arlet 6502
 
@@ -14,11 +14,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 61.9% | 45.3% |
-| Transistor count (synth) | 16,594 | 13,176 |
-| SRAM-adjusted | 12,810 | 13,176 |
+| Utilization | 60.9% | 45.3% |
+| Transistor count (synth) | 16,220 | 13,176 |
+| SRAM-adjusted | 12,896 | 13,176 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 2.8% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
+RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 2.1% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
 
 ## Bus Protocol
 
@@ -108,7 +108,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 
 | Register | Name | Suggested Purpose |
 |---|---|---|
-| R0 | a0 | Accumulator / implicit load dest / store data (R,8 format) |
+| R0 | a0 | Accumulator / implicit base address (R,8 format loads/stores) |
 | R1 | a1 | Argument / return value 1 |
 | R2 | t0 | Temporary 0 |
 | R3 | t1 | Temporary 1 |
@@ -117,7 +117,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | R6 | ra | Return address (link register) |
 | R7 | sp | Stack pointer |
 
-R0 is the implicit data register for R,8-format loads and stores: loads write their result to R0, stores read their data from R0. SLTI, SLTUI, and XORIF also write their result to R0 (non-destructive compare/test patterns). R,R-format loads and stores allow explicit register selection for both data and base.
+R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. SLTI, SLTUI, and XORIF write their result to R0 (non-destructive compare/test patterns). R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
 
 ### Link Register (R6)
 
@@ -157,11 +157,11 @@ System:[prefix:10 @ 15:6] [sub:6 @ 5:0]
 --- R,8 format (5-bit prefix) ---
 00000   ADDI    rd = rd + sext(imm8)
 00001   LI      rd = sext(imm8)
-00010   LW      R0 = mem16[rs + sext(imm8)]
-00011   LB      R0 = sext(mem[rs + sext(imm8)])
-00100   LBU     R0 = zext(mem[rs + sext(imm8)])
-00101   SW      mem16[rs + sext(imm8)] = R0
-00110   SB      mem[rs + sext(imm8)] = R0[7:0]
+00010   LW      rd = mem16[R0 + sext(imm8)]
+00011   LB      rd = sext(mem[R0 + sext(imm8)])
+00100   LBU     rd = zext(mem[R0 + sext(imm8)])
+00101   SW      mem16[R0 + sext(imm8)] = rs
+00110   SB      mem[R0 + sext(imm8)] = rs[7:0]
 00111   JR      pc = rs + sext(imm8) << 1
 01000   JALR    rs = pc+2; pc = rs + sext(imm8) << 1
 
@@ -238,33 +238,33 @@ Loads a sign-extended 8-bit immediate (-128 to +127) into a register. No memory 
 
 #### LW -- Load Word
 
-`R0 = MEM16[rs + sext(imm8)]` -- 4 cycles
+`rd = MEM16[R0 + sext(imm8)]` -- 4 cycles
 
-Loads a 16-bit word from memory into R0. The 8-bit signed offset is a byte offset (not scaled), giving a range of -128 to +127 bytes from the base register. The low byte is read first, then the high byte.
+Loads a 16-bit word from memory into the register at ir[2:0]. R0 is the implicit base address; the 8-bit signed offset is a byte offset (not scaled), giving a range of -128 to +127 bytes from R0. The low byte is read first, then the high byte.
 
 #### LB -- Load Byte (Sign-Extend)
 
-`R0 = sext(MEM[rs + sext(imm8)])` -- 3 cycles
+`rd = sext(MEM[R0 + sext(imm8)])` -- 3 cycles
 
-Loads a single byte and sign-extends it to 16 bits into R0. If bit 7 is set, the high byte is filled with 0xFF; otherwise 0x00.
+Loads a single byte and sign-extends it to 16 bits into the register at ir[2:0]. R0 is the implicit base. If bit 7 is set, the high byte is filled with 0xFF; otherwise 0x00.
 
 #### LBU -- Load Byte (Zero-Extend)
 
-`R0 = zext(MEM[rs + sext(imm8)])` -- 3 cycles
+`rd = zext(MEM[R0 + sext(imm8)])` -- 3 cycles
 
-Loads a single byte and zero-extends it to 16 bits into R0. The high byte is always 0x00.
+Loads a single byte and zero-extends it to 16 bits into the register at ir[2:0]. R0 is the implicit base. The high byte is always 0x00.
 
 #### SW -- Store Word
 
-`MEM16[rs + sext(imm8)] = R0` -- 4 cycles
+`MEM16[R0 + sext(imm8)] = rs` -- 4 cycles
 
-Stores R0 as a 16-bit word to memory. The low byte is written first, then the high byte.
+Stores the register at ir[2:0] as a 16-bit word to memory. R0 is the implicit base address. The low byte is written first, then the high byte.
 
 #### SB -- Store Byte
 
-`MEM[rs + sext(imm8)] = R0[7:0]` -- 3 cycles
+`MEM[R0 + sext(imm8)] = rs[7:0]` -- 3 cycles
 
-Stores the low byte of R0 to memory.
+Stores the low byte of the register at ir[2:0] to memory. R0 is the implicit base address.
 
 #### JR -- Jump Register
 

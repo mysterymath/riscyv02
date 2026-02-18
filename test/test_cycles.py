@@ -22,7 +22,7 @@ async def test_cycle_count_nop(dut):
 async def test_cycle_count_lw(dut):
     """LW takes 4 cycles throughput."""
     prog = {}
-    _place(prog, 0x0000, _encode_lw(rs=7, imm=0x30))
+    _place(prog, 0x0000, _encode_lw(rd=1, imm=0x30))
     _place(prog, 0x0002, _spin(0x0002))
     await _measure_instruction_cycles(dut, prog, 4, "LW")
 
@@ -114,7 +114,7 @@ async def test_cycle_count_lb(dut):
     """LB takes 3 cycles (byte load completes at E_MEM_LO)."""
     prog = {}
     prog[0x0030] = 0x42
-    _place(prog, 0x0000, _encode_lb(rs=7, imm=0x30))
+    _place(prog, 0x0000, _encode_lb(rd=1, imm=0x30))
     _place(prog, 0x0002, _spin(0x0002))
     await _measure_instruction_cycles(dut, prog, 3, "LB")
 
@@ -338,7 +338,7 @@ async def test_cycle_count_brk(dut):
 async def test_cycle_count_lbu(dut):
     """LBU takes 3 cycles (byte load completes at E_MEM_LO)."""
     prog = {}
-    _place(prog, 0x0000, _encode_lbu(rs=7, imm=0))
+    _place(prog, 0x0000, _encode_lbu(rd=1, imm=0))
     _place(prog, 0x0002, _spin(0x0002))
     await _measure_instruction_cycles(dut, prog, 3, "LBU")
 

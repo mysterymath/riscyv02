@@ -301,35 +301,35 @@ class RISCYV02Sim:
                 self.regs[rs_idx] = sext8(imm8_raw) & 0xFFFF
                 return []
 
-            if prefix5 == 0b00010:      # LW (word load, dest=R0)
-                addr = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
+            if prefix5 == 0b00010:      # LW (word load, base=R0)
+                addr = (self.regs[0] + sext8(imm8_raw)) & 0xFFFF
                 lo = self.ram[addr]
                 hi = self.ram[(addr + 1) & 0xFFFF]
-                self.regs[0] = (hi << 8) | lo
+                self.regs[rs_idx] = (hi << 8) | lo
                 return [(addr, True, 0),
                         ((addr + 1) & 0xFFFF, True, 0)]
 
-            if prefix5 == 0b00011:      # LB (sign-extend byte load, dest=R0)
-                addr = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
+            if prefix5 == 0b00011:      # LB (sign-extend byte load, base=R0)
+                addr = (self.regs[0] + sext8(imm8_raw)) & 0xFFFF
                 byte = self.ram[addr]
-                self.regs[0] = (byte | 0xFF00) if byte & 0x80 else byte
+                self.regs[rs_idx] = (byte | 0xFF00) if byte & 0x80 else byte
                 return [(addr, True, 0)]
 
-            if prefix5 == 0b00100:      # LBU (zero-extend byte load, dest=R0)
-                addr = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
-                self.regs[0] = self.ram[addr]
+            if prefix5 == 0b00100:      # LBU (zero-extend byte load, base=R0)
+                addr = (self.regs[0] + sext8(imm8_raw)) & 0xFFFF
+                self.regs[rs_idx] = self.ram[addr]
                 return [(addr, True, 0)]
 
-            if prefix5 == 0b00101:      # SW (word store, data=R0)
-                addr = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
-                lo = self.regs[0] & 0xFF
-                hi = (self.regs[0] >> 8) & 0xFF
+            if prefix5 == 0b00101:      # SW (word store, base=R0)
+                addr = (self.regs[0] + sext8(imm8_raw)) & 0xFFFF
+                lo = self.regs[rs_idx] & 0xFF
+                hi = (self.regs[rs_idx] >> 8) & 0xFF
                 return [(addr, False, lo),
                         ((addr + 1) & 0xFFFF, False, hi)]
 
-            if prefix5 == 0b00110:      # SB (byte store, data=R0)
-                addr = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFF
-                return [(addr, False, self.regs[0] & 0xFF)]
+            if prefix5 == 0b00110:      # SB (byte store, base=R0)
+                addr = (self.regs[0] + sext8(imm8_raw)) & 0xFFFF
+                return [(addr, False, self.regs[rs_idx] & 0xFF)]
 
             if prefix5 == 0b00111:      # JR
                 target = (self.regs[rs_idx] + sext8(imm8_raw)) & 0xFFFE

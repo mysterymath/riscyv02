@@ -3,10 +3,10 @@
 #
 # Shared test infrastructure for RISCY-V02 cocotb tests.
 #
-# Register convention: R7 is used as a zero-base register throughout tests.
-# After reset, all registers are 0, so R7 starts at 0 and is never modified
-# by test code (except explicitly). R,8 loads always write to R0; R,8 stores
-# always read data from R0. Use OR rd, R0, R0 to copy R0 to another register.
+# Register convention: R0 is used as a zero-base address register throughout
+# tests. After reset, all registers are 0, so R0 starts at 0 and is kept at 0
+# for R,8 loads/stores (which use R0 as implicit base). R,8 loads write to
+# ir[2:0] (rd); R,8 stores read data from ir[2:0] (rs). SP variants use R7.
 
 import cocotb
 from cocotb.clock import Clock
@@ -86,28 +86,28 @@ def _encode_li(rd, imm):
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b00001, imm, rd)
 
-def _encode_lw(rs, imm):
-    """LW: R0 = mem16[rs + sext(imm)]. Dest is always R0."""
+def _encode_lw(rd, imm):
+    """LW: rd = mem16[R0 + sext(imm)]. Base is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b00010, imm, rs)
+    return _encode_r8(0b00010, imm, rd)
 
-def _encode_lb(rs, imm):
-    """LB: R0 = sext(mem[rs + sext(imm)]). Dest is always R0."""
+def _encode_lb(rd, imm):
+    """LB: rd = sext(mem[R0 + sext(imm)]). Base is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b00011, imm, rs)
+    return _encode_r8(0b00011, imm, rd)
 
-def _encode_lbu(rs, imm):
-    """LBU: R0 = zext(mem[rs + sext(imm)]). Dest is always R0."""
+def _encode_lbu(rd, imm):
+    """LBU: rd = zext(mem[R0 + sext(imm)]). Base is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b00100, imm, rs)
+    return _encode_r8(0b00100, imm, rd)
 
 def _encode_sw(rs, imm):
-    """SW: mem16[rs + sext(imm)] = R0. Data is always R0."""
+    """SW: mem16[R0 + sext(imm)] = rs. Base is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b00101, imm, rs)
 
 def _encode_sb(rs, imm):
-    """SB: mem[rs + sext(imm)] = R0[7:0]. Data is always R0."""
+    """SB: mem[R0 + sext(imm)] = rs[7:0]. Base is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b00110, imm, rs)
 

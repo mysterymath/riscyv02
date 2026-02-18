@@ -12,22 +12,23 @@ from test_helpers import *
 # ===========================================================================
 def _load_r16(prog, pc, data_addr, rd, val):
     """Emit instructions to load 16-bit val into Rd. Returns next pc.
-    data_addr must be < 0x80 (signed 8-bit offset from R7=0)."""
+    data_addr must be < 0x80 (signed 8-bit offset from R0/R7=0)."""
     assert data_addr < 0x80, f"data_addr {data_addr:#x} must be < 0x80"
     prog[data_addr] = val & 0xFF
     prog[data_addr + 1] = (val >> 8) & 0xFF
-    _place(prog, pc, _encode_lw(rs=7, imm=data_addr))
-    _place(prog, pc + 2, _encode_or_rr(rd=rd, rs1=0, rs2=0))
-    return pc + 4
+    if rd == 0:
+        _place(prog, pc, _encode_lw_s(rd=0, imm=data_addr))
+    else:
+        _place(prog, pc, _encode_lw(rd=rd, imm=data_addr))
+    return pc + 2
 
 
 def _store_r16(prog, pc, store_addr, rs):
     """Emit instructions to store Rs to memory. Returns next pc.
     store_addr must be < 0x80."""
     assert store_addr < 0x80, f"store_addr {store_addr:#x} must be < 0x80"
-    _place(prog, pc, _encode_or_rr(rd=0, rs1=rs, rs2=rs))
-    _place(prog, pc + 2, _encode_sw(rs=7, imm=store_addr))
-    return pc + 4
+    _place(prog, pc, _encode_sw_s(rd=rs, imm=store_addr))
+    return pc + 2
 
 
 # Data slots at 0x60+, output slots at 0x40+.
@@ -89,7 +90,8 @@ async def test_slti_source_r0(dut):
     # Bug: R0_hi cleared → comparison becomes 0 < 1 → true → 1.
     pc = _load_r16(prog, 0x0000, 0x60, rd=0, val=0x0100)
     _place(prog, pc, _encode_slti(rs=0, imm=1)); pc += 2
-    _place(prog, pc, _encode_sw(rs=7, imm=0x40)); pc += 2
+    # R0 clobbered by SLTI; use SW.S (R7-based) to store
+    _place(prog, pc, _encode_sw_s(rd=0, imm=0x40)); pc += 2
     _place(prog, pc, _spin())
     prog[0x40] = 0xFF; prog[0x41] = 0xFF
     _load_program(dut, prog)
@@ -233,9 +235,8 @@ async def test_jalr_link_overlap(dut):
     jalr_pc = pc
     _place(prog, pc, _encode_jalr(rs=6, imm=0)); pc += 2
     # At 0x0040: store R6 (should be return address = jalr_pc + 2)
-    _place(prog, 0x0040, _encode_or_rr(rd=0, rs1=6, rs2=6))
-    _place(prog, 0x0042, _encode_sw(rs=7, imm=0x50))
-    _place(prog, 0x0044, _spin())
+    _place(prog, 0x0040, _encode_sw_s(rd=6, imm=0x50))
+    _place(prog, 0x0042, _spin())
     prog[0x50] = 0x00; prog[0x51] = 0x00
     _load_program(dut, prog)
     await _reset(dut)
@@ -264,5 +265,3 @@ async def test_lw_rr_rd_eq_rs(dut):
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x40) | (_read_ram(dut, 0x41) << 8)
     assert val == 0xBEEF, f"LW.RR rd==rs: expected 0xBEEF, got {val:#06x}"
-
-
