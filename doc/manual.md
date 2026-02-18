@@ -2,10 +2,6 @@
 
 RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacement for the WDC 65C02. It uses the same 8-bit multiplexed bus protocol, same control signals, and fits in the same Tiny Tapeout 1x2 tile. Different ISA, same socket.
 
-## Current Status
-
-The processor implements: **LW**, **SW**, **LB**, **LBU**, **SB**, **LWS**, **SWS**, **LBS**, **LBUS**, **SBS**, **LWR**, **LBR**, **LBUR**, **SWR**, **SBR**, **JR**, **JALR**, **J**, **JAL**, **AUIPC**, **LUI**, **LI**, **BZ**, **BNZ**, **ADD**, **SUB**, **AND**, **OR**, **XOR**, **SLT**, **SLTU**, **SLL**, **SRL**, **SRA**, **ADDI**, **ANDI**, **ORI**, **XORI**, **SLTI**, **SLTUI**, **XORIF**, **ANDIF**, **SLLI**, **SRLI**, **SRAI**, **RETI**, **EPCR**, **EPCW**, **SEI**, **CLI**, **INT** (BRK), **WAI**, and **STP**. IRQ and NMI interrupt handling saves the return address to the Exception PC (EPC) register; EPCR/EPCW allow handlers to read and modify it. JAL/JALR write return addresses to R6 (the link register); subroutine return is `JR R6, 0`. R,8-format loads/stores use R0 as an implicit base address register (like R7 for SP-relative ops), while R,R-format loads/stores allow explicit register selection. All other opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
-
 ## Comparison with Arlet 6502
 
 Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The clock speed is pinned to match the 6502 (~62 MHz), simulating 1970s DRAM constraints where raw clock speed improvements don't matter. The comparison focuses on IPC and transistor efficiency.
@@ -18,7 +14,7 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 | Transistor count (synth) | 16,074 | 13,176 |
 | SRAM-adjusted | 12,750 | 13,176 |
 
-RISCY-V02 supports full subroutine call/return (JAL/JALR + JR R6), PC-relative jumps (J), zero/non-zero branches (BZ/BNZ) that pair with SLT/SLTU for compare-and-branch, and immediate ALU operations (ADDI, ANDI, ORI, XORI, SLTI, SLTUI, XORIF, ANDIF). Interrupt handling saves the return address to a dedicated EPC register (accessible via EPCR/EPCW), leaving all GP registers directly accessible in the handler for software monitors and full state manipulation. The SRAM-adjusted total is 3.2% below the 6502, with significantly more capability per transistor (16-bit registers, 3-operand instructions, 2-cycle ALU ops, PC-relative jumps, hardware call/return, immediate arithmetic/logic).
+The SRAM-adjusted total is 3.2% below the 6502, with significantly more capability per transistor: 16-bit registers, 3-operand ALU instructions, 2-cycle execute, PC-relative jumps, hardware call/return, and immediate arithmetic/logic. Unrecognized opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Bus Protocol
 
