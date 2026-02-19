@@ -40,6 +40,7 @@ module riscyv02_fetch (
   localparam F_HOLD = 2'd2;
 
   reg [1:0]  state;
+  reg [1:0]  next_state;
 
   // Latch-based instruction register: D = uio_in, GATE selects when to
   // capture.  Low byte captured at F_LO, high byte at F_HI.  All other
@@ -76,27 +77,33 @@ module riscyv02_fetch (
   assign ir = (state == F_HOLD) ? ir_r : {uio_in, ir_r[7:0]};
   assign ir_valid = ((state == F_HI) && bus_free) || (state == F_HOLD);
 
-  always @(negedge clk or negedge rst_n) begin
-    if (!rst_n)
-      state <= F_LO;
-    else if (flush)
-      state <= F_LO;
+  always @(*) begin
+    next_state = state;
+    if (flush)
+      next_state = F_LO;
     else case (state)
       F_LO: if (bus_free)
-        state <= F_HI;
+        next_state = F_HI;
 
       F_HI: if (bus_free) begin
         if (ir_accept)
-          state <= F_LO;
+          next_state = F_LO;
         else
-          state <= F_HOLD;
+          next_state = F_HOLD;
       end
 
       F_HOLD: if (ir_accept)
-        state <= F_LO;
+        next_state = F_LO;
 
-      default: state <= 2'bx;
+      default: next_state = 2'bx;
     endcase
+  end
+
+  always @(negedge clk or negedge rst_n) begin
+    if (!rst_n)
+      state <= F_LO;
+    else
+      state <= next_state;
   end
 
 endmodule

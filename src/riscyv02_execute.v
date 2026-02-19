@@ -50,7 +50,7 @@ module riscyv02_execute (
     input  wire        nmi_edge,     // NMI combinational edge (same-cycle detection)
     input  wire        ir_valid,
     input  wire [15:0] fetch_ir,
-    output reg         bus_active,
+    output wire        bus_active,
     output reg  [15:0] ab,
     output reg  [7:0]  dout,
     output reg         rwb,
@@ -276,6 +276,28 @@ module riscyv02_execute (
 
   wire is_mem_phase = (state == E_MEM_LO || state == E_MEM_HI);
 
+  // -------------------------------------------------------------------------
+  // Bus outputs (state-independent: only depends on memory phase)
+  // -------------------------------------------------------------------------
+  assign bus_active = is_mem_phase;
+
+  always @(*) begin
+    ab = 16'bx;
+    if (state == E_MEM_LO)
+      ab = tmp;
+    else if (state == E_MEM_HI)
+      ab = {tmp[15:8] + {7'd0, mem_carry}, tmp[7:0] + 8'd1};
+  end
+
+  always @(*) begin
+    dout = 8'bx;
+    rwb  = 1'bx;
+    if (is_mem_phase) begin
+      dout = r2_hi_r ? r2[15:8] : r2[7:0];
+      rwb  = !mem_is_store;
+    end
+  end
+
   // w_sel: write port register select (4-bit: bit 3 selects EPC)
   reg [3:0] w_sel_mux;
   always @(*) begin
@@ -381,13 +403,21 @@ module riscyv02_execute (
   end
 
   // -------------------------------------------------------------------------
-  // State-driven signals (computed in state-property block below)
+  // Combinational intermediates and next-state values
   // -------------------------------------------------------------------------
   reg        insn_completing;
-  reg [15:1] next_pc;
   reg        jump;
-  reg        next_t;      // Next T flag value (written at negedge)
-  reg        t_we;        // T flag write enable
+
+  // Next-state values for all DFFs (computed in combinational block)
+  reg [2:0]  next_state;
+  reg [15:0] next_ir;
+  reg        next_carry_r;
+  reg [15:1] next_pc;
+  reg        next_i_bit;
+  reg        next_t_bit;
+  reg [1:0]  next_esr;
+  reg        next_r2_hi_r;
+  reg        next_mem_carry;
 
   // Combinational signal for tmp[7:0] latch at E_EXEC_LO negedge
   reg [7:0]  next_tmp_lo;
@@ -414,23 +444,27 @@ module riscyv02_execute (
   assign fetch_pc = {pc, 1'b0};
 
   always @(*) begin
-    // Defaults
-    bus_active      = 1'b0;
-    ab              = 16'bx;
-    dout            = 8'bx;
-    rwb             = 1'bx;
+    // --- Next-state defaults: hold all registers ---
+    next_state      = state;
+    next_ir         = ir;
+    next_carry_r    = carry_r;
+    next_pc         = pc;
+    next_i_bit      = i_bit;
+    next_t_bit      = t_bit;
+    next_esr        = esr;
+    next_r2_hi_r    = r2_hi_r;
+    next_mem_carry  = mem_carry;
+
+    // --- Output defaults ---
     alu_a           = r1[7:0];
     alu_b           = 8'bx;
     alu_op          = 3'd0;    // ADD
     w_data          = {alu_result, tmp[7:0]};
     w_we            = 1'b0;
     insn_completing = 1'b0;
-    next_pc         = pc;
     jump            = 1'b0;
-    next_t          = 1'b0;
-    t_we            = 1'b0;
     shifter_din     = 15'b0;
-    next_tmp_lo  = alu_result;
+    next_tmp_lo     = alu_result;
 
     case (state)
       E_EXEC_LO: begin
@@ -539,6 +573,15 @@ module riscyv02_execute (
             insn_completing = 1'b1;
           end
         end
+
+        // State transition
+        next_carry_r = alu_co;
+        if (is_wai || is_stp)
+          next_state = E_IDLE;
+        else if (insn_completing)
+          next_state = E_IDLE;
+        else
+          next_state = E_EXEC_HI;
       end
 
       E_EXEC_HI: begin
@@ -546,15 +589,18 @@ module riscyv02_execute (
           // Address high byte: sign-extend imm bit 7
           alu_a      = r1[15:8];
           alu_b      = {8{ir[10]}};
+          next_state = E_MEM_LO;
         end else if (is_auipc) begin
           alu_a           = pc[15:8];
           alu_b           = {ir[9:3], 1'b0};    // (sext(imm7) << 9) hi byte
           w_we            = 1'b1;
           insn_completing = 1'b1;
+          next_state      = E_IDLE;
         end else if (is_rr_load || is_rr_store) begin
           // Address high byte: carry propagation only
           alu_a      = r1[15:8];
           alu_b      = 8'd0;
+          next_state = E_MEM_LO;
         end else if (is_jr_jalr) begin
           // JR/JALR high byte: sign-extend imm bit 7
           alu_a           = r1[15:8];
@@ -566,15 +612,19 @@ module riscyv02_execute (
             w_data = {pc, 1'b0};
             w_we   = 1'b1;
           end
+          next_state = E_IDLE;
         end else begin
           if (is_reti) begin
-            jump    = 1'b1;
-            next_pc = r1[15:1];               // EPC is clean 16-bit address
+            jump       = 1'b1;
+            next_pc    = r1[15:1];               // EPC is clean 16-bit address
+            next_i_bit = esr[1];
+            next_t_bit = esr[0];
           end else if (is_int) begin
             w_data  = {pc, 1'b0};             // EPC = clean return address
             w_we    = 1'b1;
             jump    = 1'b1;
             next_pc = {13'b0, ir[1:0] + 2'd1};
+            next_esr = {saved_i_bit, t_bit};
           end else begin
           // Execute high byte: completes this cycle
           insn_completing = 1'b1;
@@ -594,11 +644,10 @@ module riscyv02_execute (
             alu_a      = r1[15:8];
             alu_op     = 3'd1;
             alu_b      = r2[15:8];
-            t_we       = 1'b1;
             if (is_sltu)
-              next_t = ~alu_co;
+              next_t_bit = ~alu_co;
             else
-              next_t = (r1[15] ^ r2[15]) ? r1[15] : alu_result[7];
+              next_t_bit = (r1[15] ^ r2[15]) ? r1[15] : alu_result[7];
           end else if (is_andi) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd2;
@@ -619,20 +668,17 @@ module riscyv02_execute (
             alu_op     = 3'd4;
             alu_b      = 8'h00;
             // T = (result != 0): any bit set in lo or hi
-            t_we       = 1'b1;
-            next_t     = (|tmp[7:0]) || (|alu_result);
+            next_t_bit = (|tmp[7:0]) || (|alu_result);
           end else if (is_slti) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd1;
             alu_b      = {8{ir[10]}};           // sign-extend imm8 bit 7
-            t_we       = 1'b1;
-            next_t     = (r1[15] ^ ir[10]) ? r1[15] : alu_result[7];
+            next_t_bit = (r1[15] ^ ir[10]) ? r1[15] : alu_result[7];
           end else if (is_sltui) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd1;
             alu_b      = {8{ir[10]}};           // sign-extend for unsigned comparison
-            t_we       = 1'b1;
-            next_t     = ~alu_co;
+            next_t_bit = ~alu_co;
           end else if (is_shift) begin
             if (shamt[3]) begin
               if (is_right_shift) begin
@@ -690,13 +736,19 @@ module riscyv02_execute (
             w_data = {14'b0, i_bit, t_bit};
             w_we   = 1'b1;
           end
+          // Flag effects (mutually exclusive with each other)
+          if (is_sei) next_i_bit = 1'b1;
+          if (is_cli) next_i_bit = 1'b0;
+          if (is_srw) begin
+            next_i_bit = r1[1];
+            next_t_bit = r1[0];
           end
+          end
+          next_state = E_IDLE;
         end
       end
 
       E_MEM_LO: begin
-        bus_active = 1'b1;
-        ab         = tmp;
         if (mem_is_byte_store)
           insn_completing = 1'b1;
         else if (mem_is_byte_load) begin
@@ -712,131 +764,91 @@ module riscyv02_execute (
           w_data = {r1[15:8], uio_in};
           w_we   = 1'b1;
         end
+        next_r2_hi_r   = mem_is_store;
+        next_mem_carry = &tmp[7:0];
+        next_state     = (mem_is_byte_store || mem_is_byte_load) ? E_IDLE : E_MEM_HI;
       end
 
       E_MEM_HI: begin
         insn_completing = 1'b1;
-        bus_active      = 1'b1;
-        ab              = {tmp[15:8] + {7'd0, mem_carry}, tmp[7:0] + 8'd1};
         w_data          = {uio_in, r1[7:0]};
         w_we            = !mem_is_store;
+        next_state      = E_IDLE;
       end
 
-      default: ;
+      E_IDLE: ;
+      default: next_state = 3'bx;
     endcase
 
-    case (state)
-      E_MEM_LO, E_MEM_HI: begin
-        dout = r2_hi_r ? r2[15:8] : r2[7:0];  // Data via port 2 (low-fanout path to uio_out)
-        rwb  = !mem_is_store;
-      end
-      default: ;
-    endcase
+    // -----------------------------------------------------------------
+    // Interrupt entry (overrides state machine)
+    // -----------------------------------------------------------------
+    if (take_nmi || take_irq) begin
+      next_ir    = {10'b1111100000, 2'b11, 2'b00, !take_nmi, 1'b0};
+      next_i_bit = 1'b1;
+      next_state = E_EXEC_LO;
+    end
+
+    // -----------------------------------------------------------------
+    // Instruction dispatch (overrides everything)
+    // -----------------------------------------------------------------
+    if (ir_accept) begin
+      next_pc    = pc + 15'd1;
+      next_ir    = fetch_ir;
+      next_r2_hi_r = 1'b0;
+      if (fetch_ir[15:4] == 12'b1111100000_11)
+        next_i_bit = 1'b1;
+      next_state = E_EXEC_LO;
+    end
 
     fetch_flush = take_nmi || take_irq || jump;
   end
 
   // ==========================================================================
-  // FSM (negedge clk)
+  // Sequential (negedge clk): register next-state values
   // ==========================================================================
 
   always @(negedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      state       <= E_IDLE;
-      ir          <= 16'h0000;
-      carry_r     <= 1'b0;
-      pc          <= 15'h0000;
-      i_bit       <= 1'b1;
-      t_bit       <= 1'b0;
-      esr         <= 2'b10;  // {I=1, T=0}
-      saved_i_bit <= 1'b1;
-      nmi_ack     <= 1'b0;
-      r2_hi_r     <= 1'b0;
+      state     <= E_IDLE;
+      ir        <= 16'h0000;
+      carry_r   <= 1'b0;
+      pc        <= 15'h0000;
+      i_bit     <= 1'b1;
+      t_bit     <= 1'b0;
+      esr       <= 2'b10;  // {I=1, T=0}
+      r2_hi_r   <= 1'b0;
+      mem_carry <= 1'b0;
     end else begin
-      // NMI handshake: set has priority (take_nmi fires via nmi_edge
-      // before nmi_pending is registered, so nmi_pending may still be 0).
-      if (take_nmi) nmi_ack <= 1'b1;
-      else if (!nmi_pending) nmi_ack <= 1'b0;
-
-      // Capture i_bit_fwd at dispatch (negedge DFF: full-period constraint).
-      if (fsm_ready) saved_i_bit <= i_bit_fwd;
-
-      // -----------------------------------------------------------------
-      // State machine
-      // -----------------------------------------------------------------
-      case (state)
-        E_EXEC_LO: begin
-          carry_r <= alu_co;
-          if (is_wai || is_stp)
-            state <= E_IDLE;
-          else if (insn_completing) begin
-            if (jump) pc <= next_pc;
-            state <= E_IDLE;
-          end else
-            state <= E_EXEC_HI;
-        end
-
-        E_EXEC_HI: begin
-          if (t_we) t_bit <= next_t;
-          if (is_r9_load || is_r9_store || is_auipc || is_rr_load || is_rr_store || is_sp_load || is_sp_store) begin
-            if (is_auipc) state <= E_IDLE;
-            else          state <= E_MEM_LO;
-          end else begin
-            if (is_sei) i_bit <= 1'b1;
-            if (is_cli) i_bit <= 1'b0;
-            if (is_reti) begin
-              i_bit <= esr[1];
-              t_bit <= esr[0];
-            end
-            if (is_srw) begin
-              i_bit <= r1[1];
-              t_bit <= r1[0];
-            end
-            if (is_int) esr <= {saved_i_bit, t_bit};
-            if (jump) pc <= next_pc;
-            state <= E_IDLE;
-          end
-        end
-
-        E_MEM_LO: begin
-          r2_hi_r   <= mem_is_store;            // Stores: hi byte for dout
-          mem_carry <= &tmp[7:0];               // Carry for E_MEM_HI address increment
-          state     <= (mem_is_byte_store || mem_is_byte_load) ? E_IDLE : E_MEM_HI;
-        end
-
-        E_MEM_HI: state <= E_IDLE;
-
-        E_IDLE: ;
-
-        default: state <= 3'bx;
-      endcase
-
-      // -----------------------------------------------------------------
-      // Interrupt entry: synthesize INT instruction in ir.
-      // System prefix + sub[5]=1, vector in ir[1:0].
-      // i_bit captured by saved_i_bit DFF at dispatch (stable through E_EXEC_HI).
-      // ESR saves {i_bit_fwd, t_bit} at interrupt dispatch.
-      // -----------------------------------------------------------------
-      if (take_nmi || take_irq) begin
-        ir     <= {10'b1111100000, 2'b11, 2'b00, !take_nmi, 1'b0};
-        i_bit <= 1'b1;
-        state <= E_EXEC_LO;
-      end
-
-      // -----------------------------------------------------------------
-      // Instruction dispatch
-      // -----------------------------------------------------------------
-      if (ir_accept) begin
-        pc <= pc + 15'd1;
-        ir <= fetch_ir;
-        r2_hi_r  <= 1'b0;
-        // BRK/INT detection
-        if (fetch_ir[15:4] == 12'b1111100000_11)
-          i_bit <= 1'b1;
-        state <= E_EXEC_LO;
-      end
-
+      state     <= next_state;
+      ir        <= next_ir;
+      carry_r   <= next_carry_r;
+      pc        <= next_pc;
+      i_bit     <= next_i_bit;
+      t_bit     <= next_t_bit;
+      esr       <= next_esr;
+      r2_hi_r   <= next_r2_hi_r;
+      mem_carry <= next_mem_carry;
     end
+  end
+
+  // NMI handshake: set has priority (take_nmi fires via nmi_edge
+  // before nmi_pending is registered, so nmi_pending may still be 0).
+  always @(negedge clk or negedge rst_n) begin
+    if (!rst_n)
+      nmi_ack <= 1'b0;
+    else if (take_nmi)
+      nmi_ack <= 1'b1;
+    else if (!nmi_pending)
+      nmi_ack <= 1'b0;
+  end
+
+  // Capture i_bit_fwd at dispatch (negedge DFF: full-period constraint).
+  always @(negedge clk or negedge rst_n) begin
+    if (!rst_n)
+      saved_i_bit <= 1'b1;
+    else if (fsm_ready)
+      saved_i_bit <= i_bit_fwd;
   end
 
 endmodule
