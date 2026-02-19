@@ -482,12 +482,15 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/ANDIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
 | SEI/CLI | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
-| BZ/BNZ (taken) | 4 | 2 execute + 2 fetch after redirect |
+| BZ/BNZ (taken, same page) | 3 | 1 execute + 2 fetch after redirect |
+| BZ/BNZ (taken, page crossing) | 4 | 2 execute + 2 fetch after redirect |
 | LB/LBU/LBS/LBUS/LBR/LBUR | 3 | 2 address + 1 byte read (sign/zero-extend at E_MEM_LO) |
 | SB/SBS/SBR | 3 | 2 address + 1 byte written |
 | LW/SW/LWS/SWS/LWR/SWR | 4 | 2 address + 2 bytes transferred |
-| JR/JALR | 4 | 2 execute + 2 fetch after redirect |
-| J/JAL | 4 | 2 execute + 2 fetch after redirect |
+| JR (same page) | 3 | 1 execute + 2 fetch after redirect |
+| JR (page crossing) / JALR | 4 | 2 execute + 2 fetch after redirect |
+| J (same page) | 3 | 1 execute + 2 fetch after redirect |
+| J (page crossing) / JAL | 4 | 2 execute + 2 fetch after redirect |
 | RETI | 4 | 2 execute + 2 fetch after redirect |
 | INT (BRK) | 4 | 2 execute + 2 fetch after redirect |
 | WAI (wake) | 2 | 1 execute + 1 overlapped fetch |
