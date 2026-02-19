@@ -1133,3 +1133,77 @@ Total code: **24 bytes**
 The 65C02 wins. The core advantage is architectural: each 6502 instruction carries its own address (zero page or absolute), so the handler freely mixes `INC $02` (zero page) with `STA $D021` (absolute) without base register setup. RISCY-V02 must reload R0 when switching between memory regions — `LI R0, 0` for zero page, then `LUI` for $D000 — costing 4 cycles of base setup where the 6502 needs none. On top of that, the 6502's zero-page RMW (`INC $02`, 5 cy) modifies memory without a register, so the handler only clobbers A (one `PHA`/`PLA` pair, 7 cy). RISCY-V02 must save/restore two registers (16 cy) since every memory access flows through the register file.
 
 For handlers with more useful work, RISCY-V02's save/restore is fixed while its body instructions are generally faster, so the crossover comes quickly.
+
+### RC4 Keystream (PRGA)
+
+RC4's pseudo-random generation algorithm — the core inner loop of the stream cipher. Each call generates one byte of keystream from a 256-byte permutation table S and two indices i, j:
+
+```
+i = (i + 1) mod 256
+j = (j + S[i]) mod 256
+swap(S[i], S[j])
+output = S[(S[i] + S[j]) mod 256]
+```
+
+Four array-indexed operations with computed indices, a swap, and double indirection — a worst case for a load-store architecture that must compute every address through registers.
+
+**65C02** — S at $0200 (page-aligned), i/j in zero page
+
+```
+rc4_byte:
+    INC i           ; 5 cy  2 B    i = (i+1) mod 256
+    LDX i           ; 3 cy  2 B    X = i
+    LDA $0200,X     ; 4 cy  3 B    A = S[i]
+    PHA             ; 3 cy  1 B    save S[i]
+    CLC             ; 2 cy  1 B
+    ADC j           ; 3 cy  2 B    A = j + S[i]
+    STA j           ; 3 cy  2 B    j updated
+    TAY             ; 2 cy  1 B    Y = j
+    LDA $0200,Y     ; 4 cy  3 B    A = S[j]
+    STA $0200,X     ; 5 cy  3 B    S[i] = S[j]
+    PLA             ; 4 cy  1 B    A = old S[i]
+    STA $0200,Y     ; 5 cy  3 B    S[j] = old S[i]
+    CLC             ; 2 cy  1 B
+    ADC $0200,X     ; 4 cy  3 B    A = S[i]+S[j] (new)
+    TAY             ; 2 cy  1 B
+    LDA $0200,Y     ; 4 cy  3 B    output byte
+    RTS             ; 6 cy  1 B
+```
+
+**61 cycles, 34 bytes.** S[i] is saved with `PHA` before the j computation (avoiding a re-read), then restored with `PLA` for the swap. The i and j indices must live in zero page because X and Y are needed for array indexing.
+
+**RISCY-V02** — S base in R0, i in R1, j in R2; output in R3
+
+```
+rc4_byte:
+    ADDI R1, 1          ; 2 cy  2 B    i++
+    ANDI R1, 0xFF       ; 2 cy  2 B    mod 256
+    ADD  R3, R0, R1     ; 2 cy  2 B    R3 = &S[i]
+    LBUR R4, R3         ; 3 cy  2 B    R4 = S[i]
+    ADD  R2, R2, R4     ; 2 cy  2 B    j += S[i]
+    ANDI R2, 0xFF       ; 2 cy  2 B    mod 256
+    ADD  R3, R0, R2     ; 2 cy  2 B    R3 = &S[j]
+    LBUR R5, R3         ; 3 cy  2 B    R5 = S[j]
+    SBR  R4, R3         ; 3 cy  2 B    S[j] = old S[i]
+    ADD  R3, R0, R1     ; 2 cy  2 B    R3 = &S[i]
+    SBR  R5, R3         ; 3 cy  2 B    S[i] = old S[j]
+    ADD  R3, R4, R5     ; 2 cy  2 B    R3 = S[i]+S[j]
+    ANDI R3, 0xFF       ; 2 cy  2 B    mod 256
+    ADD  R3, R0, R3     ; 2 cy  2 B    R3 = &S[sum]
+    LBUR R3, R3         ; 3 cy  2 B    output byte
+    JR   R6, 0          ; 3 cy  2 B
+```
+
+**38 cycles, 32 bytes.** Three `ANDI` instructions (6 cy) are needed for mod-256 masking that the 6502 gets for free from 8-bit registers. Five `ADD` instructions (10 cy) compute array addresses that the 6502 folds into its indexed addressing modes. Despite this 16-cycle tax, RISCY-V02 wins by a wide margin.
+
+| | 65C02 | RISCY-V02 |
+|---|---|---|
+| Cycles | 61 | 38 |
+| Code size | 34 B | 32 B |
+| Speedup | 1.0× | 1.6× |
+
+RISCY-V02 wins decisively. Two factors overwhelm the mod-256 and address-computation tax:
+
+1. **Registers eliminate state traffic.** The 6502 stores i and j in zero page — every call does INC+LDX+ADC+STA (14 cy) just to read, update, and write back two index variables. RISCY-V02 keeps i, j, and the S base in registers: state overhead is a single `ADDI` (2 cy).
+
+2. **Multiple live values avoid spills and re-reads.** The swap requires S[i] and S[j] simultaneously, but the 6502's single accumulator forces a stack spill (`PHA`/`PLA`, 7 cy). RISCY-V02 holds both values in R4 and R5, computes the final sum as `ADD R3, R4, R5`, and never touches memory for temporaries.
