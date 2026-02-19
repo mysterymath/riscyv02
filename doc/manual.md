@@ -1046,3 +1046,90 @@ Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **116 cy**. Tota
 | Code size | 43 B | 36 B |
 
 RISCY-V02 wins CRC-16 by ~2×. The key insight is that RISCY-V02's bit loop costs the same 12.5 cy/bit regardless of CRC width — `SLTI` extracts bit 15 just as cheaply as `ANDIF` extracts bit 7. The 6502's bit loop goes from 10.5 to 25.5 cy (2.4× slower) because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2. The polynomial XOR is especially painful: 1 instruction on RISCY-V02 vs 6 on the 6502.
+
+### Raster Bar Interrupt Handler
+
+A classic demo effect: an interrupt fires once per scanline to change the background color, producing horizontal rainbow bands. The handler increments a color byte in memory and writes it to a display register — the simplest possible useful work. Both examples target a C64-style system (VIC-II at $D000, color byte in zero page).
+
+**Interrupt entry latency:**
+
+Both CPUs must finish the current instruction before taking the interrupt. The average wait depends on the instruction mix of the interrupted code:
+
+- **65C02:** Instructions take 2–7 cycles. Length-biased sampling across a typical game loop gives an average wait of **~1.5 cycles**. After the instruction completes, the hardware pushes PC and status to the stack and reads the IRQ vector: **7 cycles**.
+- **RISCY-V02:** Instructions take 2–4 cycles (pipeline-visible). Average wait: **~1 cycle**. After completion, INT saves PC to EPC and fetches from the vector: **4 cycles**.
+
+**65C02** — color byte at $02 (zero page), VIC-II at $D019/$D021
+
+```
+                                    ;  7 cy        entry: push PC+P, read vector
+irq_handler:
+    PHA                 ;  3 cy   1 B    save A
+    INC $02             ;  5 cy   2 B    color++ (zero page RMW)
+    LDA $02             ;  3 cy   2 B    load updated color
+    STA $D021           ;  4 cy   3 B    set background color
+    LDA #$01            ;  2 cy   2 B
+    STA $D019           ;  4 cy   3 B    ack raster interrupt
+    PLA                 ;  4 cy   1 B    restore A
+    RTI                 ;  6 cy   1 B
+```
+
+| Phase | Cycles |
+|---|---|
+| Instruction wait (avg) | ~1.5 |
+| Hardware entry (push+vector) | 7 |
+| Register save (`PHA`) | 3 |
+| Handler body | 18 |
+| Register restore (`PLA`) | 4 |
+| Exit (`RTI`) | 6 |
+| **Total** | **~39.5** |
+
+Total code: **15 bytes**
+
+**RISCY-V02** — color byte at $0002 (zero page), VIC-II at $D000
+
+Every register the handler touches must be saved and restored. The handler needs R0 (implicit base for R,8 memory ops) and R5 (scratch). The color byte is not within reach of the VIC registers, so R0 must be loaded twice — once for zero page, once for $D000.
+
+Register saves go below the current SP without adjusting it. This is safe because RISCY-V02's IRQ entry sets I=1, masking further IRQs, and NMI handlers cannot return (RETI from NMI is undefined behavior per the architecture — NMI handlers reset, halt, or spin). Since nothing that could resume the handler will touch the stack, the space below SP is exclusively ours for the handler's lifetime.
+
+```
+                                    ;  4 cy        entry: save PC→EPC, fetch vector
+irq_handler:
+    SWS  R0, -4         ;  4 cy   2 B    save R0 below SP
+    SWS  R5, -2         ;  4 cy   2 B    save R5 below SP
+    LI   R0, 0          ;  2 cy   2 B    R0 → zero page
+    LBU  R5, 2          ;  3 cy   2 B    R5 = color ($0002)
+    ADDI R5, 1          ;  2 cy   2 B    color++
+    SB   R5, 2          ;  3 cy   2 B    save color ($0002)
+    LUI  R0, -24        ;  2 cy   2 B    R0 = $D000
+    SB   R5, $21        ;  3 cy   2 B    $D021: background color
+    SB   R5, $19        ;  3 cy   2 B    $D019: ack raster interrupt
+    LWS  R5, -2         ;  4 cy   2 B    restore R5
+    LWS  R0, -4         ;  4 cy   2 B    restore R0
+    RETI                ;  4 cy   2 B
+```
+
+| Phase | Cycles |
+|---|---|
+| Instruction wait (avg) | ~1 |
+| Hardware entry (INT+fetch) | 4 |
+| Register save (`SWS`×2) | 8 |
+| Handler body | 18 |
+| Register restore (`LWS`×2) | 8 |
+| Exit (`RETI`+fetch) | 4 |
+| **Total** | **~43** |
+
+Total code: **24 bytes**
+
+| | 65C02 | RISCY-V02 |
+|---|---|---|
+| Entry (HW) | 7 cy | 4 cy |
+| Insn wait (avg) | ~1.5 cy | ~1 cy |
+| Save/restore | 7 cy | 16 cy |
+| Handler body | 18 cy | 18 cy |
+| Exit | 6 cy | 4 cy |
+| **Total** | **~39.5 cy** | **~43 cy** |
+| Code size | 15 B | 24 B |
+
+The 65C02 wins. The core advantage is architectural: each 6502 instruction carries its own address (zero page or absolute), so the handler freely mixes `INC $02` (zero page) with `STA $D021` (absolute) without base register setup. RISCY-V02 must reload R0 when switching between memory regions — `LI R0, 0` for zero page, then `LUI` for $D000 — costing 4 cycles of base setup where the 6502 needs none. On top of that, the 6502's zero-page RMW (`INC $02`, 5 cy) modifies memory without a register, so the handler only clobbers A (one `PHA`/`PLA` pair, 7 cy). RISCY-V02 must save/restore two registers (16 cy) since every memory access flows through the register file.
+
+For handlers with more useful work, RISCY-V02's save/restore is fixed while its body instructions are generally faster, so the crossover comes quickly.
