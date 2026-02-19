@@ -657,3 +657,78 @@ Total code: **26 bytes**
 | Code size | 28 B | 26 B |
 
 The 65C02's `(indirect),Y` is powerful — pointer dereference plus index in one instruction. But the 8-bit index register forces page-boundary handling that complicates the code. RISCY-V02's 16-bit pointers eliminate page handling, and 16-bit word loads/stores copy two bytes per bus transaction, nearly halving throughput cost. The structure is analogous: bulk transfer (pages vs words) with a tail for the remainder (partial page vs odd byte).
+
+### strcpy
+
+```c
+char *strcpy(char *dst, const char *src);
+```
+
+**65C02** — arguments in zero page: src ($00), dst ($02)
+
+```
+strcpy:
+    LDY #0              ;  2 cy   2 B
+loop:
+    LDA (src),Y         ;  5 cy   2 B
+    STA (dst),Y         ;  6 cy   2 B
+    BEQ done            ;  2 cy   2 B
+    INY                 ;  2 cy   1 B
+    BNE loop            ;  3 cy   2 B
+    INC src+1           ;  5 cy   2 B    ; page crossing
+    INC dst+1           ;  5 cy   2 B
+    BRA loop            ;  3 cy   2 B
+done:
+    RTS                 ;  6 cy   1 B
+```
+
+Inner loop: `LDA` + `STA` + `BEQ` + `INY` + `BNE` = **18 cy/char**, 9 B
+
+Page crossing: `INC` + `INC` + `BRA` = 13 cy / 256 chars (0.05 cy/char amortized)
+
+Total code: **18 bytes**
+
+**RISCY-V02** — arguments in registers: R2 = dst, R3 = src
+
+```
+strcpy:
+    LBUR R5, R3         ;  3 cy   2 B
+    SBR  R5, R2         ;  3 cy   2 B
+    ADDI R3, 1          ;  2 cy   2 B
+    ADDI R2, 1          ;  2 cy   2 B
+    BNZ  R5, strcpy     ;  3 cy   2 B
+    JR   R6, 0          ;  3 cy   2 B
+```
+
+Inner loop: `LBUR` + `SBR` + 2×`ADDI` + `BNZ` = **13 cy/char**, 10 B. No page handling.
+
+Total code: **12 bytes**
+
+| | 65C02 | RISCY-V02 |
+|---|---|---|
+| Inner loop | 18 cy/char | 13 cy/char |
+| Page overhead | 13 cy / 256 chars | none |
+| Code size | 18 B | 12 B |
+
+Both versions store the byte before testing for the null terminator — the 65C02 via `BEQ` after `STA`, RISCY-V02 via `BNZ` after `SBR`. The 65C02 needs an extra `BEQ` branch (2 cycles, not taken) on every character to check for termination, plus page-crossing logic. RISCY-V02 folds the termination check into the loop's back-edge branch.
+
+Word-copy variant (RISCY-V02 only):
+
+```
+strcpy:
+    LWR  R5, R3         ;  4 cy   2 B    ; load 2 chars
+    ANDIF R5, 0xFF      ;  2 cy   2 B    ; R1 = low byte
+    BZ   R1, lo         ;  2 cy   2 B
+    SUB  R1, R5, R1     ;  2 cy   2 B    ; R1 = high byte << 8
+    BZ   R1, hi         ;  2 cy   2 B
+    SWR  R5, R2         ;  4 cy   2 B    ; store 2 chars
+    ADDI R3, 2          ;  2 cy   2 B
+    ADDI R2, 2          ;  2 cy   2 B
+    J    strcpy         ;  3 cy   2 B
+lo: SBR  R5, R2         ;  3 cy   2 B    ; store null
+    JR   R6, 0          ;  3 cy   2 B
+hi: SWR  R5, R2         ;  4 cy   2 B    ; store char + null
+    JR   R6, 0          ;  3 cy   2 B
+```
+
+Word loop: 23 cy / 2 chars = **11.5 cy/char**, 26 B. The null-byte detection (`ANDIF` + `BZ` + `SUB` + `BZ` = 8 cy) eats most of the word-load savings, so the speedup over the byte version is modest (~12%). Unlike memcpy, where word copies nearly halve throughput, strcpy's per-element null check limits the benefit.
