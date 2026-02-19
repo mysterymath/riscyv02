@@ -160,7 +160,6 @@ module riscyv02_execute (
   wire is_stp  = ir == 16'b1111100000000111;
   wire is_epcr = ir[15:3] == 13'b1111100000010;
   wire is_epcw = ir[15:3] == 13'b1111100000011;
-  wire is_movt = ir[15:3] == 13'b1111100000_100;
   wire is_srr  = ir[15:3] == 13'b1111100000_101;
   wire is_srw  = ir[15:3] == 13'b1111100000_001;
   wire is_int  = ir[15:4] == 12'b1111100000_11;
@@ -411,7 +410,7 @@ module riscyv02_execute (
           // EPC available on r1[15:0]; no action needed in LO
         end else if (is_int) begin
           // Deferred to E_EXEC_HI
-        end else if (is_epcr || is_epcw || is_movt || is_srr || is_srw) begin
+        end else if (is_epcr || is_epcw || is_srr || is_srw) begin
           // Deferred to E_EXEC_HI
         end else if (is_r9_load || is_r9_store || is_sp_load || is_sp_store) begin
           // Address: base + sext(imm8), byte offset (no shift)
@@ -671,9 +670,6 @@ module riscyv02_execute (
             end
           end else if (is_epcr || is_epcw) begin
             w_data = r1;
-            w_we   = 1'b1;
-          end else if (is_movt) begin
-            w_data = {15'b0, t_bit};
             w_we   = 1'b1;
           end else if (is_srr) begin
             w_data = {14'b0, i_bit, t_bit};

@@ -180,7 +180,7 @@ async def test_shifts(dut):
 
 @cocotb.test()
 async def test_slt_sltu(dut):
-    """SLT and SLTU comparisons (T-flag + MOVT)."""
+    """SLT and SLTU comparisons (T-flag + read_t)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -188,10 +188,10 @@ async def test_slt_sltu(dut):
     a.li(1, 5)
     a.li(2, 10)
     a.slt(3, 1, 2)
-    a.movt(3)
+    a.read_t(3)
     a.sw(3, 0x40)
     a.slt(4, 2, 1)
-    a.movt(4)
+    a.read_t(4)
     a.sw(4, 0x42)
     a.spin()
 
@@ -226,23 +226,23 @@ async def test_auipc(dut):
 
 @cocotb.test()
 async def test_slti_sltui_xorif(dut):
-    """SLTI, SLTUI, XORIF all set T flag; MOVT reads T into a register."""
+    """SLTI, SLTUI, XORIF all set T flag; read_t reads T into a register."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(2, 5)
     a.slti(2, 10)
-    a.movt(1)
+    a.read_t(1)
     a.sw_s(1, 0x40)
     a.slti(2, 3)
-    a.movt(1)
+    a.read_t(1)
     a.sw_s(1, 0x42)
     a.xorif(2, 5)
-    a.movt(1)
+    a.read_t(1)
     a.sw_s(1, 0x44)
     a.xorif(2, 3)
-    a.movt(1)
+    a.read_t(1)
     a.sw_s(1, 0x46)
     a.spin()
 
@@ -637,7 +637,7 @@ async def test_slt_equal(dut):
     a.li(1, 5)
     a.li(2, 5)
     a.slt(3, 1, 2)
-    a.movt(3)
+    a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
     # Clear output area
@@ -661,7 +661,7 @@ async def test_slt_negative(dut):
     a.li(1, -5)
     a.li(2, 5)
     a.slt(3, 1, 2)
-    a.movt(3)
+    a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
     # Clear output area
@@ -685,7 +685,7 @@ async def test_slt_negative_false(dut):
     a.li(1, 5)
     a.li(2, -5)
     a.slt(3, 1, 2)
-    a.movt(3)
+    a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
     # Clear output area
@@ -709,7 +709,7 @@ async def test_sltu_true(dut):
     a.li(1, 5)
     a.li(2, 10)
     a.sltu(3, 1, 2)
-    a.movt(3)
+    a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
     # Clear output area
@@ -733,7 +733,7 @@ async def test_sltu_false(dut):
     a.li(1, 10)
     a.li(2, 5)
     a.sltu(3, 1, 2)
-    a.movt(3)
+    a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
     # Clear output area
@@ -757,7 +757,7 @@ async def test_sltu_large(dut):
     a.li(1, 5)
     a.li(2, -1)
     a.sltu(3, 1, 2)
-    a.movt(3)
+    a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
     # Clear output area
@@ -781,7 +781,7 @@ async def test_sltu_large_reverse(dut):
     a.li(1, -1)
     a.li(2, 5)
     a.sltu(3, 1, 2)
-    a.movt(3)
+    a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
     # Clear output area
@@ -901,7 +901,7 @@ async def test_slti_negative(dut):
     a = Asm()
     a.li(1, -2)
     a.slti(1, -1)
-    a.movt(2)
+    a.read_t(2)
     a.sw_s(2, 0x40)
     a.spin()
     # Clear output area
@@ -924,7 +924,7 @@ async def test_slti_equal(dut):
     a = Asm()
     a.li(1, 5)
     a.slti(1, 5)
-    a.movt(2)
+    a.read_t(2)
     a.sw_s(2, 0x40)
     a.spin()
     # Pre-fill output area with non-zero to detect no-write
@@ -947,7 +947,7 @@ async def test_sltui_true(dut):
     a = Asm()
     a.li(1, 5)
     a.sltui(1, 10)
-    a.movt(2)
+    a.read_t(2)
     a.sw_s(2, 0x40)
     a.spin()
     # Clear output area
@@ -970,7 +970,7 @@ async def test_sltui_false(dut):
     a = Asm()
     a.li(1, -1)
     a.sltui(1, 3)
-    a.movt(2)
+    a.read_t(2)
     a.sw_s(2, 0x40)
     a.spin()
     # Pre-fill output area with non-zero to detect no-write
@@ -993,7 +993,7 @@ async def test_xorif_equality(dut):
     a = Asm()
     a.li(1, 5)
     a.xorif(1, 5)
-    a.movt(2)
+    a.read_t(2)
     a.sw_s(2, 0x40)
     a.spin()
     # Pre-fill output area with non-zero to detect no-write

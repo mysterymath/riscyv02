@@ -241,10 +241,6 @@ def _encode_epcw(rs):
     """EPCW Rs: copy Rs to EPC."""
     return _encode_sys(0b011_000 | (rs & 0x7))
 
-def _encode_movt(rd):
-    """MOVT Rd: rd = T (0 or 1)."""
-    return _encode_sys(0b100_000 | (rd & 0x7))
-
 def _encode_srr(rd):
     """SRR Rd: rd = SR ({I, T})."""
     return _encode_sys(0b101_000 | (rd & 0x7))
@@ -351,7 +347,6 @@ class Asm:
     def reti(self):             self._emit(_encode_reti())
     def epcr(self, rd):         self._emit(_encode_epcr(rd))
     def epcw(self, rs):         self._emit(_encode_epcw(rs))
-    def movt(self, rd):         self._emit(_encode_movt(rd))
     def srr(self, rd):          self._emit(_encode_srr(rd))
     def srw(self, rs):          self._emit(_encode_srw(rs))
     def brk(self):              self._emit(_encode_brk())

@@ -606,10 +606,6 @@ class RISCYV02Sim:
                 self.epc = self.regs[sub & 7]
                 return []
 
-            if (sub >> 3) == 0b100:     # MOVT rd
-                self.regs[sub & 7] = 1 if self.t_bit else 0
-                return []
-
             if (sub >> 3) == 0b101:     # SRR rd
                 self.regs[sub & 7] = (int(self.i_bit) << 1) | int(self.t_bit)
                 return []

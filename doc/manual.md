@@ -138,7 +138,7 @@ All instructions are 16 bits. The encoding uses a **variable-width prefix-free**
 
 ### Encoding Overview
 
-**57 instructions defined. 9,971 of 65,536 encodings free (15.2%).**
+**56 instructions defined. 9,979 of 65,536 encodings free (15.2%).**
 
 | Format | Prefix | Layout | Used |
 |---|---|---|---|
@@ -149,7 +149,7 @@ All instructions are 16 bits. The encoding uses a **variable-width prefix-free**
 | R,R,R | 7-bit | `[rd:3\|rs2:3\|rs1:3]` | 10 |
 | R,4 | 9-bit | `[shamt:4\|reg:3]` | 3 |
 | R,R | 10-bit | `[rd:3\|rs:3]` | 5 |
-| System | 11-16 bit | various | 11 |
+| System | 11-16 bit | various | 10 |
 
 Fields are packed MSB-first: prefix at top, register at LSB. One R,8 uses the space of 4 R,R,R or 32 R,R. The B,8 format (BT/BF) occupies the former ANDIF prefix slot (10110); the 3-bit selector field in ir[10:8] selects the branch type, leaving 6 sub-codes free within that slot.
 
@@ -224,7 +224,6 @@ Fields are packed MSB-first: prefix at top, register at LSB. One R,8 uses the sp
 1111100000 001rrr  SRW    {I, T} = rs[1:0]
 1111100000 010rrr  EPCR   rd = EPC
 1111100000 011rrr  EPCW   EPC = rs
-1111100000 100rrr  MOVT   rd = {15'b0, T}
 1111100000 101rrr  SRR    rd = {14'b0, I, T}
 1111100000 1xxxxx  INT    ESR = {I, T}; EPC = pc+2; I = 1; pc = (vec+1)*2
 1111100000 000101  WAI    halt until interrupt
@@ -404,7 +403,7 @@ Compares rs1 and rs2 as signed 16-bit integers. Sets T=1 if rs1 < rs2, T=0 other
 
 `T = (rs1 <u rs2)`
 
-Compares rs1 and rs2 as unsigned 16-bit integers. Sets T=1 if rs1 < rs2, T=0 otherwise. The rd field is unused. Use MOVT to capture the result in a register if needed.
+Compares rs1 and rs2 as unsigned 16-bit integers. Sets T=1 if rs1 < rs2, T=0 otherwise. The rd field is unused. Use `SRR rd; ANDI rd, 1` to capture the result in a register if needed.
 
 #### SLL -- Shift Left Logical
 
@@ -474,12 +473,6 @@ Copies the Exception PC register to a general-purpose register. EPC is a clean 1
 
 Copies a general-purpose register to the Exception PC register. Register is at ir[2:0]. Modifies only the return address; the saved {I, T} flags are in ESR, not EPC.
 
-#### MOVT -- Move T to Register
-
-`rd = {15'b0, T}` -- 2 cycles
-
-Copies the T flag into bit 0 of the destination register, clearing all other bits. Result is 0 or 1. Use when the comparison result is needed as a value (e.g., for shift-in or accumulation) rather than a branch condition. Register is at ir[2:0].
-
 #### SRR -- Read Status Register
 
 `rd = {14'b0, I, T}` -- 2 cycles
@@ -525,7 +518,7 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | Instruction | Cycles | Notes |
 |---|---|---|
 | NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
-| SEI/CLI/MOVT/SRR/SRW | 2 | 1 execute + 1 overlapped fetch |
+| SEI/CLI/SRR/SRW | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ/BT/BF (not taken) | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ/BT/BF (taken, same page) | 3 | 1 execute + 2 fetch after redirect |
 | BZ/BNZ/BT/BF (taken, page crossing) | 4 | 2 execute + 2 fetch after redirect |
@@ -908,7 +901,8 @@ udiv16:
     LI   R5, 16         ;  2 cy   2 B    ; counter
 loop:
     SLTI R2, 0          ;  2 cy   2 B    ; T = bit 15 of dividend
-    MOVT R0             ;  2 cy   2 B    ; R0 = T (0 or 1)
+    SRR  R0             ;  2 cy   2 B    ; R0 = {I, T}
+    ANDI R0, 1          ;  2 cy   2 B    ; R0 = T (0 or 1)
     SLLI R4, 1          ;  2 cy   2 B    ; remainder <<= 1
     OR   R4, R4, R0     ;  2 cy   2 B    ; shift in high bit
     SLLI R2, 1          ;  2 cy   2 B    ; dividend <<= 1
@@ -922,19 +916,19 @@ no_sub:
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Per iteration (no sub): **20 cy** — `SLTI`+`MOVT`+`SLLI`+`OR`+`SLLI`+`SLTU`+`BT`(taken)+`ADDI`+`BNZ`
+Per iteration (no sub): **22 cy** — `SLTI`+`SRR`+`ANDI`+`SLLI`+`OR`+`SLLI`+`SLTU`+`BT`(taken)+`ADDI`+`BNZ`
 
-Per iteration (sub): **23 cy** — adds `SUB`+`ORI`
+Per iteration (sub): **25 cy** — adds `SUB`+`ORI`
 
-Average: **21.5 cy/iter**. Total code: **28 bytes**
+Average: **23.5 cy/iter**. Total code: **30 bytes**
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
-| Per iteration (avg) | 49 cy | 21.5 cy |
-| 16 iterations | ~784 cy | ~344 cy |
-| Code size | 38 B | 28 B |
+| Per iteration (avg) | 49 cy | 23.5 cy |
+| 16 iterations | ~784 cy | ~376 cy |
+| Code size | 38 B | 30 B |
 
-The structure is identical — the same restoring division algorithm. The 2.3× speedup comes from the same sources as multiplication: 16-bit shifts are single instructions and the trial subtraction compresses from 6 instructions to 2 (`SLTU`+`SUB`). The T flag adds one MOVT instruction per iteration (2 cy) to extract the sign bit for the shift-in, since SLTI now writes to T rather than a register. The comparison result is used directly via BT (branch if T set) without needing a register intermediate.
+The structure is identical — the same restoring division algorithm. The 2.1× speedup comes from the same sources as multiplication: 16-bit shifts are single instructions and the trial subtraction compresses from 6 instructions to 2 (`SLTU`+`SUB`). The T flag adds `SRR`+`ANDI` per iteration (4 cy) to extract the sign bit for the shift-in, since SLTI writes to T rather than a register. The comparison result is used directly via BT (branch if T set) without needing a register intermediate.
 
 ### CRC-8 (SMBUS)
 
