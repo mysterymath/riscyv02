@@ -732,3 +732,78 @@ hi: SWR  R5, R2         ;  4 cy   2 B    ; store char + null
 ```
 
 Word loop: 23 cy / 2 chars = **11.5 cy/char**, 26 B. The null-byte detection (`ANDIF` + `BZ` + `SUB` + `BZ` = 8 cy) eats most of the word-load savings, so the speedup over the byte version is modest (~12%). Unlike memcpy, where word copies nearly halve throughput, strcpy's per-element null check limits the benefit.
+
+### 16×16 → 16 Multiply
+
+```c
+uint16_t mul(uint16_t a, uint16_t b);
+```
+
+Both implementations use the same shift-and-add algorithm (GCC's `__mulsi3` pattern): shift the multiplier right one bit per iteration, conditionally add the multiplicand to the result, shift the multiplicand left, and exit early when the multiplier reaches zero.
+
+**65C02** — arguments in zero page: mult ($00), mcand ($02), result ($04)
+
+```
+multiply:
+    LDA #0              ;  2 cy   2 B
+    STA result          ;  3 cy   2 B
+    STA result+1        ;  3 cy   2 B
+loop:
+    LDA mult            ;  3 cy   2 B    ; early exit
+    ORA mult+1          ;  3 cy   2 B
+    BEQ done            ;  2 cy   2 B
+    LSR mult+1          ;  5 cy   2 B    ; shift out bit 0
+    ROR mult            ;  5 cy   2 B
+    BCC no_add          ;  2.5 cy 2 B
+    CLC                 ;  2 cy   1 B    ; result += mcand
+    LDA result          ;  3 cy   2 B
+    ADC mcand           ;  3 cy   2 B
+    STA result          ;  3 cy   2 B
+    LDA result+1        ;  3 cy   2 B
+    ADC mcand+1         ;  3 cy   2 B
+    STA result+1        ;  3 cy   2 B
+no_add:
+    ASL mcand           ;  5 cy   2 B    ; mcand <<= 1
+    ROL mcand+1         ;  5 cy   2 B
+    BRA loop            ;  3 cy   2 B
+done:
+    RTS                 ;  6 cy   1 B
+```
+
+Per iteration (no add): **34 cy** — `LDA`+`ORA`+`BEQ`+`LSR`+`ROR`+`BCC`(taken)+`ASL`+`ROL`+`BRA`
+
+Per iteration (add): **54 cy** — adds `CLC` + 3×(`LDA`/`ADC`/`STA`) chain
+
+Average: **44 cy/iter**. Total code: **36 bytes**
+
+**RISCY-V02** — arguments in registers: R2 = multiplier, R3 = multiplicand, result in R4
+
+```
+multiply:
+    LI   R4, 0          ;  2 cy   2 B
+loop:
+    BZ   R2, done       ;  2 cy   2 B    ; early exit
+    ANDIF R2, 1         ;  2 cy   2 B    ; R1 = bit 0
+    SRLI R2, 1          ;  2 cy   2 B    ; multiplier >>= 1
+    BZ   R1, no_add     ;  2.5 cy 2 B
+    ADD  R4, R4, R3     ;  2 cy   2 B    ; result += mcand
+no_add:
+    SLLI R3, 1          ;  2 cy   2 B    ; mcand <<= 1
+    J    loop           ;  3 cy   2 B
+done:
+    JR   R6, 0          ;  3 cy   2 B
+```
+
+Per iteration (no add): **14 cy** — `BZ`+`ANDIF`+`SRLI`+`BZ`(taken)+`SLLI`+`J`
+
+Per iteration (add): **15 cy** — adds `ADD`
+
+Average: **14.5 cy/iter**. Total code: **18 bytes**
+
+| | 65C02 | RISCY-V02 |
+|---|---|---|
+| Per iteration (avg) | 44 cy | 14.5 cy |
+| 16 iterations (avg) | ~704 cy | ~232 cy |
+| Code size | 36 B | 18 B |
+
+The 3× per-iteration speedup comes from three sources: 16-bit addition is one instruction (`ADD`) vs seven (`CLC`+3×`LDA`/`ADC`/`STA`); 16-bit shifts are one instruction (`SLLI`/`SRLI`) vs two (`ASL`+`ROL`); and testing a 16-bit value for zero is one instruction (`BZ`) vs three (`LDA`+`ORA`+`BEQ`). Every 16-bit operation that the 6502 must serialize byte-by-byte collapses to a single instruction on RISCY-V02.
