@@ -886,3 +886,163 @@ Average: **19.5 cy/iter**. Total code: **26 bytes**
 | Code size | 38 B | 26 B |
 
 The structure is identical — the same restoring division algorithm. The 2.5× speedup is less dramatic than multiplication's 3× because division's inner loop is dominated by shifts and a compare-subtract, which compress less: the 6502's 4-instruction shift chain (`ASL`+`ROL`×3) becomes 3 instructions (`SLTI`+`SLLI`+`OR`) since RISCY-V02 lacks a carry flag and must extract the high bit explicitly. The trial subtraction compresses better: `SEC`+`LDA`+`SBC`+`TAY`+`LDA`+`SBC` (6 instructions) becomes one `SLTU`+`SUB` (2 instructions).
+
+### CRC-8 (SMBUS)
+
+```c
+uint8_t crc8(const uint8_t *data, uint8_t len);  // poly=0x07, init=0
+```
+
+Both use the standard bitwise algorithm: XOR each byte into the CRC, then shift left 8 times, conditionally XORing with the polynomial when the high bit shifts out.
+
+**65C02** — ptr ($00), len ($02, 8-bit), result in A
+
+```
+crc8:
+    LDA #0              ;  2 cy   2 B    crc = 0
+    LDY #0              ;  2 cy   2 B    index
+byte_loop:
+    EOR (ptr),Y         ;  5 cy   2 B    crc ^= *data
+    LDX #8              ;  2 cy   2 B
+bit_loop:
+    ASL A               ;  2 cy   1 B    crc <<= 1
+    BCC no_xor          ;  2.5 cy 2 B
+    EOR #$07            ;  2 cy   2 B    crc ^= poly
+no_xor:
+    DEX                 ;  2 cy   1 B
+    BNE bit_loop        ;  3 cy   2 B
+    INY                 ;  2 cy   1 B
+    DEC len             ;  5 cy   2 B
+    BNE byte_loop       ;  3 cy   2 B
+    RTS                 ;  6 cy   1 B
+```
+
+Bit loop (no xor): **10 cy** — `ASL`+`BCC`(taken)+`DEX`+`BNE`
+
+Bit loop (xor): **11 cy** — adds `EOR`
+
+Average: **10.5 cy/bit**, 84 cy/byte bit processing. Per byte: **101 cy**. Total code: **22 bytes**
+
+**RISCY-V02** — R2 = data ptr, R3 = len, result in R4
+
+```
+crc8:
+    LI   R4, 0          ;  2 cy   2 B    crc = 0
+byte_loop:
+    LBUR R5, R2         ;  3 cy   2 B    R5 = *data
+    XOR  R4, R4, R5     ;  2 cy   2 B    crc ^= byte
+    LI   R5, 8          ;  2 cy   2 B
+bit_loop:
+    ANDIF R4, 0x80      ;  2 cy   2 B    R1 = bit 7
+    SLLI R4, 1          ;  2 cy   2 B    crc <<= 1
+    BZ   R1, no_xor     ;  2.5 cy 2 B
+    XORI R4, 0x07       ;  2 cy   2 B    crc ^= poly
+no_xor:
+    ADDI R5, -1         ;  2 cy   2 B
+    BNZ  R5, bit_loop   ;  3 cy   2 B
+    ADDI R2, 1          ;  2 cy   2 B    data++
+    ADDI R3, -1         ;  2 cy   2 B    len--
+    BNZ  R3, byte_loop  ;  3 cy   2 B
+    ANDI R4, 0xFF       ;  2 cy   2 B    mask to 8 bits
+    JR   R6, 0          ;  3 cy   2 B
+```
+
+Bit loop (no xor): **12 cy** — `ANDIF`+`SLLI`+`BZ`(taken)+`ADDI`+`BNZ`
+
+Bit loop (xor): **13 cy** — adds `XORI`
+
+Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **114 cy**. Total code: **30 bytes**
+
+| | 65C02 | RISCY-V02 |
+|---|---|---|
+| Bit loop (avg) | 10.5 cy | 12.5 cy |
+| Per byte | 101 cy | 114 cy |
+| Code size | 22 B | 30 B |
+
+The 65C02 wins CRC-8. The carry flag is the difference: `ASL` shifts the CRC and captures the overflow bit in one instruction; RISCY-V02 needs a separate `ANDIF` to extract bit 7 before shifting. With the CRC, byte overhead, and polynomial all fitting naturally in 8-bit operations, the 6502 plays to its strengths.
+
+### CRC-16/CCITT
+
+```c
+uint16_t crc16(const uint8_t *data, uint8_t len);  // poly=0x1021, init=0xFFFF
+```
+
+Same bitwise algorithm, but with a 16-bit accumulator. The data byte is XORed into the high byte of the CRC.
+
+**65C02** — ptr ($00), len ($02, 8-bit), crc ($04)
+
+```
+crc16:
+    LDA #$FF            ;  2 cy   2 B    crc = 0xFFFF
+    STA crc             ;  3 cy   2 B
+    STA crc+1           ;  3 cy   2 B
+    LDY #0              ;  2 cy   2 B
+byte_loop:
+    LDA crc+1           ;  3 cy   2 B    crc_hi ^= *data
+    EOR (ptr),Y         ;  5 cy   2 B
+    STA crc+1           ;  3 cy   2 B
+    LDX #8              ;  2 cy   2 B
+bit_loop:
+    ASL crc             ;  5 cy   2 B    crc <<= 1
+    ROL crc+1           ;  5 cy   2 B
+    BCC no_xor          ;  2.5 cy 2 B
+    LDA crc+1           ;  3 cy   2 B    crc ^= 0x1021
+    EOR #$10            ;  2 cy   2 B
+    STA crc+1           ;  3 cy   2 B
+    LDA crc             ;  3 cy   2 B
+    EOR #$21            ;  2 cy   2 B
+    STA crc             ;  3 cy   2 B
+no_xor:
+    DEX                 ;  2 cy   1 B
+    BNE bit_loop        ;  3 cy   2 B
+    INY                 ;  2 cy   1 B
+    DEC len             ;  5 cy   2 B
+    BNE byte_loop       ;  3 cy   2 B
+    RTS                 ;  6 cy   1 B
+```
+
+Bit loop (no xor): **18 cy** — `ASL`+`ROL`+`BCC`(taken)+`DEX`+`BNE`
+
+Bit loop (xor): **33 cy** — adds 2×(`LDA`+`EOR`+`STA`)
+
+Average: **25.5 cy/bit**, 204 cy/byte bit processing. Per byte: **227 cy**. Total code: **43 bytes**
+
+**RISCY-V02** — R2 = data ptr, R3 = len, R4 = crc, R0 = polynomial
+
+```
+crc16:
+    LI   R4, -1         ;  2 cy   2 B    crc = 0xFFFF
+    LUI  R0, 8          ;  2 cy   2 B    R0 = 0x1000
+    ORI  R0, 0x21       ;  2 cy   2 B    R0 = 0x1021
+byte_loop:
+    LBUR R5, R2         ;  3 cy   2 B    R5 = *data
+    SLLI R5, 8          ;  2 cy   2 B    byte → high position
+    XOR  R4, R4, R5     ;  2 cy   2 B    crc ^= byte << 8
+    LI   R5, 8          ;  2 cy   2 B
+bit_loop:
+    SLTI R4, 0          ;  2 cy   2 B    R1 = bit 15
+    SLLI R4, 1          ;  2 cy   2 B    crc <<= 1
+    BZ   R1, no_xor     ;  2.5 cy 2 B
+    XOR  R4, R4, R0     ;  2 cy   2 B    crc ^= 0x1021
+no_xor:
+    ADDI R5, -1         ;  2 cy   2 B
+    BNZ  R5, bit_loop   ;  3 cy   2 B
+    ADDI R2, 1          ;  2 cy   2 B    data++
+    ADDI R3, -1         ;  2 cy   2 B    len--
+    BNZ  R3, byte_loop  ;  3 cy   2 B
+    JR   R6, 0          ;  3 cy   2 B
+```
+
+Bit loop (no xor): **12 cy** — `SLTI`+`SLLI`+`BZ`(taken)+`ADDI`+`BNZ`
+
+Bit loop (xor): **13 cy** — adds `XOR`
+
+Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **116 cy**. Total code: **36 bytes**
+
+| | 65C02 | RISCY-V02 |
+|---|---|---|
+| Bit loop (avg) | 25.5 cy | 12.5 cy |
+| Per byte | 227 cy | 116 cy |
+| Code size | 43 B | 36 B |
+
+RISCY-V02 wins CRC-16 by ~2×. The key insight is that RISCY-V02's bit loop costs the same 12.5 cy/bit regardless of CRC width — `SLTI` extracts bit 15 just as cheaply as `ANDIF` extracts bit 7. The 6502's bit loop goes from 10.5 to 25.5 cy (2.4× slower) because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2. The polynomial XOR is especially painful: 1 instruction on RISCY-V02 vs 6 on the 6502.
