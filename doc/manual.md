@@ -573,3 +573,87 @@ All inputs (`ui_in`, `uio_in` during reads) have a 4ns setup requirement before 
 - **Data bus** (`uio_in`): must be stable 4ns before negedge clk (data phase capture)
 
 Outputs are valid 4ns after their launching clock edge, providing 4ns of margin for external combinational logic in feedback paths.
+
+## Code Comparison: RISCY-V02 vs 65C02
+
+Side-by-side assembly for common routines, showing how the two ISAs compare on real code. All cycle counts assume same-page branches (the common case for tight loops). The 65C02 uses zero-page pointers; RISCY-V02 uses register arguments.
+
+### memcpy
+
+```c
+void memcpy(void *dst, const void *src, size_t n);
+```
+
+**65C02** — arguments in zero page: src ($00), dst ($02), count ($04)
+
+```
+memcpy:
+    LDY #0              ;  2 cy   2 B
+    LDX count+1         ;  3 cy   2 B    ; full pages
+    BEQ partial         ;  2 cy   2 B
+page:
+    LDA (src),Y         ;  5 cy   2 B
+    STA (dst),Y         ;  6 cy   2 B
+    INY                 ;  2 cy   1 B
+    BNE page            ;  3 cy   2 B
+    INC src+1           ;  5 cy   2 B    ; next page
+    INC dst+1           ;  5 cy   2 B
+    DEX                 ;  2 cy   1 B
+    BNE page            ;  3 cy   2 B
+partial:
+    LDX count           ;  3 cy   2 B    ; remaining bytes
+    BEQ done            ;  2 cy   2 B
+tail:
+    LDA (src),Y         ;  5 cy   2 B
+    STA (dst),Y         ;  6 cy   2 B
+    INY                 ;  2 cy   1 B
+    DEX                 ;  2 cy   1 B
+    BNE tail            ;  3 cy   2 B
+done:
+    RTS                 ;  6 cy   1 B
+```
+
+Inner loop (full pages): `LDA (src),Y` + `STA (dst),Y` + `INY` + `BNE` = **16 cy/byte**, 7 B
+
+Page boundary: `INC` + `INC` + `DEX` + `BNE` = 15 cy / 256 bytes (0.06 cy/byte amortized)
+
+Tail loop (partial page): adds `DEX` for count = **18 cy/byte**, 8 B
+
+Total code: **28 bytes**
+
+**RISCY-V02** — arguments in registers: R2 = dst, R3 = src, R4 = count
+
+```
+memcpy:
+    ANDIF R4, 1         ;  2 cy   2 B    ; R1 = odd flag
+    SRLI R4, 1          ;  2 cy   2 B    ; R4 = word count
+    BZ   R4, tail       ;  2 cy   2 B
+words:
+    LWR  R5, R3         ;  4 cy   2 B
+    SWR  R5, R2         ;  4 cy   2 B
+    ADDI R3, 2          ;  2 cy   2 B
+    ADDI R2, 2          ;  2 cy   2 B
+    ADDI R4, -1         ;  2 cy   2 B
+    BNZ  R4, words      ;  3 cy   2 B
+tail:
+    BZ   R1, done       ;  2 cy   2 B
+    LBUR R5, R3         ;  3 cy   2 B
+    SBR  R5, R2         ;  3 cy   2 B
+done:
+    JR   R6, 0          ;  3 cy   2 B
+```
+
+Word loop: `LWR` + `SWR` + 3×`ADDI` + `BNZ` = 17 cy / 2 bytes = **8.5 cy/byte**, 12 B
+
+Tail: single `LBUR` + `SBR` for the trailing odd byte (if any). No page handling needed.
+
+Total code: **26 bytes**
+
+| | 65C02 | RISCY-V02 |
+|---|---|---|
+| Inner loop | 16 cy/byte | 8.5 cy/byte |
+| Boundary overhead | 15 cy / 256 B | none |
+| Tail | 18 cy/byte | 6 cy (1 byte) |
+| Code size | 28 B | 26 B |
+
+The 65C02's `(indirect),Y` is powerful — pointer dereference plus index in one instruction. But the 8-bit index register forces page-boundary handling that complicates the code. RISCY-V02's 16-bit pointers eliminate page handling, and 16-bit word loads/stores copy two bytes per bus transaction, nearly halving throughput cost. The structure is analogous: bulk transfer (pages vs words) with a tail for the remainder (partial page vs odd byte).
