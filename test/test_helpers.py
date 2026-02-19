@@ -20,7 +20,10 @@ __all__ = [
     '_encode_lw', '_encode_lb', '_encode_lbu', '_encode_sw', '_encode_sb',
     '_encode_jr', '_encode_jalr',
     '_encode_andi', '_encode_ori', '_encode_xori',
-    '_encode_slti', '_encode_sltui', '_encode_bz', '_encode_bnz', '_encode_xorif', '_encode_andif',
+    '_encode_slti', '_encode_sltui', '_encode_bz', '_encode_bnz', '_encode_xorif',
+    '_encode_cmpi', '_encode_cmpui',
+    '_encode_bt', '_encode_bf',
+    '_encode_movt', '_encode_srr', '_encode_srw',
     '_encode_r7', '_encode_lui', '_encode_auipc',
     '_encode_10', '_encode_j', '_encode_jal',
     '_encode_rrr', '_encode_add', '_encode_sub',
@@ -134,14 +137,18 @@ def _encode_xori(rd, imm):
     return _encode_r8(0b01011, imm, rd)
 
 def _encode_slti(rs, imm):
-    """SLTI: R0 = (rs < sext(imm)) ? 1 : 0. Dest is R0."""
+    """CMPI: T = (rs < sext(imm)). Signed comparison, sets T flag."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b01100, imm, rs)
 
+_encode_cmpi = _encode_slti
+
 def _encode_sltui(rs, imm):
-    """SLTUI: R0 = (rs <u sext(imm)) ? 1 : 0. Dest is R0."""
+    """CMPUI: T = (rs <u sext(imm)). Unsigned comparison, sets T flag."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b01101, imm, rs)
+
+_encode_cmpui = _encode_sltui
 
 def _encode_bz(rs, imm):
     """BZ: if rs == 0, pc += sext(imm) << 1.
@@ -170,14 +177,24 @@ def _encode_bnz(rs, imm):
     return _encode_r8(0b01111, scrambled, rs)
 
 def _encode_xorif(rs, imm):
-    """XORIF: R0 = rs ^ zext(imm). Dest is R0."""
+    """XORIF: T = (rs ^ zext(imm)) != 0. Sets T flag."""
     assert 0 <= imm <= 255, f"imm out of range: {imm}"
     return _encode_r8(0b10000, imm, rs)
 
-def _encode_andif(rs, imm):
-    """ANDIF: R1 = rs & zext(imm). Dest is R1."""
-    assert 0 <= imm <= 255, f"imm out of range: {imm}"
-    return _encode_r8(0b10110, imm, rs)
+def _encode_8(prefix8, off8):
+    """Encode an 8-bit prefix instruction: [prefix:8|off8:8]."""
+    insn = (prefix8 << 8) | (off8 & 0xFF)
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+def _encode_bt(imm):
+    """BT: if T, pc += sext(off8) << 1."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_8(0b10110_000, imm)
+
+def _encode_bf(imm):
+    """BF: if !T, pc += sext(off8) << 1."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_8(0b10110_001, imm)
 
 def _encode_lw_s(rd, imm):
     """LWS: rd = mem16[R7 + sext(imm)]. Base is R7 (SP)."""
@@ -287,7 +304,19 @@ def _encode_epcw(rs):
     """EPCW Rs: copy Rs to EPC."""
     return _encode_sys(0b011_000 | (rs & 0x7))
 
-def _encode_brk():  return _encode_sys(0b100001)  # INT, vector 1 → addr 0x0004
+def _encode_movt(rd):
+    """MOVT Rd: rd = T (0 or 1)."""
+    return _encode_sys(0b100_000 | (rd & 0x7))
+
+def _encode_srr(rd):
+    """SRR Rd: rd = SR ({I, T})."""
+    return _encode_sys(0b101_000 | (rd & 0x7))
+
+def _encode_srw(rs):
+    """SRW Rs: SR = rs ({I, T})."""
+    return _encode_sys(0b001_000 | (rs & 0x7))
+
+def _encode_brk():  return _encode_sys(0b11_0001)  # INT, sub[5:4]=11, vector 1 → addr 0x0004
 def _encode_wai():  return _encode_sys(0b000101)
 def _encode_stp():  return _encode_sys(0b000111)
 

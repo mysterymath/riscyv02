@@ -10,11 +10,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 59.6% | 45.3% |
-| Transistor count (synth) | 16,074 | 13,176 |
-| SRAM-adjusted | 12,750 | 13,176 |
+| Utilization | 61.8% | 45.3% |
+| Transistor count (synth) | 16,580 | 13,176 |
+| SRAM-adjusted | 12,968 | 13,176 |
 
-The SRAM-adjusted total is 3.2% below the 6502, with significantly more capability per transistor: 16-bit registers, 3-operand ALU instructions, 2-cycle execute, PC-relative jumps, hardware call/return, and immediate arithmetic/logic. Unrecognized opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The SRAM-adjusted total is 1.6% below the 6502, with significantly more capability per transistor: 16-bit registers, 3-operand ALU instructions, 2-cycle execute, PC-relative jumps, hardware call/return, and immediate arithmetic/logic. Unrecognized opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Bus Protocol
 
@@ -39,6 +39,10 @@ RISCY-V02 uses the same TT mux/demux bus protocol as the Arlet 6502 wrapper. The
 
 - **8 general-purpose registers**: R0-R7, each 16 bits wide (3-bit encoding)
 - **16-bit program counter** (not directly accessible)
+- **T flag**: single-bit condition flag, set by comparisons (SLT, SLTU, SLTI, SLTUI, XORIF), tested by BT/BF branches
+- **I flag**: interrupt disable (1 = disabled)
+- **ESR**: 2-bit exception status register {I, T}, saved on interrupt entry, restored by RETI
+- **EPC**: 16-bit exception PC, saved on interrupt entry
 - **16-bit address space**, byte-addressable, little-endian
 - **Fixed 16-bit instructions**, fetched low byte first
 - **2-stage pipeline**: Fetch and Execute with speculative fetch and redirect
@@ -48,6 +52,8 @@ RISCY-V02 uses the same TT mux/demux bus protocol as the Arlet 6502 wrapper. The
 On reset:
 - PC is set to $0000 and execution begins
 - I (interrupt disable) is set to 1 -- interrupts are disabled
+- T (condition flag) is cleared to 0
+- ESR is set to {I=1, T=0}
 - All registers are cleared to zero
 
 There is no vector fetch; code is placed directly at address $0000. Software must execute CLI to enable interrupts.
@@ -67,45 +73,50 @@ RISCY-V02 supports maskable IRQ and non-maskable NMI interrupts.
 
 Vector addresses are computed as `(vector_id + 1) * 2`. Each vector slot is one instruction (2 bytes) -- enough for a JR trampoline to reach the actual handler. IRQ is placed last so its handler can run inline without a jump, since nothing follows it.
 
-**Instruction synthesis:** All interrupt entry (IRQ, NMI, BRK) uses the same mechanism. The hardware writes a synthetic INT instruction into the instruction register (ir) encoding the vector ID and destination register (R6). This synthetic instruction then executes through the normal decode path -- no special-case interrupt logic in the execute unit. IRQ and NMI are *internal opcodes*: they use instruction encodings synthesized by the interrupt controller rather than fetched from memory. BRK is the software-accessible form of the same instruction family. Since all three share the same encoding format, software can also trigger IRQ/NMI vectors directly by encoding the corresponding INT instruction.
+**Instruction synthesis:** All interrupt entry (IRQ, NMI, BRK) uses the same mechanism. The hardware writes a synthetic INT instruction into the instruction register (ir) encoding the vector ID. This synthetic instruction then executes through the normal decode path -- no special-case interrupt logic in the execute unit. IRQ and NMI are *internal opcodes*: they use instruction encodings synthesized by the interrupt controller rather than fetched from memory. BRK is the software-accessible form of the same instruction family. Since all three share the same encoding format, software can also trigger IRQ/NMI vectors directly by encoding the corresponding INT instruction.
 
 **IRQ entry (when IRQB=0 and I=0):**
 1. Complete the current instruction
 2. Synthesize INT instruction with vector 2 into ir
-3. Save EPC = (next_PC | I) -- return address with I bit in bit 0
-4. Set I = 1 -- disable further interrupts
-5. Jump to $0006
+3. Save ESR = {I, T} -- status flags at interrupt entry
+4. Save EPC = next_PC -- clean 16-bit return address
+5. Set I = 1 -- disable further interrupts
+6. Jump to $0006
 
 **NMI entry (on NMIB falling edge, regardless of I):**
 1. Complete the current instruction
 2. Synthesize INT instruction with vector 0 into ir
-3. Save EPC = (next_PC | I) -- overwrites any previous EPC
-4. Set I = 1 -- disable IRQs
-5. Jump to $0002
+3. Save ESR = {I, T} -- overwrites any previous ESR
+4. Save EPC = next_PC -- overwrites any previous EPC
+5. Set I = 1 -- disable IRQs
+6. Jump to $0002
 
 **BRK entry (unconditional, regardless of I):**
-1. Save EPC = (PC+2 | I) -- return address with I bit in bit 0
-2. Set I = 1 -- disable IRQs
-3. Jump to $0004
+1. Save ESR = {I, T}
+2. Save EPC = PC+2 -- return address
+3. Set I = 1 -- disable IRQs
+4. Jump to $0004
 
 NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low does not re-trigger. NMIB must return high and fall again for a new NMI. NMI has priority over IRQ; if both are pending simultaneously, NMI is taken first, and the subsequent I=1 masks the IRQ.
 
-**Warning:** RETI from an NMI handler is undefined behavior. NMI overwrites EPC unconditionally, so if an NMI interrupts an IRQ handler before it saves EPC (via EPCR), the IRQ's return address is lost. NMI handlers typically reset, halt, or spin.
+**Warning:** RETI from an NMI handler is undefined behavior. NMI overwrites EPC and ESR unconditionally, so if an NMI interrupts an IRQ handler before it saves EPC/ESR (via EPCR/SRR), the IRQ's return state is lost. NMI handlers typically reset, halt, or spin.
 
 **Interrupt return (RETI instruction):**
-1. Restore I = EPC[0]
-2. Jump to EPC & $FFFE
+1. Restore {I, T} from ESR
+2. Jump to EPC
 
-**Exception PC (EPC) register:** The EPC is a 16-bit register stored as entry 8 in the register file (logical R9). It is not directly addressable through normal register fields (which are 3-bit), but is accessible through dedicated EPCR and EPCW instructions. On interrupt entry, EPC receives `{return_addr[15:1], old_I_flag}`. EPCR copies EPC to a GP register; EPCW copies a GP register to EPC. This allows interrupt handlers to read, modify, or redirect the return address. All GP registers (R0-R7) are directly accessible in interrupt context -- there is no register banking.
+**Exception state:** EPC is a 16-bit register (entry 8 in the register file) holding the clean return address. ESR is a 2-bit register holding {I, T} at the time of interrupt entry. Neither is directly addressable through normal register fields. EPC is accessible through EPCR/EPCW; ESR is accessible through SRR/SRW (which read/write the live SR = {I, T}, including ESR on interrupt entry). All GP registers (R0-R7) are directly accessible in interrupt context -- there is no register banking.
 
-**Interrupt latency:** 4 cycles from instruction completion to first handler instruction fetch (2 cycles to save EPC + 2 fetch). NMI edge detection is combinational -- if the falling edge arrives on the same cycle that the FSM is ready, the NMI is taken immediately with no additional detection delay.
+**I-bit forwarding:** SEI, CLI, SRW, and RETI all take effect immediately at the next instruction boundary. There is no one-instruction delay: if CLI or SRW clears I while IRQB is asserted, the IRQ fires before the next instruction executes.
+
+**Interrupt latency:** 4 cycles from instruction completion to first handler instruction fetch (2 cycles to save EPC/ESR + 2 fetch). NMI edge detection is combinational -- if the falling edge arrives on the same cycle that the FSM is ready, the NMI is taken immediately with no additional detection delay.
 
 ### Register Naming Convention
 
 | Register | Name | Suggested Purpose |
 |---|---|---|
 | R0 | a0 | Accumulator / implicit base address (R,8 format loads/stores) |
-| R1 | a1 | Argument / comparison result (SLTI/SLTUI/XORIF/ANDIF dest) |
+| R1 | a1 | Argument / scratch |
 | R2 | t0 | Temporary 0 |
 | R3 | t1 | Temporary 1 |
 | R4 | s0 | Saved register 0 |
@@ -113,7 +124,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | R6 | ra | Return address (link register) |
 | R7 | sp | Stack pointer |
 
-R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. SLTI, SLTUI, XORIF, and ANDIF write their result to R1 (non-destructive compare/test patterns that preserve both R0 and the source register). R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
+R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. Comparisons (SLTI, SLTUI, XORIF, SLT, SLTU) write to the T flag rather than a destination register, preserving all GPRs. R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
 
 ### Link Register (R6)
 
@@ -127,19 +138,20 @@ All instructions are 16 bits. The encoding uses a **variable-width prefix-free**
 
 ### Encoding Overview
 
-**53 instructions defined. 8,459 of 65,536 encodings free (12.9%).**
+**57 instructions defined. 9,971 of 65,536 encodings free (15.2%).**
 
 | Format | Prefix | Layout | Used |
 |---|---|---|---|
-| R,8 | 5-bit | `[imm8:8\|reg:3]` | 23 |
+| R,8 | 5-bit | `[imm8:8\|reg:3]` | 22 |
+| B,8 | 8-bit | `[off8:8]` | 2 |
 | R,7 | 6-bit | `[imm7:7\|reg:3]` | 2 |
 | "10" | 6-bit | `[off10:10]` | 2 |
 | R,R,R | 7-bit | `[rd:3\|rs2:3\|rs1:3]` | 10 |
 | R,4 | 9-bit | `[shamt:4\|reg:3]` | 3 |
 | R,R | 10-bit | `[rd:3\|rs:3]` | 5 |
-| System | 11-16 bit | various | 8 |
+| System | 11-16 bit | various | 11 |
 
-Capacity = how many instructions of that format could fit in the total free space. Mutually exclusive: one R,8 uses the space of 4 R,R,R or 32 R,R. Fields are packed MSB-first: prefix at top, register at LSB.
+Fields are packed MSB-first: prefix at top, register at LSB. One R,8 uses the space of 4 R,R,R or 32 R,R. The B,8 format (BT/BF) occupies the former ANDIF prefix slot (10110); the 3-bit selector field in ir[10:8] selects the branch type, leaving 6 sub-codes free within that slot.
 
 ### Prefix Table
 
@@ -155,21 +167,23 @@ Capacity = how many instructions of that format could fit in the total free spac
 00111   JR      pc = rs + sext(imm8) << 1
 01000   JALR    rs = pc+2; pc = rs + sext(imm8) << 1
 
-
 01001   ANDI    rd = rd & zext(imm8)
 01010   ORI     rd = rd | zext(imm8)
 01011   XORI    rd = rd ^ zext(imm8)
-01100   SLTI    R1 = (rs < sext(imm8)) ? 1 : 0   (signed)
-01101   SLTUI   R1 = (rs <u sext(imm8)) ? 1 : 0  (unsigned)
+01100   SLTI    T = (rs < sext(imm8))             (signed)
+01101   SLTUI   T = (rs <u sext(imm8))            (unsigned)
 01110   BZ      if rs == 0, pc += sext(imm8) << 1
 01111   BNZ     if rs != 0, pc += sext(imm8) << 1
-10000   XORIF   R1 = rs ^ zext(imm8)
-10110   ANDIF   R1 = rs & zext(imm8)
+10000   XORIF   T = (rs ^ zext(imm8)) != 0
 10001   LWS    rd = mem16[R7 + sext(imm8)]
 10010   LBS    rd = sext(mem[R7 + sext(imm8)])
 10011   LBUS   rd = zext(mem[R7 + sext(imm8)])
 10100   SWS    mem16[R7 + sext(imm8)] = rs
 10101   SBS    mem[R7 + sext(imm8)] = rs[7:0]
+
+--- B,8 format (8-bit prefix, occupies prefix 10110) ---
+10110000  BT    if T == 1, pc += sext(off8) << 1
+10110001  BF    if T == 0, pc += sext(off8) << 1
 
 --- R,7 format (6-bit prefix) ---
 110100  LUI     rd = sext(imm7) << 9
@@ -185,8 +199,8 @@ Capacity = how many instructions of that format could fit in the total free spac
 1110010 AND     rd = rs1 & rs2
 1110011 OR      rd = rs1 | rs2
 1110100 XOR     rd = rs1 ^ rs2
-1110101 SLT     rd = (rs1 < rs2) ? 1 : 0   (signed)
-1110110 SLTU    rd = (rs1 <u rs2) ? 1 : 0  (unsigned)
+1110101 SLT     T = (rs1 < rs2)                   (signed)
+1110110 SLTU    T = (rs1 <u rs2)                   (unsigned)
 1110111 SLL     rd = rs1 << rs2[3:0]
 1111000 SRL     rd = rs1 >>u rs2[3:0]
 1111001 SRA     rd = rs1 >>s rs2[3:0]
@@ -206,10 +220,13 @@ Capacity = how many instructions of that format could fit in the total free spac
 --- System format (10-bit prefix + sub) ---
 1111100000 000001  SEI    I = 1
 1111100000 000010  CLI    I = 0
-1111100000 000011  RETI   I = EPC[0]; pc = EPC & $FFFE
+1111100000 000011  RETI   {I, T} = ESR; pc = EPC
+1111100000 001rrr  SRW    {I, T} = rs[1:0]
 1111100000 010rrr  EPCR   rd = EPC
 1111100000 011rrr  EPCW   EPC = rs
-1111100000 1xxxxx  INT    EPC = (pc+2 | I); I = 1; pc = (vec+1)*2
+1111100000 100rrr  MOVT   rd = {15'b0, T}
+1111100000 101rrr  SRR    rd = {14'b0, I, T}
+1111100000 1xxxxx  INT    ESR = {I, T}; EPC = pc+2; I = 1; pc = (vec+1)*2
 1111100000 000101  WAI    halt until interrupt
 1111100000 000111  STP    halt permanently (reset only)
 
@@ -218,7 +235,7 @@ All other encodings execute as NOP (2-cycle no-op).
 
 ## Instruction Set
 
-### R,9 Format -- Loads, Stores, Immediate, Jumps
+### R,8 Format -- Loads, Stores, Immediate, Jumps
 
 #### ADDI -- Add Immediate
 
@@ -295,39 +312,49 @@ Bitwise XOR with a zero-extended 8-bit immediate. Toggles bits in the low byte w
 
 #### SLTI -- Set Less Than Immediate (Signed)
 
-`R1 = (rs < sext(imm8)) ? 1 : 0` -- 2 cycles
+`T = (rs < sext(imm8))` -- 2 cycles
 
-Compares the source register against a sign-extended 8-bit immediate (-128 to +127) as signed integers. The result (0 or 1) is written to R1, preserving both R0 (the base register) and the source register. Pattern: `SLTI rs, val; BNZ R1, target` (branch if rs < val).
+Compares the source register against a sign-extended 8-bit immediate (-128 to +127) as signed integers. Sets T=1 if less, T=0 otherwise. No register is modified. Pattern: `SLTI rs, val; BT target` (branch if rs < val).
 
 #### SLTUI -- Set Less Than Immediate (Unsigned)
 
-`R1 = (rs <u sext(imm8)) ? 1 : 0` -- 2 cycles
+`T = (rs <u sext(imm8))` -- 2 cycles
 
-Compares the source register against a sign-extended 8-bit immediate as unsigned integers. The immediate is sign-extended then treated as unsigned. The result is written to R1.
+Compares the source register against a sign-extended 8-bit immediate as unsigned integers. The immediate is sign-extended then treated as unsigned. Sets T=1 if less, T=0 otherwise.
 
 #### BZ -- Branch if Zero
 
 `if rs == 0: PC += sext(off8) << 1` -- 2 cycles (not taken) / 4 cycles (taken)
 
-Branches to a PC-relative target if the source register is zero. The 8-bit signed offset is shifted left by 1, giving a range of -256 to +254 bytes from the next instruction address. Pairs with SLT/SLTU for compare-and-branch: `SLT t, a, b; BZ t, target` (branch if NOT less than).
+Branches to a PC-relative target if the source register is zero. The 8-bit signed offset is shifted left by 1, giving a range of -256 to +254 bytes from the next instruction address. Tests the full 16-bit register value. Useful for loop counters and null-pointer checks.
 
 #### BNZ -- Branch if Non-Zero
 
 `if rs != 0: PC += sext(off8) << 1` -- 2 cycles (not taken) / 4 cycles (taken)
 
-Branches to a PC-relative target if the source register is non-zero. Pairs with SLT/SLTU: `SLT t, a, b; BNZ t, target` (branch if less than).
+Branches to a PC-relative target if the source register is non-zero. Useful for loop counters: `ADDI rd, -1; BNZ rd, loop`.
 
-#### XORIF -- Xor Immediate (Fixed-Destination)
+#### XORIF -- Xor Immediate (Flag-setting)
 
-`R1 = rs ^ zext(imm8)` -- 2 cycles
+`T = (rs ^ zext(imm8)) != 0` -- 2 cycles
 
-Bitwise XOR of the source register with a zero-extended 8-bit immediate, writing the result to R1 while preserving both R0 and the source register. Useful for equality testing: if rs equals zext(imm8), R1 will be zero. Pattern: `XORIF rs, val; BZ R1, equal_label`.
+XORs the source register with a zero-extended 8-bit immediate and sets T based on whether the result is nonzero. No register is modified. Useful for equality testing: T=0 means equal. Pattern: `XORIF rs, val; BF equal_label` (branch if rs == val).
 
-#### ANDIF -- And Immediate (Fixed-Destination)
+### B,8 Format -- T-Flag Branches
 
-`R1 = rs & zext(imm8)` -- 2 cycles
+BT and BF occupy the 10110 prefix slot (former ANDIF). They branch based on the T flag set by comparison instructions.
 
-Bitwise AND of the source register with a zero-extended 8-bit immediate, writing the result to R1 while preserving the source register. Useful for bit testing: if any masked bits are set, R1 will be non-zero. Pattern: `ANDIF rs, 0x80; BNZ R1, bit7_set`.
+#### BT -- Branch if T Set
+
+`if T == 1: PC += sext(off8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
+
+Branches if T=1. Same-page taken: 3 cycles; page-crossing: 4 cycles. Pattern: `SLTI rs, val; BT target` (branch if rs < val). `SLT rs1, rs2; BT target` (branch if rs1 < rs2).
+
+#### BF -- Branch if T Clear
+
+`if T == 0: PC += sext(off8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
+
+Branches if T=0. Pattern: `XORIF rs, val; BF equal_label` (branch if rs == val). `SLTU rs1, rs2; BF target` (branch if rs1 >= rs2).
 
 ### R,7 Format -- Upper Immediate
 
@@ -369,15 +396,15 @@ All R,R,R instructions are 2 cycles.
 
 #### SLT -- Set Less Than (Signed)
 
-`rd = (rs1 < rs2) ? 1 : 0`
+`T = (rs1 < rs2)`
 
-Compares rs1 and rs2 as signed 16-bit integers.
+Compares rs1 and rs2 as signed 16-bit integers. Sets T=1 if rs1 < rs2, T=0 otherwise. The rd field in the encoding is unused (no register write). Pattern: `SLT a, b; BT target` (branch if a < b signed).
 
 #### SLTU -- Set Less Than (Unsigned)
 
-`rd = (rs1 <u rs2) ? 1 : 0`
+`T = (rs1 <u rs2)`
 
-Compares rs1 and rs2 as unsigned 16-bit integers.
+Compares rs1 and rs2 as unsigned 16-bit integers. Sets T=1 if rs1 < rs2, T=0 otherwise. The rd field is unused. Use MOVT to capture the result in a register if needed.
 
 #### SLL -- Shift Left Logical
 
@@ -431,27 +458,45 @@ Enables interrupts. A pending IRQ (IRQB=0) will be taken at the next instruction
 
 #### RETI -- Return from Interrupt
 
-`I = EPC[0]; PC = EPC & $FFFE` -- 4 cycles
+`{I, T} = ESR; PC = EPC` -- 4 cycles
 
-Restores the interrupt enable state from the EPC register and returns to the interrupted code. The I bit is restored from EPC bit 0, and PC is set to EPC with bit 0 cleared.
+Restores both I and T flags from the ESR register and returns to the interrupted code. EPC is a clean 16-bit address (no flag packing). The I-bit effect is forwarded: if ESR restores I=0 and IRQB is asserted, the IRQ fires immediately at the next instruction boundary.
 
 #### EPCR -- Read Exception PC
 
 `rd = EPC` -- 2 cycles
 
-Copies the Exception PC register to a general-purpose register. The value includes the saved I bit in bit 0. Register is at ir[2:0].
+Copies the Exception PC register to a general-purpose register. EPC is a clean 16-bit return address. Register is at ir[2:0].
 
 #### EPCW -- Write Exception PC
 
 `EPC = rs` -- 2 cycles
 
-Copies a general-purpose register to the Exception PC register. Bit 0 of the written value becomes the I bit restored by the next RETI. Register is at ir[2:0].
+Copies a general-purpose register to the Exception PC register. Register is at ir[2:0]. Modifies only the return address; the saved {I, T} flags are in ESR, not EPC.
+
+#### MOVT -- Move T to Register
+
+`rd = {15'b0, T}` -- 2 cycles
+
+Copies the T flag into bit 0 of the destination register, clearing all other bits. Result is 0 or 1. Use when the comparison result is needed as a value (e.g., for shift-in or accumulation) rather than a branch condition. Register is at ir[2:0].
+
+#### SRR -- Read Status Register
+
+`rd = {14'b0, I, T}` -- 2 cycles
+
+Reads the current status register into a GP register. Bit 1 = I (interrupt disable), bit 0 = T (condition flag). Bits 15:2 are cleared. Register is at ir[2:0]. Pair with SRW to save/restore interrupt context.
+
+#### SRW -- Write Status Register
+
+`{I, T} = rs[1:0]` -- 2 cycles
+
+Writes the I and T flags from bits 1 and 0 of the source register. Both flags take effect immediately (forwarded to the next instruction boundary). Register is at ir[2:0]. Pair with SRR: `SRR rd` to save, `SRW rs` to restore.
 
 #### INT -- Software Interrupt
 
-`EPC = (PC+2 | I); I = 1; PC = (vector[1:0] + 1) * 2` -- 4 cycles
+`ESR = {I, T}; EPC = PC+2; I = 1; PC = (vector[1:0] + 1) * 2` -- 4 cycles
 
-Triggers a software interrupt. Saves the return address (with I bit in bit 0) to EPC, disables interrupts, and vectors to the handler. BRK is the conventional name for INT with vector 1 (handler at $0004). INT is unconditional -- it fires regardless of the I bit.
+Triggers a software interrupt. Saves {I, T} to ESR and the return address to EPC, disables interrupts, and vectors to the handler. BRK is the conventional name for INT with vector 1 (handler at $0004). INT is unconditional -- it fires regardless of the I bit.
 
 #### WAI -- Wait for Interrupt
 
@@ -479,11 +524,11 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/ANDIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
-| SEI/CLI | 2 | 1 execute + 1 overlapped fetch |
-| BZ/BNZ (not taken) | 2 | 1 execute + 1 overlapped fetch |
-| BZ/BNZ (taken, same page) | 3 | 1 execute + 2 fetch after redirect |
-| BZ/BNZ (taken, page crossing) | 4 | 2 execute + 2 fetch after redirect |
+| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
+| SEI/CLI/MOVT/SRR/SRW | 2 | 1 execute + 1 overlapped fetch |
+| BZ/BNZ/BT/BF (not taken) | 2 | 1 execute + 1 overlapped fetch |
+| BZ/BNZ/BT/BF (taken, same page) | 3 | 1 execute + 2 fetch after redirect |
+| BZ/BNZ/BT/BF (taken, page crossing) | 4 | 2 execute + 2 fetch after redirect |
 | LB/LBU/LBS/LBUS/LBR/LBUR | 3 | 2 address + 1 byte read (sign/zero-extend at E_MEM_LO) |
 | SB/SBS/SBR | 3 | 2 address + 1 byte written |
 | LW/SW/LWS/SWS/LWR/SWR | 4 | 2 address + 2 bytes transferred |
@@ -497,8 +542,8 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | WAI (halt) | -- | Halted until interrupt arrives |
 | STP | 1 | 1 execute then halt |
 | EPCR/EPCW | 2 | 1 execute + 1 overlapped fetch |
-| IRQ entry | 4 | 2 execute (save EPC) + 2 fetch |
-| NMI entry | 4 | 2 execute (save EPC) + 2 fetch |
+| IRQ entry | 4 | 2 execute (save EPC/ESR) + 2 fetch |
+| NMI entry | 4 | 2 execute (save EPC/ESR) + 2 fetch |
 
 Instructions that redirect (JR, JALR, J, JAL, RETI, branches taken) flush the speculative fetch and must wait for new instruction bytes. Non-redirecting instructions benefit from fetch/execute overlap.
 
@@ -625,7 +670,8 @@ Total code: **28 bytes**
 
 ```
 memcpy:
-    ANDIF R4, 1         ;  2 cy   2 B    ; R1 = odd flag
+    LI   R1, 1          ;  2 cy   2 B    ; mask
+    AND  R1, R4, R1     ;  2 cy   2 B    ; R1 = odd flag
     SRLI R4, 1          ;  2 cy   2 B    ; R4 = word count
     BZ   R4, tail       ;  2 cy   2 B
 words:
@@ -647,14 +693,14 @@ Word loop: `LWR` + `SWR` + 3×`ADDI` + `BNZ` = 17 cy / 2 bytes = **8.5 cy/byte**
 
 Tail: single `LBUR` + `SBR` for the trailing odd byte (if any). No page handling needed.
 
-Total code: **26 bytes**
+Total code: **28 bytes**
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
 | Inner loop | 16 cy/byte | 8.5 cy/byte |
 | Boundary overhead | 15 cy / 256 B | none |
 | Tail | 18 cy/byte | 6 cy (1 byte) |
-| Code size | 28 B | 26 B |
+| Code size | 28 B | 28 B |
 
 The 65C02's `(indirect),Y` is powerful — pointer dereference plus index in one instruction. But the 8-bit index register forces page-boundary handling that complicates the code. RISCY-V02's 16-bit pointers eliminate page handling, and 16-bit word loads/stores copy two bytes per bus transaction, nearly halving throughput cost. The structure is analogous: bulk transfer (pages vs words) with a tail for the remainder (partial page vs odd byte).
 
@@ -717,7 +763,8 @@ Word-copy variant (RISCY-V02 only):
 ```
 strcpy:
     LWR  R5, R3         ;  4 cy   2 B    ; load 2 chars
-    ANDIF R5, 0xFF      ;  2 cy   2 B    ; R1 = low byte
+    LI   R1, 0xFF       ;  2 cy   2 B
+    AND  R1, R5, R1     ;  2 cy   2 B    ; R1 = low byte
     BZ   R1, lo         ;  2 cy   2 B
     SUB  R1, R5, R1     ;  2 cy   2 B    ; R1 = high byte << 8
     BZ   R1, hi         ;  2 cy   2 B
@@ -731,7 +778,7 @@ hi: SWR  R5, R2         ;  4 cy   2 B    ; store char + null
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Word loop: 23 cy / 2 chars = **11.5 cy/char**, 26 B. The null-byte detection (`ANDIF` + `BZ` + `SUB` + `BZ` = 8 cy) eats most of the word-load savings, so the speedup over the byte version is modest (~12%). Unlike memcpy, where word copies nearly halve throughput, strcpy's per-element null check limits the benefit.
+Word loop: 25 cy / 2 chars = **12.5 cy/char**, 28 B. The null-byte detection (`LI` + `AND` + `BZ` + `SUB` + `BZ` = 10 cy) eats the word-load savings, so the speedup over the byte version is marginal (~4%). Unlike memcpy, where word copies nearly halve throughput, strcpy's per-element null check limits the benefit.
 
 ### 16×16 → 16 Multiply
 
@@ -781,11 +828,12 @@ Average: **44 cy/iter**. Total code: **36 bytes**
 ```
 multiply:
     LI   R4, 0          ;  2 cy   2 B
+    LI   R1, 1          ;  2 cy   2 B    ; constant mask
 loop:
     BZ   R2, done       ;  2 cy   2 B    ; early exit
-    ANDIF R2, 1         ;  2 cy   2 B    ; R1 = bit 0
+    AND  R0, R2, R1     ;  2 cy   2 B    ; R0 = bit 0
     SRLI R2, 1          ;  2 cy   2 B    ; multiplier >>= 1
-    BZ   R1, no_add     ;  2.5 cy 2 B
+    BZ   R0, no_add     ;  2.5 cy 2 B
     ADD  R4, R4, R3     ;  2 cy   2 B    ; result += mcand
 no_add:
     SLLI R3, 1          ;  2 cy   2 B    ; mcand <<= 1
@@ -794,17 +842,17 @@ done:
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Per iteration (no add): **14 cy** — `BZ`+`ANDIF`+`SRLI`+`BZ`(taken)+`SLLI`+`J`
+Per iteration (no add): **14 cy** — `BZ`+`AND`+`SRLI`+`BZ`(taken)+`SLLI`+`J`
 
 Per iteration (add): **15 cy** — adds `ADD`
 
-Average: **14.5 cy/iter**. Total code: **18 bytes**
+Average: **14.5 cy/iter**. Total code: **20 bytes**
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
 | Per iteration (avg) | 44 cy | 14.5 cy |
 | 16 iterations (avg) | ~704 cy | ~232 cy |
-| Code size | 36 B | 18 B |
+| Code size | 36 B | 20 B |
 
 The 3× per-iteration speedup comes from three sources: 16-bit addition is one instruction (`ADD`) vs seven (`CLC`+3×`LDA`/`ADC`/`STA`); 16-bit shifts are one instruction (`SLLI`/`SRLI`) vs two (`ASL`+`ROL`); and testing a 16-bit value for zero is one instruction (`BZ`) vs three (`LDA`+`ORA`+`BEQ`). Every 16-bit operation that the 6502 must serialize byte-by-byte collapses to a single instruction on RISCY-V02.
 
@@ -859,12 +907,13 @@ udiv16:
     LI   R4, 0          ;  2 cy   2 B    ; remainder = 0
     LI   R5, 16         ;  2 cy   2 B    ; counter
 loop:
-    SLTI R2, 0          ;  2 cy   2 B    ; R1 = bit 15 of dividend
+    SLTI R2, 0          ;  2 cy   2 B    ; T = bit 15 of dividend
+    MOVT R0             ;  2 cy   2 B    ; R0 = T (0 or 1)
     SLLI R4, 1          ;  2 cy   2 B    ; remainder <<= 1
-    OR   R4, R4, R1     ;  2 cy   2 B    ; shift in high bit
+    OR   R4, R4, R0     ;  2 cy   2 B    ; shift in high bit
     SLLI R2, 1          ;  2 cy   2 B    ; dividend <<= 1
-    SLTU R0, R4, R3     ;  2 cy   2 B    ; R0 = (rem < div)
-    BNZ  R0, no_sub     ;  2.5 cy 2 B    ; skip if can't subtract
+    SLTU R4, R3         ;  2 cy   2 B    ; T = (rem < div)
+    BT   no_sub         ;  2.5 cy 2 B    ; skip if can't subtract
     SUB  R4, R4, R3     ;  2 cy   2 B    ; remainder -= divisor
     ORI  R2, 1          ;  2 cy   2 B    ; set quotient bit
 no_sub:
@@ -873,19 +922,19 @@ no_sub:
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Per iteration (no sub): **18 cy** — `SLTI`+`SLLI`+`OR`+`SLLI`+`SLTU`+`BNZ`(taken)+`ADDI`+`BNZ`
+Per iteration (no sub): **20 cy** — `SLTI`+`MOVT`+`SLLI`+`OR`+`SLLI`+`SLTU`+`BT`(taken)+`ADDI`+`BNZ`
 
-Per iteration (sub): **21 cy** — adds `SUB`+`ORI`
+Per iteration (sub): **23 cy** — adds `SUB`+`ORI`
 
-Average: **19.5 cy/iter**. Total code: **26 bytes**
+Average: **21.5 cy/iter**. Total code: **28 bytes**
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
-| Per iteration (avg) | 49 cy | 19.5 cy |
-| 16 iterations | ~784 cy | ~312 cy |
-| Code size | 38 B | 26 B |
+| Per iteration (avg) | 49 cy | 21.5 cy |
+| 16 iterations | ~784 cy | ~344 cy |
+| Code size | 38 B | 28 B |
 
-The structure is identical — the same restoring division algorithm. The 2.5× speedup is less dramatic than multiplication's 3× because division's inner loop is dominated by shifts and a compare-subtract, which compress less: the 6502's 4-instruction shift chain (`ASL`+`ROL`×3) becomes 3 instructions (`SLTI`+`SLLI`+`OR`) since RISCY-V02 lacks a carry flag and must extract the high bit explicitly. The trial subtraction compresses better: `SEC`+`LDA`+`SBC`+`TAY`+`LDA`+`SBC` (6 instructions) becomes one `SLTU`+`SUB` (2 instructions).
+The structure is identical — the same restoring division algorithm. The 2.3× speedup comes from the same sources as multiplication: 16-bit shifts are single instructions and the trial subtraction compresses from 6 instructions to 2 (`SLTU`+`SUB`). The T flag adds one MOVT instruction per iteration (2 cy) to extract the sign bit for the shift-in, since SLTI now writes to T rather than a register. The comparison result is used directly via BT (branch if T set) without needing a register intermediate.
 
 ### CRC-8 (SMBUS)
 
@@ -923,43 +972,47 @@ Bit loop (xor): **11 cy** — adds `EOR`
 
 Average: **10.5 cy/bit**, 84 cy/byte bit processing. Per byte: **101 cy**. Total code: **22 bytes**
 
-**RISCY-V02** — R2 = data ptr, R3 = len, result in R4
+**RISCY-V02** — R2 = data ptr, R3 = len, result in R4; CRC kept in upper byte
 
 ```
 crc8:
-    LI   R4, 0          ;  2 cy   2 B    crc = 0
+    LI   R4, 0          ;  2 cy   2 B    crc = 0 (upper byte)
+    LI   R0, 0x07       ;  2 cy   2 B    polynomial
+    SLLI R0, 8          ;  2 cy   2 B    R0 = 0x0700
 byte_loop:
     LBUR R5, R2         ;  3 cy   2 B    R5 = *data
+    SLLI R5, 8          ;  2 cy   2 B    data in upper byte
     XOR  R4, R4, R5     ;  2 cy   2 B    crc ^= byte
     LI   R5, 8          ;  2 cy   2 B
 bit_loop:
-    ANDIF R4, 0x80      ;  2 cy   2 B    R1 = bit 7
+    SLTI R4, 0          ;  2 cy   2 B    T = bit 15 (= CRC bit 7)
     SLLI R4, 1          ;  2 cy   2 B    crc <<= 1
-    BZ   R1, no_xor     ;  2.5 cy 2 B
-    XORI R4, 0x07       ;  2 cy   2 B    crc ^= poly
+    BF   no_xor         ;  2.5 cy 2 B    skip if bit was 0
+    XOR  R4, R4, R0     ;  2 cy   2 B    crc ^= poly
 no_xor:
     ADDI R5, -1         ;  2 cy   2 B
     BNZ  R5, bit_loop   ;  3 cy   2 B
     ADDI R2, 1          ;  2 cy   2 B    data++
     ADDI R3, -1         ;  2 cy   2 B    len--
     BNZ  R3, byte_loop  ;  3 cy   2 B
-    ANDI R4, 0xFF       ;  2 cy   2 B    mask to 8 bits
+    SRLI R4, 8          ;  2 cy   2 B    move to low byte
+    ANDI R4, 0xFF       ;  2 cy   2 B    mask
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Bit loop (no xor): **12 cy** — `ANDIF`+`SLLI`+`BZ`(taken)+`ADDI`+`BNZ`
+Bit loop (no xor): **12 cy** — `SLTI`+`SLLI`+`BF`(taken)+`ADDI`+`BNZ`
 
-Bit loop (xor): **13 cy** — adds `XORI`
+Bit loop (xor): **13 cy** — adds `XOR`
 
-Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **114 cy**. Total code: **30 bytes**
+Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **116 cy**. Total code: **36 bytes**
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
 | Bit loop (avg) | 10.5 cy | 12.5 cy |
-| Per byte | 101 cy | 114 cy |
-| Code size | 22 B | 30 B |
+| Per byte | 101 cy | 116 cy |
+| Code size | 22 B | 36 B |
 
-The 65C02 wins CRC-8. The carry flag is the difference: `ASL` shifts the CRC and captures the overflow bit in one instruction; RISCY-V02 needs a separate `ANDIF` to extract bit 7 before shifting. With the CRC, byte overhead, and polynomial all fitting naturally in 8-bit operations, the 6502 plays to its strengths.
+The 65C02 wins CRC-8. The carry flag is the difference: `ASL` shifts the CRC and captures the overflow bit in one instruction; RISCY-V02 needs a separate `SLTI` to extract bit 15 before shifting. By keeping the CRC in the upper byte of a 16-bit register, `SLTI` (test sign bit) replaces the lost `ANDIF` (test bit 7). The setup cost (shifting data into the upper byte, pre-loading the polynomial) adds per-byte overhead. With the CRC, byte overhead, and polynomial all fitting naturally in 8-bit operations, the 6502 plays to its strengths.
 
 ### CRC-16/CCITT
 
@@ -1020,9 +1073,9 @@ byte_loop:
     XOR  R4, R4, R5     ;  2 cy   2 B    crc ^= byte << 8
     LI   R5, 8          ;  2 cy   2 B
 bit_loop:
-    SLTI R4, 0          ;  2 cy   2 B    R1 = bit 15
+    SLTI R4, 0          ;  2 cy   2 B    T = bit 15
     SLLI R4, 1          ;  2 cy   2 B    crc <<= 1
-    BZ   R1, no_xor     ;  2.5 cy 2 B
+    BF   no_xor         ;  2.5 cy 2 B    skip if bit was 0
     XOR  R4, R4, R0     ;  2 cy   2 B    crc ^= 0x1021
 no_xor:
     ADDI R5, -1         ;  2 cy   2 B
@@ -1033,7 +1086,7 @@ no_xor:
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Bit loop (no xor): **12 cy** — `SLTI`+`SLLI`+`BZ`(taken)+`ADDI`+`BNZ`
+Bit loop (no xor): **12 cy** — `SLTI`+`SLLI`+`BF`(taken)+`ADDI`+`BNZ`
 
 Bit loop (xor): **13 cy** — adds `XOR`
 
@@ -1045,7 +1098,7 @@ Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **116 cy**. Tota
 | Per byte | 227 cy | 116 cy |
 | Code size | 43 B | 36 B |
 
-RISCY-V02 wins CRC-16 by ~2×. The key insight is that RISCY-V02's bit loop costs the same 12.5 cy/bit regardless of CRC width — `SLTI` extracts bit 15 just as cheaply as `ANDIF` extracts bit 7. The 6502's bit loop goes from 10.5 to 25.5 cy (2.4× slower) because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2. The polynomial XOR is especially painful: 1 instruction on RISCY-V02 vs 6 on the 6502.
+RISCY-V02 wins CRC-16 by ~2×. The bit loop is identical to CRC-8: `SLTI` extracts bit 15 and `BF` branches on the T flag result — same cost regardless of CRC width. The 6502's bit loop goes from 10.5 to 25.5 cy (2.4× slower) because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2. The polynomial XOR is especially painful: 1 instruction on RISCY-V02 vs 6 on the 6502.
 
 ### Raster Bar Interrupt Handler
 
@@ -1056,7 +1109,7 @@ A classic demo effect: an interrupt fires once per scanline to change the backgr
 Both CPUs must finish the current instruction before taking the interrupt. The average wait depends on the instruction mix of the interrupted code:
 
 - **65C02:** Instructions take 2–7 cycles. Length-biased sampling across a typical game loop gives an average wait of **~1.5 cycles**. After the instruction completes, the hardware pushes PC and status to the stack and reads the IRQ vector: **7 cycles**.
-- **RISCY-V02:** Instructions take 2–4 cycles (pipeline-visible). Average wait: **~1 cycle**. After completion, INT saves PC to EPC and fetches from the vector: **4 cycles**.
+- **RISCY-V02:** Instructions take 2–4 cycles (pipeline-visible). Average wait: **~1 cycle**. After completion, INT saves PC to EPC and {I, T} to ESR, then fetches from the vector: **4 cycles**.
 
 **65C02** — color byte at $02 (zero page), VIC-II at $D019/$D021
 
@@ -1092,7 +1145,7 @@ Every register the handler touches must be saved and restored. The handler needs
 Register saves go below the current SP without adjusting it. This is safe because RISCY-V02's IRQ entry sets I=1, masking further IRQs, and NMI handlers cannot return (RETI from NMI is undefined behavior per the architecture — NMI handlers reset, halt, or spin). Since nothing that could resume the handler will touch the stack, the space below SP is exclusively ours for the handler's lifetime.
 
 ```
-                                    ;  4 cy        entry: save PC→EPC, fetch vector
+                                    ;  4 cy        entry: save PC→EPC, {I,T}→ESR, fetch vector
 irq_handler:
     SWS  R0, -4         ;  4 cy   2 B    save R0 below SP
     SWS  R5, -2         ;  4 cy   2 B    save R5 below SP

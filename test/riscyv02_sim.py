@@ -67,6 +67,8 @@ class RISCYV02Sim:
         self.regs = [0] * 8
         self.epc = 0
         self.i_bit = True       # True = interrupts disabled
+        self.t_bit = False      # T flag (condition result)
+        self.esr = 0b10         # Exception status register: {I=1, T=0}
         self.waiting = False
         self.stopped = False
 
@@ -211,8 +213,8 @@ class RISCYV02Sim:
         self.pc = (self.pc + 2) & 0xFFFF
         self._commit_pending_stores()
 
-        # BRK/INT detection: system prefix + sub[5]=1
-        is_int = (ir >> 6) == 0b1111100000 and (ir >> 5) & 1
+        # BRK/INT detection: system prefix + sub[5:4]=11
+        is_int = (ir >> 4) == 0b1111100000_11
         if is_int:
             self._saved_i_bit = self.i_bit  # Stash for EPC save in execute
             self.i_bit = True
@@ -246,9 +248,9 @@ class RISCYV02Sim:
         )
 
     def _take_interrupt(self, take_nmi):
-        """Enter interrupt: save PC to EPC, jump to vector."""
+        """Enter interrupt: save SR to ESR, save PC to EPC, jump to vector."""
         stale_pc = self.pc              # Always even (15-bit PC, bit 0 = 0)
-        epc_val = stale_pc | (1 if self.i_bit else 0)
+        self.esr = (int(self.i_bit) << 1) | int(self.t_bit)
         self.i_bit = True
 
         if take_nmi:
@@ -258,14 +260,14 @@ class RISCYV02Sim:
         else:
             vector = 0x0006
 
-        self.epc = epc_val
+        self.epc = stale_pc             # Clean 16-bit return address
         self.pc = vector
         exec_entries = self._fetch_seq(stale_pc)  # Clean even address
         self._bus_seq = exec_entries + self._fetch_seq(vector)
         self._interrupt_point = len(exec_entries)
         self.last_dispatch = (
             f"{'NMI' if take_nmi else 'IRQ'}"
-            f" epc=0x{epc_val:04X} vec=0x{vector:04X}"
+            f" epc=0x{stale_pc:04X} vec=0x{vector:04X}"
         )
 
     # ------------------------------------------------------------------
@@ -357,12 +359,12 @@ class RISCYV02Sim:
                 self.regs[rs_idx] = self.regs[rs_idx] ^ imm8_raw
                 return []
 
-            if prefix5 == 0b01100:      # SLTI (signed, dest=R1)
-                self.regs[1] = 1 if to_signed16(self.regs[rs_idx]) < sext8(imm8_raw) else 0
+            if prefix5 == 0b01100:      # CMPI (signed, sets T)
+                self.t_bit = to_signed16(self.regs[rs_idx]) < sext8(imm8_raw)
                 return []
 
-            if prefix5 == 0b01101:      # SLTUI (unsigned, dest=R1)
-                self.regs[1] = 1 if self.regs[rs_idx] < (sext8(imm8_raw) & 0xFFFF) else 0
+            if prefix5 == 0b01101:      # CMPUI (unsigned, sets T)
+                self.t_bit = self.regs[rs_idx] < (sext8(imm8_raw) & 0xFFFF)
                 return []
 
             if prefix5 == 0b01110:      # BZ
@@ -389,8 +391,8 @@ class RISCYV02Sim:
                     self._redirect = True
                 return []
 
-            if prefix5 == 0b10000:      # XORIF (zero-ext imm, dest=R1)
-                self.regs[1] = self.regs[rs_idx] ^ imm8_raw
+            if prefix5 == 0b10000:      # XORIF (zero-ext imm, sets T)
+                self.t_bit = (self.regs[rs_idx] ^ imm8_raw) != 0
                 return []
 
             if prefix5 == 0b10001:      # LWS (word load, base=R7)
@@ -421,9 +423,24 @@ class RISCYV02Sim:
                 addr = (self.regs[7] + sext8(imm8_raw)) & 0xFFFF
                 return [(addr, False, self.regs[rs_idx] & 0xFF)]
 
-            if prefix5 == 0b10110:      # ANDIF (zero-ext imm, dest=R1)
-                self.regs[1] = self.regs[rs_idx] & imm8_raw
-                return []
+            # --- "8" format: BT/BF (8-bit prefix, no register field) ---
+            if prefix5 == 0b10110:
+                prefix8 = ir >> 8
+                off8 = ir & 0xFF
+                if prefix8 == 0b10110_000:      # BT
+                    if self.t_bit:
+                        target = (next_pc + sext8(off8) * 2) & 0xFFFF
+                        self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
+                        self.pc = target
+                        self._redirect = True
+                    return []
+                if prefix8 == 0b10110_001:      # BF
+                    if not self.t_bit:
+                        target = (next_pc + sext8(off8) * 2) & 0xFFFF
+                        self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
+                        self.pc = target
+                        self._redirect = True
+                    return []
 
             # Unknown R,8 — treat as NOP
             return []
@@ -481,10 +498,10 @@ class RISCYV02Sim:
             elif prefix7 == 0b1110010:  self.regs[rd] = a & b                   # AND
             elif prefix7 == 0b1110011:  self.regs[rd] = a | b                   # OR
             elif prefix7 == 0b1110100:  self.regs[rd] = a ^ b                   # XOR
-            elif prefix7 == 0b1110101:                                          # SLT
-                self.regs[rd] = 1 if to_signed16(a) < to_signed16(b) else 0
-            elif prefix7 == 0b1110110:                                          # SLTU
-                self.regs[rd] = 1 if a < b else 0
+            elif prefix7 == 0b1110101:                                          # SLT (sets T)
+                self.t_bit = to_signed16(a) < to_signed16(b)
+            elif prefix7 == 0b1110110:                                          # SLTU (sets T)
+                self.t_bit = a < b
             elif prefix7 == 0b1110111:  self.regs[rd] = (a << (b & 0xF)) & 0xFFFF  # SLL
             elif prefix7 == 0b1111000:  self.regs[rd] = a >> (b & 0xF)              # SRL
             elif prefix7 == 0b1111001:                                               # SRA
@@ -567,7 +584,8 @@ class RISCYV02Sim:
                 return []
 
             if sub == 0b000011:         # RETI
-                self.i_bit = bool(self.epc & 1)
+                self.i_bit = bool(self.esr & 2)
+                self.t_bit = bool(self.esr & 1)
                 self.pc = self.epc & 0xFFFE
                 self._redirect = True
                 return []
@@ -588,9 +606,24 @@ class RISCYV02Sim:
                 self.epc = self.regs[sub & 7]
                 return []
 
-            if sub & 0x20:              # INT/BRK (sub[5]=1)
+            if (sub >> 3) == 0b100:     # MOVT rd
+                self.regs[sub & 7] = 1 if self.t_bit else 0
+                return []
+
+            if (sub >> 3) == 0b101:     # SRR rd
+                self.regs[sub & 7] = (int(self.i_bit) << 1) | int(self.t_bit)
+                return []
+
+            if (sub >> 3) == 0b001:     # SRW rs
+                val = self.regs[sub & 7]
+                self.i_bit = bool(val & 2)
+                self.t_bit = bool(val & 1)
+                return []
+
+            if (sub >> 4) == 0b11:      # INT/BRK (sub[5:4]=11)
                 vector_idx = ir & 3
-                self.epc = self.pc | (1 if self._saved_i_bit else 0)
+                self.esr = (int(self._saved_i_bit) << 1) | int(self.t_bit)
+                self.epc = self.pc                  # Clean return address
                 self.pc = ((vector_idx + 1) & 3) << 1
                 self._redirect = True
                 return []

@@ -27,15 +27,18 @@
 // Prefix at MSB, registers at LSB for fixed positions.
 //
 //   Level  Format  Layout                             Instructions
-//   5      R,8     [prefix:5|imm8:8|reg:3]            23: ADDI..ANDIF
+//   5      R,8     [prefix:5|imm8:8|reg:3]            21: ADDI..SBS
 //   6      R,7     [prefix:6|imm7:7|reg:3]            2: LUI,AUIPC
 //   6      "10"    [prefix:6|imm10:10]                 2: J,JAL
 //   7      R,R,R   [prefix:7|rd:3|rs2:3|rs1:3]       10: ADD..SRA
+//   8      "8"     [prefix:8|off8:8]                   2: BT,BF
 //   9      R,4     [prefix:9|shamt:4|reg:3]            3: SLLI,SRLI,SRAI
 //  10      R,R     [prefix:10|rd:3|rs:3]               5: LWR..SBR
-//  11-16   System  (full-width decode)                  8: SEI..STP
+//  11-16   System  (full-width decode)                 11: SEI..STP
 //
 // ADDI has prefix 0000 so that 0x0000 = ADDI R0, 0 = NOP.
+// T flag: single-bit condition flag set by comparisons (CMPI, CMPUI, XORIF,
+// SLT, SLTU), tested by BT/BF branches. SR = {I, T}; ESR saves SR on INT.
 // ============================================================================
 
 module riscyv02_execute (
@@ -85,6 +88,8 @@ module riscyv02_execute (
   // Interrupt and PC state
   reg [15:1] pc;        // Program counter (word address; byte addr = {pc, 1'b0})
   reg        i_bit;     // Interrupt disable flag (0=enabled, 1=disabled)
+  reg        t_bit;     // T flag (condition result from comparisons)
+  reg  [1:0] esr;       // Exception status register: saved {i_bit, t_bit}
 
   // -------------------------------------------------------------------------
   // Instruction decode: all properties derived directly from ir
@@ -115,7 +120,9 @@ module riscyv02_execute (
   wire is_lbu_s = ir[15:11] == 5'b10011;
   wire is_sw_s  = ir[15:11] == 5'b10100;
   wire is_sb_s  = ir[15:11] == 5'b10101;
-  wire is_andif = ir[15:11] == 5'b10110;
+  // --- "8" format (8-bit prefix @ [15:8], offset @ [7:0]) ---
+  wire is_bt = ir[15:8] == 8'b10110_000;
+  wire is_bf = ir[15:8] == 8'b10110_001;
 
   // --- R,7 / "10" format (6-bit prefix @ [15:10]) ---
   wire is_lui   = ir[15:10] == 6'b110100;
@@ -155,7 +162,10 @@ module riscyv02_execute (
   wire is_stp  = ir == 16'b1111100000000111;
   wire is_epcr = ir[15:3] == 13'b1111100000010;
   wire is_epcw = ir[15:3] == 13'b1111100000011;
-  wire is_int  = ir[15:5] == 11'b11111000001;
+  wire is_movt = ir[15:3] == 13'b1111100000_100;
+  wire is_srr  = ir[15:3] == 13'b1111100000_101;
+  wire is_srw  = ir[15:3] == 13'b1111100000_001;
+  wire is_int  = ir[15:4] == 12'b1111100000_11;
 
   // --- Behavioral groups ---
 
@@ -187,11 +197,12 @@ module riscyv02_execute (
   wire is_right_shift = is_srl || is_sra || is_srli || is_srai;
   wire is_arith_shift = is_sra || is_srai;
 
-  // Writes to R1: SLTI, SLTUI, XORIF
-  wire is_r1_dest = is_slti || is_sltui || is_xorif || is_andif;
+  // T-flag comparisons (set T, no register write)
+  wire is_cmp_imm = is_slti || is_sltui || is_xorif;
 
   // Jump/branch
   wire is_branch   = is_bz || is_bnz;
+  wire is_t_branch = is_bt || is_bf;
   wire is_jump_imm = is_j || is_jal;
   wire is_jr_jalr  = is_jr || is_jalr;
 
@@ -276,8 +287,6 @@ module riscyv02_execute (
       w_sel_mux = {1'b0, ir[8:6]};                             // R,R,R: rd at [8:6]
     else if (is_mem_phase && is_rr_load)
       w_sel_mux = {1'b0, ir[5:3]};                             // R,R loads: rd at [5:3]
-    else if (is_r1_dest)
-      w_sel_mux = 4'd1;                                        // SLTI/SLTUI/XORIF → R1
     else
       w_sel_mux = {1'b0, ir[2:0]};                             // Default: reg at [2:0]
   end
@@ -377,6 +386,8 @@ module riscyv02_execute (
   reg        insn_completing;
   reg [15:1] next_pc;
   reg        jump;
+  reg        next_t;      // Next T flag value (written at negedge)
+  reg        t_we;        // T flag write enable
 
   // Combinational signal for tmp[7:0] latch at E_EXEC_LO negedge
   reg [7:0]  next_tmp_lo;
@@ -384,9 +395,14 @@ module riscyv02_execute (
   // Interrupt control
   wire fsm_ready = (state == E_IDLE) || insn_completing;
   wire take_nmi = fsm_ready && (nmi_pending || nmi_edge) && !nmi_ack;
-  wire take_irq = fsm_ready && !irqb && !(i_bit || is_sei) && !take_nmi;
-  // Forwarded i_bit for pc[0] save: reflects SEI/CLI effect completing this cycle
-  wire i_bit_fwd = (i_bit || is_sei) && !is_cli;
+  // Forwarded i_bit: reflects SEI/CLI/SRW/RETI effect completing this cycle
+  reg i_bit_fwd;
+  always @(*) begin
+    if (is_srw)       i_bit_fwd = r1[1];
+    else if (is_reti) i_bit_fwd = esr[1];
+    else              i_bit_fwd = (i_bit || is_sei) && !is_cli;
+  end
+  wire take_irq = fsm_ready && !irqb && !i_bit_fwd && !take_nmi;
   assign ir_accept = fsm_ready && ir_valid && !fetch_flush;
   assign waiting = (state == E_IDLE) && is_wai;
   assign stopped = (state == E_IDLE) && is_stp;
@@ -411,6 +427,8 @@ module riscyv02_execute (
     insn_completing = 1'b0;
     next_pc         = pc;
     jump            = 1'b0;
+    next_t          = 1'b0;
+    t_we            = 1'b0;
     shifter_din     = 15'b0;
     next_tmp_lo  = alu_result;
 
@@ -420,8 +438,8 @@ module riscyv02_execute (
           // EPC available on r1[15:0]; no action needed in LO
         end else if (is_int) begin
           // Deferred to E_EXEC_HI
-        end else if (is_epcr || is_epcw) begin
-          // Deferred to E_EXEC_HI — r1 is stable
+        end else if (is_epcr || is_epcw || is_movt || is_srr || is_srw) begin
+          // Deferred to E_EXEC_HI
         end else if (is_r9_load || is_r9_store || is_sp_load || is_sp_store) begin
           // Address: base + sext(imm8), byte offset (no shift)
           alu_b      = ir[10:3];            // imm[7:0]
@@ -455,7 +473,7 @@ module riscyv02_execute (
           alu_op     = 3'd1;                // SUB for comparison
           alu_b      = r2[7:0];
           // No write — just save borrow for E_EXEC_HI
-        end else if (is_andi || is_andif) begin
+        end else if (is_andi) begin
           alu_op      = 3'd2;
           alu_b       = ir[10:3];            // imm8 (zero-extended: hi byte = 0 in HI)
           next_tmp_lo = alu_result;
@@ -463,7 +481,11 @@ module riscyv02_execute (
           alu_op      = 3'd3;
           alu_b       = ir[10:3];
           next_tmp_lo = alu_result;
-        end else if (is_xori || is_xorif) begin
+        end else if (is_xori) begin
+          alu_op      = 3'd4;
+          alu_b       = ir[10:3];
+          next_tmp_lo = alu_result;
+        end else if (is_xorif) begin
           alu_op      = 3'd4;
           alu_b       = ir[10:3];
           next_tmp_lo = alu_result;
@@ -494,6 +516,15 @@ module riscyv02_execute (
           alu_b      = {ir[3], ir[9:4], 1'b0};  // RISC-V trick: off[6],off[5:0],0
           // Same-page taken: high byte unchanged, 1 exec cycle (3 total)
           if ((!(|r1) ^ is_bnz) && (alu_co == ir[10])) begin
+            jump            = 1'b1;
+            next_pc         = {pc[15:8], alu_result[7:1]};
+            insn_completing = 1'b1;
+          end
+        end else if (is_t_branch) begin
+          alu_a      = {pc[7:1], 1'b0};
+          alu_b      = {ir[6:0], 1'b0};     // off8[6:0] << 1
+          // Same-page taken: high byte unchanged, 1 exec cycle (3 total)
+          if ((t_bit ^ is_bf) && (alu_co == ir[7])) begin
             jump            = 1'b1;
             next_pc         = {pc[15:8], alu_result[7:1]};
             insn_completing = 1'b1;
@@ -538,9 +569,9 @@ module riscyv02_execute (
         end else begin
           if (is_reti) begin
             jump    = 1'b1;
-            next_pc = {r1[15:8], r1[7:1]};
+            next_pc = r1[15:1];               // EPC is clean 16-bit address
           end else if (is_int) begin
-            w_data  = {pc, saved_i_bit};
+            w_data  = {pc, 1'b0};             // EPC = clean return address
             w_we    = 1'b1;
             jump    = 1'b1;
             next_pc = {13'b0, ir[1:0] + 2'd1};
@@ -563,12 +594,12 @@ module riscyv02_execute (
             alu_a      = r1[15:8];
             alu_op     = 3'd1;
             alu_b      = r2[15:8];
-            w_we       = 1'b1;
+            t_we       = 1'b1;
             if (is_sltu)
-              w_data = {8'h00, 7'b0, ~alu_co};
+              next_t = ~alu_co;
             else
-              w_data = {8'h00, 7'b0, (r1[15] ^ r2[15]) ? r1[15] : alu_result[7]};
-          end else if (is_andi || is_andif) begin
+              next_t = (r1[15] ^ r2[15]) ? r1[15] : alu_result[7];
+          end else if (is_andi) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd2;
             alu_b      = 8'h00;                 // zero-extend
@@ -578,23 +609,30 @@ module riscyv02_execute (
             alu_op     = 3'd3;
             alu_b      = 8'h00;
             w_we       = 1'b1;
-          end else if (is_xori || is_xorif) begin
+          end else if (is_xori) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd4;
             alu_b      = 8'h00;
             w_we       = 1'b1;
+          end else if (is_xorif) begin
+            alu_a      = r1[15:8];
+            alu_op     = 3'd4;
+            alu_b      = 8'h00;
+            // T = (result != 0): any bit set in lo or hi
+            t_we       = 1'b1;
+            next_t     = (|tmp[7:0]) || (|alu_result);
           end else if (is_slti) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd1;
             alu_b      = {8{ir[10]}};           // sign-extend imm8 bit 7
-            w_we       = 1'b1;
-            w_data     = {8'h00, 7'b0, (r1[15] ^ ir[10]) ? r1[15] : alu_result[7]};
+            t_we       = 1'b1;
+            next_t     = (r1[15] ^ ir[10]) ? r1[15] : alu_result[7];
           end else if (is_sltui) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd1;
             alu_b      = {8{ir[10]}};           // sign-extend for unsigned comparison
-            w_we       = 1'b1;
-            w_data     = {8'h00, 7'b0, ~alu_co};
+            t_we       = 1'b1;
+            next_t     = ~alu_co;
           end else if (is_shift) begin
             if (shamt[3]) begin
               if (is_right_shift) begin
@@ -626,6 +664,13 @@ module riscyv02_execute (
               jump    = 1'b1;
               next_pc = {alu_result, tmp[7:1]};
             end
+          end else if (is_t_branch) begin
+            alu_a      = pc[15:8];
+            alu_b      = {8{ir[7]}};            // sign-extend off8 bit 7
+            if (t_bit ^ is_bf) begin
+              jump    = 1'b1;
+              next_pc = {alu_result, tmp[7:1]};
+            end
           end else if (is_jump_imm) begin
             alu_a      = pc[15:8];
             alu_b      = {{6{ir[9]}}, ir[8], ir[7]};  // sext(off10[9:7])
@@ -637,6 +682,12 @@ module riscyv02_execute (
             end
           end else if (is_epcr || is_epcw) begin
             w_data = r1;
+            w_we   = 1'b1;
+          end else if (is_movt) begin
+            w_data = {15'b0, t_bit};
+            w_we   = 1'b1;
+          end else if (is_srr) begin
+            w_data = {14'b0, i_bit, t_bit};
             w_we   = 1'b1;
           end
           end
@@ -696,6 +747,8 @@ module riscyv02_execute (
       carry_r     <= 1'b0;
       pc          <= 15'h0000;
       i_bit       <= 1'b1;
+      t_bit       <= 1'b0;
+      esr         <= 2'b10;  // {I=1, T=0}
       saved_i_bit <= 1'b1;
       nmi_ack     <= 1'b0;
       r2_hi_r     <= 1'b0;
@@ -724,13 +777,22 @@ module riscyv02_execute (
         end
 
         E_EXEC_HI: begin
+          if (t_we) t_bit <= next_t;
           if (is_r9_load || is_r9_store || is_auipc || is_rr_load || is_rr_store || is_sp_load || is_sp_store) begin
             if (is_auipc) state <= E_IDLE;
             else          state <= E_MEM_LO;
           end else begin
             if (is_sei) i_bit <= 1'b1;
             if (is_cli) i_bit <= 1'b0;
-            if (is_reti) i_bit <= r1[0];
+            if (is_reti) begin
+              i_bit <= esr[1];
+              t_bit <= esr[0];
+            end
+            if (is_srw) begin
+              i_bit <= r1[1];
+              t_bit <= r1[0];
+            end
+            if (is_int) esr <= {saved_i_bit, t_bit};
             if (jump) pc <= next_pc;
             state <= E_IDLE;
           end
@@ -753,9 +815,10 @@ module riscyv02_execute (
       // Interrupt entry: synthesize INT instruction in ir.
       // System prefix + sub[5]=1, vector in ir[1:0].
       // i_bit captured by saved_i_bit DFF at dispatch (stable through E_EXEC_HI).
+      // ESR saves {i_bit_fwd, t_bit} at interrupt dispatch.
       // -----------------------------------------------------------------
       if (take_nmi || take_irq) begin
-        ir     <= {10'b1111100000, 1'b1, 3'b000, !take_nmi, 1'b0};
+        ir     <= {10'b1111100000, 2'b11, 2'b00, !take_nmi, 1'b0};
         i_bit <= 1'b1;
         state <= E_EXEC_LO;
       end
@@ -768,7 +831,7 @@ module riscyv02_execute (
         ir <= fetch_ir;
         r2_hi_r  <= 1'b0;
         // BRK/INT detection
-        if (fetch_ir[15:5] == 11'b11111000001)
+        if (fetch_ir[15:4] == 12'b1111100000_11)
           i_bit <= 1'b1;
         state <= E_EXEC_LO;
       end

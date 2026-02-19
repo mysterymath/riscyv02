@@ -180,7 +180,7 @@ async def test_shifts(dut):
 
 @cocotb.test()
 async def test_slt_sltu(dut):
-    """SLT and SLTU comparisons."""
+    """SLT and SLTU comparisons (T-flag + MOVT)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -188,10 +188,12 @@ async def test_slt_sltu(dut):
     _place(prog, 0x0000, _encode_li(rd=1, imm=5))
     _place(prog, 0x0002, _encode_li(rd=2, imm=10))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0008, _encode_slt(rd=4, rs1=2, rs2=1))
-    _place(prog, 0x000A, _encode_sw(rs=4, imm=0x42))
-    _place(prog, 0x000C, _spin(0x000C))
+    _place(prog, 0x0006, _encode_movt(rd=3))
+    _place(prog, 0x0008, _encode_sw(rs=3, imm=0x40))
+    _place(prog, 0x000A, _encode_slt(rd=4, rs1=2, rs2=1))
+    _place(prog, 0x000C, _encode_movt(rd=4))
+    _place(prog, 0x000E, _encode_sw(rs=4, imm=0x42))
+    _place(prog, 0x0010, _spin(0x0010))
 
     _load_program(dut, prog)
     await _reset(dut)
@@ -224,25 +226,29 @@ async def test_auipc(dut):
 
 @cocotb.test()
 async def test_slti_sltui_xorif(dut):
-    """SLTI, SLTUI, XORIF all write result to R1."""
+    """SLTI, SLTUI, XORIF all set T flag; MOVT reads T into a register."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=2, imm=5))
     _place(prog, 0x0002, _encode_slti(rs=2, imm=10))
-    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
-    _place(prog, 0x0006, _encode_slti(rs=2, imm=3))
-    _place(prog, 0x0008, _encode_sw_s(rd=1, imm=0x42))
-    _place(prog, 0x000A, _encode_xorif(rs=2, imm=5))
-    _place(prog, 0x000C, _encode_sw_s(rd=1, imm=0x44))
-    _place(prog, 0x000E, _encode_xorif(rs=2, imm=3))
-    _place(prog, 0x0010, _encode_sw_s(rd=1, imm=0x46))
-    _place(prog, 0x0012, _spin(0x0012))
+    _place(prog, 0x0004, _encode_movt(rd=1))
+    _place(prog, 0x0006, _encode_sw_s(rd=1, imm=0x40))
+    _place(prog, 0x0008, _encode_slti(rs=2, imm=3))
+    _place(prog, 0x000A, _encode_movt(rd=1))
+    _place(prog, 0x000C, _encode_sw_s(rd=1, imm=0x42))
+    _place(prog, 0x000E, _encode_xorif(rs=2, imm=5))
+    _place(prog, 0x0010, _encode_movt(rd=1))
+    _place(prog, 0x0012, _encode_sw_s(rd=1, imm=0x44))
+    _place(prog, 0x0014, _encode_xorif(rs=2, imm=3))
+    _place(prog, 0x0016, _encode_movt(rd=1))
+    _place(prog, 0x0018, _encode_sw_s(rd=1, imm=0x46))
+    _place(prog, 0x001A, _spin(0x001A))
 
     _load_program(dut, prog)
     await _reset(dut)
-    await ClockCycles(dut.clk, 300)
+    await ClockCycles(dut.clk, 400)
 
     v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
     v2 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
@@ -250,35 +256,8 @@ async def test_slti_sltui_xorif(dut):
     v4 = _read_ram(dut, 0x0046) | (_read_ram(dut, 0x0047) << 8)
     assert v1 == 1, f"SLTI 5<10: expected 1, got {v1}"
     assert v2 == 0, f"SLTI 5<3: expected 0, got {v2}"
-    assert v3 == 0, f"XORIF 5^5: expected 0, got {v3}"
-    assert v4 == 6, f"XORIF 5^3: expected 6, got {v4}"
-
-
-@cocotb.test()
-async def test_andif(dut):
-    """ANDIF: non-destructive bit mask, result to R1."""
-    clock = Clock(dut.clk, 10, unit="us")
-    cocotb.start_soon(clock.start())
-    prog = {}
-    # R2 = 0x005A via LI (0x5A = 90, in signed range)
-    _place(prog, 0x0000, _encode_li(rd=2, imm=0x5A))
-    # ANDIF R2, 0xF0 → R1 = 0x0050, R2 unchanged
-    _place(prog, 0x0002, _encode_andif(rs=2, imm=0xF0))
-    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
-    _place(prog, 0x0006, _encode_sw_s(rd=2, imm=0x42))
-    # ANDIF R2, 0x00 → R1 = 0x0000
-    _place(prog, 0x0008, _encode_andif(rs=2, imm=0x00))
-    _place(prog, 0x000A, _encode_sw_s(rd=1, imm=0x44))
-    _place(prog, 0x000C, _spin(0x000C))
-    _load_program(dut, prog)
-    await _reset(dut)
-    await ClockCycles(dut.clk, 300)
-    v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    v2 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
-    v3 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
-    assert v1 == 0x0050, f"ANDIF 0x5A&0xF0: expected 0x0050, got {v1:#06x}"
-    assert v2 == 0x005A, f"R2 should be unchanged: expected 0x005A, got {v2:#06x}"
-    assert v3 == 0x0000, f"ANDIF 0x5A&0x00: expected 0x0000, got {v3:#06x}"
+    assert v3 == 0, f"XORIF 5^5=0: expected T=0, got {v3}"
+    assert v4 == 1, f"XORIF 5^3!=0: expected T=1, got {v4}"
 
 
 @cocotb.test()
@@ -579,15 +558,16 @@ async def test_xor_basic(dut):
 
 @cocotb.test()
 async def test_slt_equal(dut):
-    """SLT: 5 < 5 -> 0."""
+    """SLT: 5 < 5 -> T=0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=5))
     _place(prog, 0x0002, _encode_li(rd=2, imm=5))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
+    _place(prog, 0x0006, _encode_movt(rd=3))
+    _place(prog, 0x0008, _encode_sw(rs=3, imm=0x40))
+    _place(prog, 0x000A, _spin(0x000A))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
     await _reset(dut)
@@ -598,15 +578,16 @@ async def test_slt_equal(dut):
 
 @cocotb.test()
 async def test_slt_negative(dut):
-    """SLT: -5 < 5 -> 1 (signed)."""
+    """SLT: -5 < 5 -> T=1 (signed)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=-5))
     _place(prog, 0x0002, _encode_li(rd=2, imm=5))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
+    _place(prog, 0x0006, _encode_movt(rd=3))
+    _place(prog, 0x0008, _encode_sw(rs=3, imm=0x40))
+    _place(prog, 0x000A, _spin(0x000A))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
     await _reset(dut)
@@ -617,15 +598,16 @@ async def test_slt_negative(dut):
 
 @cocotb.test()
 async def test_slt_negative_false(dut):
-    """SLT: 5 < -5 -> 0 (signed)."""
+    """SLT: 5 < -5 -> T=0 (signed)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=5))
     _place(prog, 0x0002, _encode_li(rd=2, imm=-5))
     _place(prog, 0x0004, _encode_slt(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
+    _place(prog, 0x0006, _encode_movt(rd=3))
+    _place(prog, 0x0008, _encode_sw(rs=3, imm=0x40))
+    _place(prog, 0x000A, _spin(0x000A))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
     await _reset(dut)
@@ -636,15 +618,16 @@ async def test_slt_negative_false(dut):
 
 @cocotb.test()
 async def test_sltu_true(dut):
-    """SLTU: 5 <u 10 -> 1."""
+    """SLTU: 5 <u 10 -> T=1."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=5))
     _place(prog, 0x0002, _encode_li(rd=2, imm=10))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
+    _place(prog, 0x0006, _encode_movt(rd=3))
+    _place(prog, 0x0008, _encode_sw(rs=3, imm=0x40))
+    _place(prog, 0x000A, _spin(0x000A))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
     await _reset(dut)
@@ -655,15 +638,16 @@ async def test_sltu_true(dut):
 
 @cocotb.test()
 async def test_sltu_false(dut):
-    """SLTU: 10 <u 5 -> 0."""
+    """SLTU: 10 <u 5 -> T=0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=10))
     _place(prog, 0x0002, _encode_li(rd=2, imm=5))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
+    _place(prog, 0x0006, _encode_movt(rd=3))
+    _place(prog, 0x0008, _encode_sw(rs=3, imm=0x40))
+    _place(prog, 0x000A, _spin(0x000A))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
     await _reset(dut)
@@ -674,15 +658,16 @@ async def test_sltu_false(dut):
 
 @cocotb.test()
 async def test_sltu_large(dut):
-    """SLTU: 5 <u 0xFFFF -> 1."""
+    """SLTU: 5 <u 0xFFFF -> T=1."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=5))
     _place(prog, 0x0002, _encode_li(rd=2, imm=-1))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
+    _place(prog, 0x0006, _encode_movt(rd=3))
+    _place(prog, 0x0008, _encode_sw(rs=3, imm=0x40))
+    _place(prog, 0x000A, _spin(0x000A))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
     await _reset(dut)
@@ -693,15 +678,16 @@ async def test_sltu_large(dut):
 
 @cocotb.test()
 async def test_sltu_large_reverse(dut):
-    """SLTU: 0xFFFF <u 5 -> 0."""
+    """SLTU: 0xFFFF <u 5 -> T=0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=-1))
     _place(prog, 0x0002, _encode_li(rd=2, imm=5))
     _place(prog, 0x0004, _encode_sltu(rd=3, rs1=1, rs2=2))
-    _place(prog, 0x0006, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
+    _place(prog, 0x0006, _encode_movt(rd=3))
+    _place(prog, 0x0008, _encode_sw(rs=3, imm=0x40))
+    _place(prog, 0x000A, _spin(0x000A))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
     await _reset(dut)
@@ -787,14 +773,15 @@ async def test_xori_all_ones(dut):
 
 @cocotb.test()
 async def test_slti_negative(dut):
-    """SLTI: -2 < -1 -> R1 = 1 (signed compare)."""
+    """SLTI: -2 < -1 -> T=1 (signed compare)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=-2))
     _place(prog, 0x0002, _encode_slti(rs=1, imm=-1))
-    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
-    _place(prog, 0x0006, _spin(0x0006))
+    _place(prog, 0x0004, _encode_movt(rd=2))
+    _place(prog, 0x0006, _encode_sw_s(rd=2, imm=0x40))
+    _place(prog, 0x0008, _spin(0x0008))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
     await _reset(dut)
@@ -805,14 +792,15 @@ async def test_slti_negative(dut):
 
 @cocotb.test()
 async def test_slti_equal(dut):
-    """SLTI: 5 < 5 -> R1 = 0."""
+    """SLTI: 5 < 5 -> T=0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=5))
     _place(prog, 0x0002, _encode_slti(rs=1, imm=5))
-    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
-    _place(prog, 0x0006, _spin(0x0006))
+    _place(prog, 0x0004, _encode_movt(rd=2))
+    _place(prog, 0x0006, _encode_sw_s(rd=2, imm=0x40))
+    _place(prog, 0x0008, _spin(0x0008))
     prog[0x0040] = 0xFF; prog[0x0041] = 0xFF
     _load_program(dut, prog)
     await _reset(dut)
@@ -823,14 +811,15 @@ async def test_slti_equal(dut):
 
 @cocotb.test()
 async def test_sltui_true(dut):
-    """SLTUI: 5 <u 10 -> R1 = 1."""
+    """SLTUI: 5 <u 10 -> T=1."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=5))
     _place(prog, 0x0002, _encode_sltui(rs=1, imm=10))
-    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
-    _place(prog, 0x0006, _spin(0x0006))
+    _place(prog, 0x0004, _encode_movt(rd=2))
+    _place(prog, 0x0006, _encode_sw_s(rd=2, imm=0x40))
+    _place(prog, 0x0008, _spin(0x0008))
     prog[0x0040] = 0x00; prog[0x0041] = 0x00
     _load_program(dut, prog)
     await _reset(dut)
@@ -841,14 +830,15 @@ async def test_sltui_true(dut):
 
 @cocotb.test()
 async def test_sltui_false(dut):
-    """SLTUI: 0xFFFF <u sext(3)=3 -> R1 = 0."""
+    """SLTUI: 0xFFFF <u sext(3)=3 -> T=0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=-1))
     _place(prog, 0x0002, _encode_sltui(rs=1, imm=3))
-    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
-    _place(prog, 0x0006, _spin(0x0006))
+    _place(prog, 0x0004, _encode_movt(rd=2))
+    _place(prog, 0x0006, _encode_sw_s(rd=2, imm=0x40))
+    _place(prog, 0x0008, _spin(0x0008))
     prog[0x0040] = 0xFF; prog[0x0041] = 0xFF
     _load_program(dut, prog)
     await _reset(dut)
@@ -859,14 +849,15 @@ async def test_sltui_false(dut):
 
 @cocotb.test()
 async def test_xorif_equality(dut):
-    """XORIF: 5 ^ 5 = 0 (equality test pattern)."""
+    """XORIF: 5 ^ 5 = 0, T=0 (equality test pattern)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
     _place(prog, 0x0000, _encode_li(rd=1, imm=5))
     _place(prog, 0x0002, _encode_xorif(rs=1, imm=5))
-    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))
-    _place(prog, 0x0006, _spin(0x0006))
+    _place(prog, 0x0004, _encode_movt(rd=2))
+    _place(prog, 0x0006, _encode_sw_s(rd=2, imm=0x40))
+    _place(prog, 0x0008, _spin(0x0008))
     prog[0x0040] = 0xFF; prog[0x0041] = 0xFF
     _load_program(dut, prog)
     await _reset(dut)

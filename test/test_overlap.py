@@ -40,16 +40,16 @@ def _store_r16(prog, pc, store_addr, rs):
 
 @cocotb.test()
 async def test_slt_rd_eq_rs1(dut):
-    """SLT R1, R1, R2: rd == rs1. Hi byte of rs1 corrupted by pre-clear."""
+    """SLT R1, R1, R2: sets T (no register overlap concern with T flag)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
-    # R1 = 0x0100 (256), R2 = 0x0080 (128). Signed: 256 < 128 = false → 0.
-    # Bug: R1_hi cleared to 0 → comparison becomes 0 < 128 = true → 1.
+    # R1 = 0x0100 (256), R2 = 0x0080 (128). Signed: 256 < 128 = false → T=0.
     pc = _load_r16(prog, 0x0000, 0x60, rd=1, val=0x0100)
     pc = _load_r16(prog, pc, 0x62, rd=2, val=0x0080)
     _place(prog, pc, _encode_slt(rd=1, rs1=1, rs2=2)); pc += 2
-    pc = _store_r16(prog, pc, 0x40, rs=1)
+    _place(prog, pc, _encode_movt(rd=3)); pc += 2
+    pc = _store_r16(prog, pc, 0x40, rs=3)
     _place(prog, pc, _spin())
     prog[0x40] = 0xFF; prog[0x41] = 0xFF
     _load_program(dut, prog)
@@ -61,16 +61,16 @@ async def test_slt_rd_eq_rs1(dut):
 
 @cocotb.test()
 async def test_sltu_rd_eq_rs2(dut):
-    """SLTU R2, R1, R2: rd == rs2. Hi byte of rs2 corrupted by pre-clear."""
+    """SLTU R2, R1, R2: sets T (no register overlap concern with T flag)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
-    # R1 = 0x0080, R2 = 0x0100. Unsigned: 0x0080 <u 0x0100 = true → 1.
-    # Bug: R2_hi cleared → comparison becomes 0x0080 <u 0x0000 = false → 0.
+    # R1 = 0x0080, R2 = 0x0100. Unsigned: 0x0080 <u 0x0100 = true → T=1.
     pc = _load_r16(prog, 0x0000, 0x60, rd=1, val=0x0080)
     pc = _load_r16(prog, pc, 0x62, rd=2, val=0x0100)
     _place(prog, pc, _encode_sltu(rd=2, rs1=1, rs2=2)); pc += 2
-    pc = _store_r16(prog, pc, 0x40, rs=2)
+    _place(prog, pc, _encode_movt(rd=3)); pc += 2
+    pc = _store_r16(prog, pc, 0x40, rs=3)
     _place(prog, pc, _spin())
     prog[0x40] = 0xFF; prog[0x41] = 0xFF
     _load_program(dut, prog)
@@ -82,15 +82,15 @@ async def test_sltu_rd_eq_rs2(dut):
 
 @cocotb.test()
 async def test_slti_rd_eq_rs(dut):
-    """SLTI R1, 1: source R1 == dest R1. Hi byte corrupted by pre-clear."""
+    """SLTI R1, 1: sets T (no register overlap concern with T flag)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     prog = {}
-    # R1 = 0x0100 (256). SLTI R1, 1: signed 256 < 1 → false → R1 = 0.
-    # Bug: R1_hi cleared → comparison becomes 0 < 1 → true → 1.
+    # R1 = 0x0100 (256). SLTI R1, 1: signed 256 < 1 → false → T=0.
     pc = _load_r16(prog, 0x0000, 0x60, rd=1, val=0x0100)
     _place(prog, pc, _encode_slti(rs=1, imm=1)); pc += 2
-    _place(prog, pc, _encode_sw_s(rd=1, imm=0x40)); pc += 2
+    _place(prog, pc, _encode_movt(rd=3)); pc += 2
+    _place(prog, pc, _encode_sw_s(rd=3, imm=0x40)); pc += 2
     _place(prog, pc, _spin())
     prog[0x40] = 0xFF; prog[0x41] = 0xFF
     _load_program(dut, prog)

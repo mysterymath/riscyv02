@@ -337,3 +337,100 @@ async def test_jr_ignores_low_bit(dut):
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
     assert val == 0x0042, f"JR should ignore bit 0: expected 0x0042, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_bt_taken(dut):
+    """BT with T=1 branches forward."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+    prog = {}
+    # SLTI R0, 1 sets T=1 (0 < 1 = true)
+    _place(prog, 0x0000, _encode_slti(rs=0, imm=1))
+    # BT +3: target = (0x0002+2) + 3*2 = 0x000A
+    _place(prog, 0x0002, _encode_bt(imm=3))
+    # Skipped:
+    _place(prog, 0x0004, _encode_li(rd=1, imm=0x11))
+    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x40))
+    _place(prog, 0x0008, _spin(0x0008))
+    # Branch target:
+    _place(prog, 0x000A, _encode_li(rd=1, imm=0x22))
+    _place(prog, 0x000C, _encode_sw(rs=1, imm=0x40))
+    _place(prog, 0x000E, _spin(0x000E))
+    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+    val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    assert val == 0x0022, f"BT taken: expected 0x0022, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_bt_not_taken(dut):
+    """BT with T=0 falls through."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+    prog = {}
+    # SLTI R0, 0 sets T=0 (0 < 0 = false)
+    _place(prog, 0x0000, _encode_slti(rs=0, imm=0))
+    _place(prog, 0x0002, _encode_bt(imm=3))
+    # Fall-through:
+    _place(prog, 0x0004, _encode_li(rd=1, imm=0x33))
+    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x40))
+    _place(prog, 0x0008, _spin(0x0008))
+    # Branch target (should NOT reach):
+    _place(prog, 0x000A, _encode_li(rd=1, imm=0x44))
+    _place(prog, 0x000C, _encode_sw(rs=1, imm=0x40))
+    _place(prog, 0x000E, _spin(0x000E))
+    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+    val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    assert val == 0x0033, f"BT not taken: expected 0x0033, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_bf_taken(dut):
+    """BF with T=0 branches forward."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+    prog = {}
+    # SLTI R0, 0 sets T=0 (0 < 0 = false)
+    _place(prog, 0x0000, _encode_slti(rs=0, imm=0))
+    _place(prog, 0x0002, _encode_bf(imm=3))
+    _place(prog, 0x0004, _encode_li(rd=1, imm=0x11))
+    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x40))
+    _place(prog, 0x0008, _spin(0x0008))
+    _place(prog, 0x000A, _encode_li(rd=1, imm=0x55))
+    _place(prog, 0x000C, _encode_sw(rs=1, imm=0x40))
+    _place(prog, 0x000E, _spin(0x000E))
+    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+    val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    assert val == 0x0055, f"BF taken: expected 0x0055, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_bf_not_taken(dut):
+    """BF with T=1 falls through."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+    prog = {}
+    # SLTI R0, 1 sets T=1 (0 < 1 = true)
+    _place(prog, 0x0000, _encode_slti(rs=0, imm=1))
+    _place(prog, 0x0002, _encode_bf(imm=3))
+    _place(prog, 0x0004, _encode_li(rd=1, imm=0x66))
+    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x40))
+    _place(prog, 0x0008, _spin(0x0008))
+    _place(prog, 0x000A, _encode_li(rd=1, imm=0x77))
+    _place(prog, 0x000C, _encode_sw(rs=1, imm=0x40))
+    _place(prog, 0x000E, _spin(0x000E))
+    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    _load_program(dut, prog)
+    await _reset(dut)
+    await ClockCycles(dut.clk, 200)
+    val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    assert val == 0x0066, f"BF not taken: expected 0x0066, got {val:#06x}"

@@ -774,38 +774,40 @@ async def test_epcw_redirect(dut):
 
 
 @cocotb.test()
-async def test_epcw_i_bit(dut):
-    """EPCW with bit 0 clear; RETI restores I=0, IRQ fires."""
+async def test_srw_enables_irq(dut):
+    """SRW clearing I unmasks pending IRQ; IRQ fires at next dispatch."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     prog = {}
+    # Reset jumps to 0x0020 where BRK triggers (I=1 from reset, IRQ masked)
     _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
     _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x30))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x33))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x60))
-    _place(prog, 0x000A, _spin(0x000A))
+    # IRQ vector at 0x0004: jump to handler at 0x0040
+    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x40))
+    # IRQ handler: store marker 0x33 to [R0+0x60], spin
+    _place(prog, 0x0040, _encode_li(rd=1, imm=0x33))
+    _place(prog, 0x0042, _encode_sw(rs=1, imm=0x60))
+    _place(prog, 0x0044, _spin(0x0044))
+    # BRK at 0x0020
     _place(prog, 0x0020, _encode_brk())
     _place(prog, 0x0022, _spin(0x0022))
-    # BRK handler: load target (bit 0=0 → I=0), EPCW, RETI
-    _place(prog, 0x0030, _encode_lw(rd=1, imm=0x50))
-    _place(prog, 0x0032, _encode_epcw(rs=1))
-    _place(prog, 0x0034, _encode_reti())
-    _place(prog, 0x0040, _spin(0x0040))
-    prog[0x0050] = 0x40; prog[0x0051] = 0x00
+    # BRK handler at 0x0030: SRW clears I, IRQ fires at next dispatch
+    _place(prog, 0x0030, _encode_li(rd=2, imm=0))
+    _place(prog, 0x0032, _encode_srw(rs=2))
+    _place(prog, 0x0034, _spin(0x0034))
     prog[0x0060] = 0x00; prog[0x0061] = 0x00
 
     _load_program(dut, prog)
     dut.ena.value = 1
-    dut.ui_in.value = 0x06
+    dut.ui_in.value = 0x06  # IRQB asserted
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 300)
 
     val = _read_ram(dut, 0x0060) | (_read_ram(dut, 0x0061) << 8)
-    assert val == 0x0033, f"IRQ didn't fire after I=0 restore! Got {val:#06x}"
+    assert val == 0x0033, f"IRQ didn't fire after SRW cleared I! Got {val:#06x}"
 
 
 @cocotb.test()
