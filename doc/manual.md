@@ -807,3 +807,82 @@ Average: **14.5 cy/iter**. Total code: **18 bytes**
 | Code size | 36 B | 18 B |
 
 The 3× per-iteration speedup comes from three sources: 16-bit addition is one instruction (`ADD`) vs seven (`CLC`+3×`LDA`/`ADC`/`STA`); 16-bit shifts are one instruction (`SLLI`/`SRLI`) vs two (`ASL`+`ROL`); and testing a 16-bit value for zero is one instruction (`BZ`) vs three (`LDA`+`ORA`+`BEQ`). Every 16-bit operation that the 6502 must serialize byte-by-byte collapses to a single instruction on RISCY-V02.
+
+### 16 ÷ 16 Unsigned Division
+
+```c
+uint16_t udiv16(uint16_t dividend, uint16_t divisor);
+// Returns quotient; remainder available as a byproduct.
+```
+
+Both implementations use binary long division (restoring): shift the dividend left one bit at a time into a running remainder, trial-subtract the divisor, and shift the success/fail bit into the quotient.
+
+**65C02** — arguments in zero page: dividend ($00), divisor ($02), remainder ($04)
+
+```
+udiv16:
+    LDA #0              ;  2 cy   2 B
+    STA rem             ;  3 cy   2 B
+    STA rem+1           ;  3 cy   2 B
+    LDX #16             ;  2 cy   2 B
+loop:
+    ASL dividend        ;  5 cy   2 B    ; shift dividend left
+    ROL dividend+1      ;  5 cy   2 B    ;   high bit → carry
+    ROL rem             ;  5 cy   2 B    ; shift into remainder
+    ROL rem+1           ;  5 cy   2 B
+    SEC                 ;  2 cy   1 B    ; trial subtract
+    LDA rem             ;  3 cy   2 B
+    SBC divisor         ;  3 cy   2 B
+    TAY                 ;  2 cy   1 B    ; save low result
+    LDA rem+1           ;  3 cy   2 B
+    SBC divisor+1       ;  3 cy   2 B
+    BCC no_sub          ;  2.5 cy 2 B    ; borrow → can't subtract
+    STA rem+1           ;  3 cy   2 B    ; commit subtraction
+    STY rem             ;  3 cy   2 B
+    INC dividend        ;  5 cy   2 B    ; set quotient bit
+no_sub:
+    DEX                 ;  2 cy   1 B
+    BNE loop            ;  3 cy   2 B
+    RTS                 ;  6 cy   1 B
+```
+
+Per iteration (no sub): **44 cy** — `ASL`+`ROL`×3+`SEC`+`LDA`+`SBC`+`TAY`+`LDA`+`SBC`+`BCC`(taken)+`DEX`+`BNE`
+
+Per iteration (sub): **54 cy** — adds `STA`+`STY`+`INC`
+
+Average: **49 cy/iter**. Total code: **38 bytes**
+
+**RISCY-V02** — R2 = dividend (becomes quotient), R3 = divisor, R4 = remainder
+
+```
+udiv16:
+    LI   R4, 0          ;  2 cy   2 B    ; remainder = 0
+    LI   R5, 16         ;  2 cy   2 B    ; counter
+loop:
+    SLTI R2, 0          ;  2 cy   2 B    ; R1 = bit 15 of dividend
+    SLLI R4, 1          ;  2 cy   2 B    ; remainder <<= 1
+    OR   R4, R4, R1     ;  2 cy   2 B    ; shift in high bit
+    SLLI R2, 1          ;  2 cy   2 B    ; dividend <<= 1
+    SLTU R0, R4, R3     ;  2 cy   2 B    ; R0 = (rem < div)
+    BNZ  R0, no_sub     ;  2.5 cy 2 B    ; skip if can't subtract
+    SUB  R4, R4, R3     ;  2 cy   2 B    ; remainder -= divisor
+    ORI  R2, 1          ;  2 cy   2 B    ; set quotient bit
+no_sub:
+    ADDI R5, -1         ;  2 cy   2 B    ; counter--
+    BNZ  R5, loop       ;  3 cy   2 B
+    JR   R6, 0          ;  3 cy   2 B
+```
+
+Per iteration (no sub): **18 cy** — `SLTI`+`SLLI`+`OR`+`SLLI`+`SLTU`+`BNZ`(taken)+`ADDI`+`BNZ`
+
+Per iteration (sub): **21 cy** — adds `SUB`+`ORI`
+
+Average: **19.5 cy/iter**. Total code: **26 bytes**
+
+| | 65C02 | RISCY-V02 |
+|---|---|---|
+| Per iteration (avg) | 49 cy | 19.5 cy |
+| 16 iterations | ~784 cy | ~312 cy |
+| Code size | 38 B | 26 B |
+
+The structure is identical — the same restoring division algorithm. The 2.5× speedup is less dramatic than multiplication's 3× because division's inner loop is dominated by shifts and a compare-subtract, which compress less: the 6502's 4-instruction shift chain (`ASL`+`ROL`×3) becomes 3 instructions (`SLTI`+`SLLI`+`OR`) since RISCY-V02 lacks a carry flag and must extract the high bit explicitly. The trial subtraction compresses better: `SEC`+`LDA`+`SBC`+`TAY`+`LDA`+`SBC` (6 instructions) becomes one `SLTU`+`SUB` (2 instructions).
