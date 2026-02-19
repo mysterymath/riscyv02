@@ -15,15 +15,14 @@ async def test_lw_sw_jr_basic(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    prog[0x0030] = 0x34
-    prog[0x0031] = 0x12
+    a = Asm()
+    a.lw(1, 0x30)
+    a.sw(1, 0x32)
+    a.spin()
+    a.org(0x30)
+    a.dw(0x1234)
 
-    _place(prog, 0x0000, _encode_lw(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=1, imm=0x32))
-    _place(prog, 0x0004, _spin(0x0004))
-
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
@@ -39,16 +38,15 @@ async def test_negative_offsets(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    prog[0x004E] = 0xFE
-    prog[0x004F] = 0xCA
+    a = Asm()
+    a.li(0, 0x50)           # R0 = 0x50
+    a.lw(1, -2)             # R1 = mem16[R0-2] = mem16[0x4E]
+    a.sw_s(1, 0x60)         # mem16[R7+0x60] = R1
+    a.spin()
+    a.org(0x4E)
+    a.dw(0xCAFE)
 
-    _place(prog, 0x0000, _encode_li(rd=0, imm=0x50))      # R0 = 0x50
-    _place(prog, 0x0002, _encode_lw(rd=1, imm=-2))         # R1 = mem16[R0-2] = mem16[0x4E]
-    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x60))     # mem16[R7+0x60] = R1
-    _place(prog, 0x0006, _spin(0x0006))
-
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
 
@@ -62,17 +60,17 @@ async def test_byte_ops(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    prog[0x0030] = 0x85
+    a = Asm()
+    a.lb(1, 0x30)
+    a.sw(1, 0x40)
+    a.lbu(2, 0x30)
+    a.sw(2, 0x42)
+    a.sb(2, 0x44)
+    a.spin()
+    a.org(0x30)
+    a.db(0x85)
 
-    _place(prog, 0x0000, _encode_lb(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0004, _encode_lbu(rd=2, imm=0x30))
-    _place(prog, 0x0006, _encode_sw(rs=2, imm=0x42))
-    _place(prog, 0x0008, _encode_sb(rs=2, imm=0x44))
-    _place(prog, 0x000A, _spin(0x000A))
-
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
@@ -90,17 +88,16 @@ async def test_rr_load_store(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    prog[0x0030] = 0xAD
-    prog[0x0031] = 0xDE
+    a = Asm()
+    a.li(1, 0x30)
+    a.lw_rr(2, 1)
+    a.li(3, 0x50)
+    a.sw_rr(2, 3)
+    a.spin()
+    a.org(0x30)
+    a.dw(0xDEAD)
 
-    _place(prog, 0x0000, _encode_li(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_lw_rr(rd=2, rs=1))
-    _place(prog, 0x0004, _encode_li(rd=3, imm=0x50))
-    _place(prog, 0x0006, _encode_sw_rr(rd=2, rs=3))
-    _place(prog, 0x0008, _spin(0x0008))
-
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
@@ -113,13 +110,15 @@ async def test_lb_sign_extend(dut):
     """LB sign-extends 0x80 to 0xFF80."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
-    prog[0x0030] = 0x80
-    _place(prog, 0x0000, _encode_lb(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0004, _spin(0x0004))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+
+    a = Asm()
+    a.lb(1, 0x30)
+    a.sw(1, 0x40)
+    a.spin()
+    a.org(0x30)
+    a.db(0x80)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -131,13 +130,15 @@ async def test_lbu_zero_extend(dut):
     """LBU zero-extends 0x80 to 0x0080."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
-    prog[0x0030] = 0x80
-    _place(prog, 0x0000, _encode_lbu(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0004, _spin(0x0004))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+
+    a = Asm()
+    a.lbu(1, 0x30)
+    a.sw(1, 0x40)
+    a.spin()
+    a.org(0x30)
+    a.db(0x80)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -149,14 +150,16 @@ async def test_byte_negative_offset(dut):
     """LB with negative offset computes correct address."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
-    prog[0x001F] = 0x7F
-    _place(prog, 0x0000, _encode_li(rd=0, imm=0x20))      # R0 = 0x20
-    _place(prog, 0x0002, _encode_lb(rd=1, imm=-1))         # R1 = sext(mem[R0-1]) = 0x007F
-    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=0x40))     # mem16[R7+0x40] = R1
-    _place(prog, 0x0006, _spin(0x0006))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+
+    a = Asm()
+    a.li(0, 0x20)           # R0 = 0x20
+    a.lb(1, -1)             # R1 = sext(mem[R0-1]) = 0x007F
+    a.sw_s(1, 0x40)         # mem16[R7+0x40] = R1
+    a.spin()
+    a.org(0x1F)
+    a.db(0x7F)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -169,16 +172,16 @@ async def test_sp_lw_sw(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    prog[0x0030] = 0xEF
-    prog[0x0031] = 0xBE
+    a = Asm()
     # LWS R1, 0x30 — load from R7+0x30 = 0x0030
-    _place(prog, 0x0000, _encode_lw_s(rd=1, imm=0x30))
+    a.lw_s(1, 0x30)
     # SWS R1, 0x50 — store to R7+0x50 = 0x0050
-    _place(prog, 0x0002, _encode_sw_s(rd=1, imm=0x50))
-    _place(prog, 0x0004, _spin(0x0004))
+    a.sw_s(1, 0x50)
+    a.spin()
+    a.org(0x30)
+    a.dw(0xBEEF)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
@@ -192,20 +195,20 @@ async def test_sp_lb_sb(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    prog[0x0030] = 0x85
-
+    a = Asm()
     # LBS R1, 0x30 — sign-extend load from R7+0x30
-    _place(prog, 0x0000, _encode_lb_s(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_sw_s(rd=1, imm=0x40))
+    a.lb_s(1, 0x30)
+    a.sw_s(1, 0x40)
     # LBUS R2, 0x30 — zero-extend load from R7+0x30
-    _place(prog, 0x0004, _encode_lbu_s(rd=2, imm=0x30))
-    _place(prog, 0x0006, _encode_sw_s(rd=2, imm=0x42))
+    a.lbu_s(2, 0x30)
+    a.sw_s(2, 0x42)
     # SBS R1, 0x44 — store low byte of R1
-    _place(prog, 0x0008, _encode_sb_s(rd=1, imm=0x44))
-    _place(prog, 0x000A, _spin(0x000A))
+    a.sb_s(1, 0x44)
+    a.spin()
+    a.org(0x30)
+    a.db(0x85)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
 
@@ -223,19 +226,19 @@ async def test_sp_negative_offset(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
+    a = Asm()
     # Set R7 = 0x50
-    _place(prog, 0x0000, _encode_li(rd=7, imm=0x50))
+    a.li(7, 0x50)
     # Store data: LI R1, 0x42; SWS R1, -2 → stores at R7-2 = 0x4E
-    _place(prog, 0x0002, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0004, _encode_sw_s(rd=1, imm=-2))
+    a.li(1, 0x42)
+    a.sw_s(1, -2)
     # Load it back: LWS R2, -2 → loads from 0x4E
-    _place(prog, 0x0006, _encode_lw_s(rd=2, imm=-2))
+    a.lw_s(2, -2)
     # Store R2 to a known location for checking
-    _place(prog, 0x0008, _encode_sw_s(rd=2, imm=0x10))  # R7+0x10 = 0x60
-    _place(prog, 0x000A, _spin(0x000A))
+    a.sw_s(2, 0x10)         # R7+0x10 = 0x60
+    a.spin()
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
 
@@ -249,17 +252,16 @@ async def test_sp_arbitrary_register(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    prog[0x0030] = 0xCD
-    prog[0x0031] = 0xAB
-
+    a = Asm()
     # Load to R5 (not R0): LWS R5, 0x30
-    _place(prog, 0x0000, _encode_lw_s(rd=5, imm=0x30))
+    a.lw_s(5, 0x30)
     # Store from R5: SWS R5, 0x50
-    _place(prog, 0x0002, _encode_sw_s(rd=5, imm=0x50))
-    _place(prog, 0x0004, _spin(0x0004))
+    a.sw_s(5, 0x50)
+    a.spin()
+    a.org(0x30)
+    a.dw(0xABCD)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 

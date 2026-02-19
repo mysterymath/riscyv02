@@ -15,15 +15,16 @@ async def test_reset_i_state(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _spin(0x0000))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000A, _spin(0x000A))
-    prog[0x0040] = 0x00
-    prog[0x0041] = 0x00
+    a = Asm()
+    a.spin()                     # 0x0000: reset vector spin
+    a.org(0x0006)
+    a.li(1, 0x42)                # 0x0006: IRQ handler
+    a.sw(1, 0x40)                # 0x0008
+    a.spin()                     # 0x000A
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     dut.ena.value = 1
     dut.ui_in.value = 0x06  # IRQB=0 (asserted!)
     dut.rst_n.value = 0
@@ -41,16 +42,17 @@ async def test_cli_enables_irq(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_cli())
-    _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x5A))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000A, _spin(0x000A))
-    prog[0x0040] = 0x00
-    prog[0x0041] = 0x00
+    a = Asm()
+    a.cli()                      # 0x0000: reset vector
+    a.spin()                     # 0x0002
+    a.org(0x0006)
+    a.li(1, 0x5A)                # 0x0006: IRQ handler
+    a.sw(1, 0x40)                # 0x0008
+    a.spin()                     # 0x000A
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     dut.ena.value = 1
     dut.ui_in.value = 0x07
     dut.rst_n.value = 0
@@ -70,18 +72,20 @@ async def test_sei_disables_irq(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_j(off10=8))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000A, _spin(0x000A))
-    _place(prog, 0x0012, _encode_cli())
-    _place(prog, 0x0014, _encode_sei())
-    _place(prog, 0x0016, _spin(0x0016))
-    prog[0x0040] = 0x00
-    prog[0x0041] = 0x00
+    a = Asm()
+    a.j(8)                       # 0x0000: reset vector → 0x0012
+    a.org(0x0006)
+    a.li(1, 0x42)                # 0x0006: IRQ handler
+    a.sw(1, 0x40)                # 0x0008
+    a.spin()                     # 0x000A
+    a.org(0x0012)
+    a.cli()                      # 0x0012
+    a.sei()                      # 0x0014
+    a.spin()                     # 0x0016
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     dut.ena.value = 1
     dut.ui_in.value = 0x07
     dut.rst_n.value = 0
@@ -101,17 +105,19 @@ async def test_reti(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_j(off10=8))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000A, _encode_reti())
-    _place(prog, 0x0012, _encode_cli())
-    _place(prog, 0x0014, _spin(0x0014))
-    prog[0x0040] = 0x00
-    prog[0x0041] = 0x00
+    a = Asm()
+    a.j(8)                       # 0x0000: reset vector → 0x0012
+    a.org(0x0006)
+    a.li(1, 0x42)                # 0x0006: IRQ handler
+    a.sw(1, 0x40)                # 0x0008
+    a.reti()                     # 0x000A
+    a.org(0x0012)
+    a.cli()                      # 0x0012
+    a.spin()                     # 0x0014
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     dut.ena.value = 1
     dut.ui_in.value = 0x07
     dut.rst_n.value = 0
@@ -133,17 +139,19 @@ async def test_brk(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_j(off10=8))
-    _place(prog, 0x0004, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
-    _place(prog, 0x0012, _encode_brk())
-    _place(prog, 0x0014, _spin(0x0014))
-    prog[0x0040] = 0x00
-    prog[0x0041] = 0x00
+    a = Asm()
+    a.j(8)                       # 0x0000: reset vector → 0x0012
+    a.org(0x0004)
+    a.li(1, 0x42)                # 0x0004: BRK handler
+    a.sw(1, 0x40)                # 0x0006
+    a.spin()                     # 0x0008
+    a.org(0x0012)
+    a.brk()                      # 0x0012
+    a.spin()                     # 0x0014
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
@@ -157,20 +165,24 @@ async def test_wai(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_j(off10=8))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000A, _encode_reti())
-    _place(prog, 0x0012, _encode_cli())
-    _place(prog, 0x0014, _encode_wai())
-    _place(prog, 0x0016, _encode_li(rd=1, imm=0x55))
-    _place(prog, 0x0018, _encode_sw(rs=1, imm=0x42))
-    _place(prog, 0x001A, _spin(0x001A))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    prog[0x0042] = 0x00; prog[0x0043] = 0x00
+    a = Asm()
+    a.j(8)                       # 0x0000: reset vector → 0x0012
+    a.org(0x0006)
+    a.li(1, 0x42)                # 0x0006: IRQ handler
+    a.sw(1, 0x40)                # 0x0008
+    a.reti()                     # 0x000A
+    a.org(0x0012)
+    a.cli()                      # 0x0012
+    a.wai()                      # 0x0014
+    a.li(1, 0x55)                # 0x0016
+    a.sw(1, 0x42)                # 0x0018
+    a.spin()                     # 0x001A
+    a.org(0x0040)
+    a.dw(0x0000)
+    a.org(0x0042)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     dut.ena.value = 1
     dut.ui_in.value = 0x07
     dut.rst_n.value = 0
@@ -198,14 +210,15 @@ async def test_stp(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_stp())
-    _place(prog, 0x0002, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0004, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0006, _spin(0x0006))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    a = Asm()
+    a.stp()                      # 0x0000: reset vector
+    a.li(1, 0x42)                # 0x0002
+    a.sw(1, 0x40)                # 0x0004
+    a.spin()                     # 0x0006
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
@@ -219,14 +232,16 @@ async def test_nmi(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0002, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0004, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0006, _spin(0x0006))
-    _place(prog, 0x0000, _spin(0x0000))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    a = Asm()
+    a.spin()                     # 0x0000: reset vector spin
+    a.org(0x0002)
+    a.li(1, 0x42)                # 0x0002: NMI handler
+    a.sw(1, 0x40)                # 0x0004
+    a.spin()                     # 0x0006
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -249,17 +264,20 @@ async def test_i_bit_masking(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_li(rd=1, imm=0x20))
-    _place(prog, 0x0002, _encode_jr(rs=1, imm=0))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000A, _spin(0x000A))
-    _place(prog, 0x0020, _encode_cli())
-    _place(prog, 0x0022, _spin(0x0022))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    a = Asm()
+    a.li(1, 0x20)                # 0x0000: reset vector
+    a.jr(1, 0)                   # 0x0002: jump to 0x0020
+    a.org(0x0006)
+    a.li(1, 0x42)                # 0x0006: IRQ handler
+    a.sw(1, 0x40)                # 0x0008
+    a.spin()                     # 0x000A
+    a.org(0x0020)
+    a.cli()                      # 0x0020
+    a.spin()                     # 0x0022
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -279,20 +297,25 @@ async def test_irq_during_multicycle(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_li(rd=1, imm=0x10))
-    _place(prog, 0x0002, _encode_jr(rs=1, imm=0))
-    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x42))
-    _place(prog, 0x0008, _encode_reti())
-    _place(prog, 0x0010, _encode_cli())
-    _place(prog, 0x0012, _encode_lw(rd=1, imm=0x30))
-    _place(prog, 0x0014, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0016, _spin(0x0016))
-    prog[0x0030] = 0x34; prog[0x0031] = 0x12
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    prog[0x0042] = 0x00; prog[0x0043] = 0x00
+    a = Asm()
+    a.li(1, 0x10)                # 0x0000: reset vector
+    a.jr(1, 0)                   # 0x0002: jump to 0x0010
+    a.org(0x0006)
+    a.sw(1, 0x42)                # 0x0006: IRQ handler
+    a.reti()                     # 0x0008
+    a.org(0x0010)
+    a.cli()                      # 0x0010
+    a.lw(1, 0x30)                # 0x0012
+    a.sw(1, 0x40)                # 0x0014
+    a.spin()                     # 0x0016
+    a.org(0x0030)
+    a.dw(0x1234)
+    a.org(0x0040)
+    a.dw(0x0000)
+    a.org(0x0042)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -316,15 +339,17 @@ async def test_cli_atomicity(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_cli())
-    _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000A, _spin(0x000A))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    a = Asm()
+    a.cli()                      # 0x0000: reset vector
+    a.spin()                     # 0x0002
+    a.org(0x0006)
+    a.li(1, 0x42)                # 0x0006: IRQ handler
+    a.sw(1, 0x40)                # 0x0008
+    a.spin()                     # 0x000A
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     dut.ena.value = 1
     dut.ui_in.value = 0x06
     dut.rst_n.value = 0
@@ -342,14 +367,16 @@ async def test_nmi_edge_triggered(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _spin(0x0000))
-    _place(prog, 0x0002, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0004, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0006, _spin(0x0006))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    a = Asm()
+    a.spin()                     # 0x0000: reset vector spin
+    a.org(0x0002)
+    a.li(1, 0x42)                # 0x0002: NMI handler
+    a.sw(1, 0x40)                # 0x0004
+    a.spin()                     # 0x0006
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -370,23 +397,31 @@ async def test_nmi_priority_over_irq(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
-    _place(prog, 0x0002, _encode_jr(rs=7, imm=0x30))
-    _place(prog, 0x0004, _spin(0x0004))
-    _place(prog, 0x0006, _encode_jr(rs=7, imm=0x38))
-    _place(prog, 0x0020, _encode_cli())
-    _place(prog, 0x0022, _spin(0x0022))
-    _place(prog, 0x0030, _encode_li(rd=1, imm=0x22))
-    _place(prog, 0x0032, _encode_sw(rs=1, imm=0x44))
-    _place(prog, 0x0034, _spin(0x0034))
-    _place(prog, 0x0038, _encode_li(rd=1, imm=0x11))
-    _place(prog, 0x003A, _encode_sw(rs=1, imm=0x46))
-    _place(prog, 0x003C, _spin(0x003C))
-    prog[0x0044] = 0x00; prog[0x0045] = 0x00
-    prog[0x0046] = 0x00; prog[0x0047] = 0x00
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset vector → 0x0020
+    a.org(0x0002)
+    a.jr(7, 0x30)                # 0x0002: NMI handler → 0x0030
+    a.org(0x0004)
+    a.spin()                     # 0x0004: BRK handler spin
+    a.org(0x0006)
+    a.jr(7, 0x38)                # 0x0006: IRQ handler → 0x0038
+    a.org(0x0020)
+    a.cli()                      # 0x0020
+    a.spin()                     # 0x0022
+    a.org(0x0030)
+    a.li(1, 0x22)                # 0x0030: NMI body
+    a.sw(1, 0x44)                # 0x0032
+    a.spin()                     # 0x0034
+    a.org(0x0038)
+    a.li(1, 0x11)                # 0x0038: IRQ body
+    a.sw(1, 0x46)                # 0x003A
+    a.spin()                     # 0x003C
+    a.org(0x0044)
+    a.dw(0x0000)
+    a.org(0x0046)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -408,19 +443,24 @@ async def test_nmi_during_multicycle(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
-    _place(prog, 0x0002, _encode_sw(rs=1, imm=0x42))
-    _place(prog, 0x0004, _encode_reti())
-    _place(prog, 0x0006, _spin(0x0006))
-    _place(prog, 0x0020, _encode_lw(rd=1, imm=0x30))
-    _place(prog, 0x0022, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0024, _spin(0x0024))
-    prog[0x0030] = 0x34; prog[0x0031] = 0x12
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    prog[0x0042] = 0x00; prog[0x0043] = 0x00
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset vector → 0x0020
+    a.org(0x0002)
+    a.sw(1, 0x42)                # 0x0002: NMI handler
+    a.reti()                     # 0x0004
+    a.spin()                     # 0x0006
+    a.org(0x0020)
+    a.lw(1, 0x30)                # 0x0020
+    a.sw(1, 0x40)                # 0x0022
+    a.spin()                     # 0x0024
+    a.org(0x0030)
+    a.dw(0x1234)
+    a.org(0x0040)
+    a.dw(0x0000)
+    a.org(0x0042)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -444,15 +484,17 @@ async def test_nmi_second_edge(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _spin(0x0000))
-    _place(prog, 0x0002, _encode_lw(rd=1, imm=0x40))
-    _place(prog, 0x0004, _encode_addi(rd=1, imm=1))
-    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0008, _encode_reti())
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    a = Asm()
+    a.spin()                     # 0x0000: reset vector spin
+    a.org(0x0002)
+    a.lw(1, 0x40)                # 0x0002: NMI handler
+    a.addi(1, 1)                 # 0x0004
+    a.sw(1, 0x40)                # 0x0006
+    a.reti()                     # 0x0008
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -482,14 +524,16 @@ async def test_nmi_during_rdy_low(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _spin(0x0000))
-    _place(prog, 0x0002, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0004, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0006, _spin(0x0006))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    a = Asm()
+    a.spin()                     # 0x0000: reset vector spin
+    a.org(0x0002)
+    a.li(1, 0x42)                # 0x0002: NMI handler
+    a.sw(1, 0x40)                # 0x0004
+    a.spin()                     # 0x0006
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -520,22 +564,28 @@ async def test_wai_irq(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
-    _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _spin(0x0004))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x11))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000A, _encode_reti())
-    _place(prog, 0x0020, _encode_cli())
-    _place(prog, 0x0022, _encode_wai())
-    _place(prog, 0x0024, _encode_li(rd=1, imm=0x22))
-    _place(prog, 0x0026, _encode_sw(rs=1, imm=0x42))
-    _place(prog, 0x0028, _spin(0x0028))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    prog[0x0042] = 0x00; prog[0x0043] = 0x00
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset vector → 0x0020
+    a.org(0x0002)
+    a.spin()                     # 0x0002: NMI handler spin
+    a.org(0x0004)
+    a.spin()                     # 0x0004: BRK handler spin
+    a.org(0x0006)
+    a.li(1, 0x11)                # 0x0006: IRQ handler
+    a.sw(1, 0x40)                # 0x0008
+    a.reti()                     # 0x000A
+    a.org(0x0020)
+    a.cli()                      # 0x0020
+    a.wai()                      # 0x0022
+    a.li(1, 0x22)                # 0x0024
+    a.sw(1, 0x42)                # 0x0026
+    a.spin()                     # 0x0028
+    a.org(0x0040)
+    a.dw(0x0000)
+    a.org(0x0042)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -559,19 +609,23 @@ async def test_wai_nmi(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
-    _place(prog, 0x0002, _encode_li(rd=1, imm=0x11))
-    _place(prog, 0x0004, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0006, _encode_reti())
-    _place(prog, 0x0020, _encode_wai())
-    _place(prog, 0x0022, _encode_li(rd=1, imm=0x22))
-    _place(prog, 0x0024, _encode_sw(rs=1, imm=0x42))
-    _place(prog, 0x0026, _spin(0x0026))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    prog[0x0042] = 0x00; prog[0x0043] = 0x00
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset vector → 0x0020
+    a.org(0x0002)
+    a.li(1, 0x11)                # 0x0002: NMI handler
+    a.sw(1, 0x40)                # 0x0004
+    a.reti()                     # 0x0006
+    a.org(0x0020)
+    a.wai()                      # 0x0020
+    a.li(1, 0x22)                # 0x0022
+    a.sw(1, 0x42)                # 0x0024
+    a.spin()                     # 0x0026
+    a.org(0x0040)
+    a.dw(0x0000)
+    a.org(0x0042)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -595,19 +649,23 @@ async def test_wai_masked_irq_wakes(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000A, _spin(0x000A))
-    _place(prog, 0x0020, _encode_wai())
-    _place(prog, 0x0022, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0024, _encode_sw(rs=1, imm=0x42))
-    _place(prog, 0x0026, _spin(0x0026))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    prog[0x0042] = 0x00; prog[0x0043] = 0x00
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset vector → 0x0020
+    a.org(0x0006)
+    a.li(1, 0x42)                # 0x0006: IRQ handler
+    a.sw(1, 0x40)                # 0x0008
+    a.spin()                     # 0x000A
+    a.org(0x0020)
+    a.wai()                      # 0x0020
+    a.li(1, 0x42)                # 0x0022
+    a.sw(1, 0x42)                # 0x0024
+    a.spin()                     # 0x0026
+    a.org(0x0040)
+    a.dw(0x0000)
+    a.org(0x0042)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -629,24 +687,32 @@ async def test_brk_masks_irq(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
-    _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x30))
-    _place(prog, 0x0006, _encode_jr(rs=7, imm=0x38))
-    _place(prog, 0x0020, _encode_cli())
-    _place(prog, 0x0022, _encode_brk())
-    _place(prog, 0x0024, _spin(0x0024))
-    _place(prog, 0x0030, _encode_li(rd=1, imm=0x11))
-    _place(prog, 0x0032, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0034, _encode_reti())
-    _place(prog, 0x0038, _encode_li(rd=1, imm=0x22))
-    _place(prog, 0x003A, _encode_sw(rs=1, imm=0x42))
-    _place(prog, 0x003C, _encode_reti())
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    prog[0x0042] = 0x00; prog[0x0043] = 0x00
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset vector → 0x0020
+    a.org(0x0002)
+    a.spin()                     # 0x0002: NMI handler spin
+    a.org(0x0004)
+    a.jr(7, 0x30)                # 0x0004: BRK handler → 0x0030
+    a.org(0x0006)
+    a.jr(7, 0x38)                # 0x0006: IRQ handler → 0x0038
+    a.org(0x0020)
+    a.cli()                      # 0x0020
+    a.brk()                      # 0x0022
+    a.spin()                     # 0x0024
+    a.org(0x0030)
+    a.li(1, 0x11)                # 0x0030: BRK body
+    a.sw(1, 0x40)                # 0x0032
+    a.reti()                     # 0x0034
+    a.org(0x0038)
+    a.li(1, 0x22)                # 0x0038: IRQ body
+    a.sw(1, 0x42)                # 0x003A
+    a.reti()                     # 0x003C
+    a.org(0x0040)
+    a.dw(0x0000)
+    a.org(0x0042)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -668,25 +734,33 @@ async def test_brk_restores_i(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
-    _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x30))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x42))
-    _place(prog, 0x000A, _encode_reti())
-    _place(prog, 0x0020, _encode_brk())
-    _place(prog, 0x0022, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0024, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0026, _spin(0x0026))
-    _place(prog, 0x0030, _encode_li(rd=1, imm=0x11))
-    _place(prog, 0x0032, _encode_sw(rs=1, imm=0x44))
-    _place(prog, 0x0034, _encode_reti())
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    prog[0x0042] = 0x00; prog[0x0043] = 0x00
-    prog[0x0044] = 0x00; prog[0x0045] = 0x00
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset vector → 0x0020
+    a.org(0x0002)
+    a.spin()                     # 0x0002: NMI handler spin
+    a.org(0x0004)
+    a.jr(7, 0x30)                # 0x0004: BRK handler → 0x0030
+    a.org(0x0006)
+    a.li(1, 0x42)                # 0x0006: IRQ handler
+    a.sw(1, 0x42)                # 0x0008
+    a.reti()                     # 0x000A
+    a.org(0x0020)
+    a.brk()                      # 0x0020
+    a.li(1, 0x42)                # 0x0022
+    a.sw(1, 0x40)                # 0x0024
+    a.spin()                     # 0x0026
+    a.org(0x0030)
+    a.li(1, 0x11)                # 0x0030: BRK body
+    a.sw(1, 0x44)                # 0x0032
+    a.reti()                     # 0x0034
+    a.org(0x0040)
+    a.dw(0x0000)
+    a.org(0x0042)
+    a.dw(0x0000)
+    a.org(0x0044)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     dut.ena.value = 1
     dut.ui_in.value = 0x06
     dut.rst_n.value = 0
@@ -708,19 +782,24 @@ async def test_epcr(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
-    _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _spin(0x0004))
-    # IRQ handler: read EPC into R0, store to memory
-    _place(prog, 0x0006, _encode_epcr(rd=1))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000A, _spin(0x000A))
-    _place(prog, 0x0020, _encode_cli())
-    _place(prog, 0x0022, _spin(0x0022))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset vector → 0x0020
+    a.org(0x0002)
+    a.spin()                     # 0x0002: NMI handler spin
+    a.org(0x0004)
+    a.spin()                     # 0x0004: BRK handler spin
+    # IRQ handler: read EPC into R1, store to memory
+    a.org(0x0006)
+    a.epcr(1)                    # 0x0006
+    a.sw(1, 0x40)                # 0x0008
+    a.spin()                     # 0x000A
+    a.org(0x0020)
+    a.cli()                      # 0x0020
+    a.spin()                     # 0x0022
+    a.org(0x0040)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     dut.ena.value = 1
     dut.ui_in.value = 0x06
     dut.rst_n.value = 0
@@ -739,27 +818,36 @@ async def test_epcw_redirect(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
-    _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x30))
-    _place(prog, 0x0006, _spin(0x0006))
-    _place(prog, 0x0020, _encode_brk())
-    _place(prog, 0x0022, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0024, _encode_sw(rs=1, imm=0x60))
-    _place(prog, 0x0026, _spin(0x0026))
-    # BRK handler: load redirect target into R0, EPCW to set EPC, RETI
-    _place(prog, 0x0030, _encode_lw(rd=1, imm=0x50))
-    _place(prog, 0x0032, _encode_epcw(rs=1))
-    _place(prog, 0x0034, _encode_reti())
-    _place(prog, 0x0040, _encode_li(rd=1, imm=0x42))
-    _place(prog, 0x0042, _encode_sw(rs=1, imm=0x62))
-    _place(prog, 0x0044, _spin(0x0044))
-    prog[0x0050] = 0x40; prog[0x0051] = 0x00
-    prog[0x0060] = 0x00; prog[0x0061] = 0x00
-    prog[0x0062] = 0x00; prog[0x0063] = 0x00
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset vector → 0x0020
+    a.org(0x0002)
+    a.spin()                     # 0x0002: NMI handler spin
+    a.org(0x0004)
+    a.jr(7, 0x30)                # 0x0004: BRK handler → 0x0030
+    a.org(0x0006)
+    a.spin()                     # 0x0006: IRQ handler spin
+    a.org(0x0020)
+    a.brk()                      # 0x0020
+    a.li(1, 0x42)                # 0x0022
+    a.sw(1, 0x60)                # 0x0024
+    a.spin()                     # 0x0026
+    # BRK handler: load redirect target into R1, EPCW to set EPC, RETI
+    a.org(0x0030)
+    a.lw(1, 0x50)                # 0x0030
+    a.epcw(1)                    # 0x0032
+    a.reti()                     # 0x0034
+    a.org(0x0040)
+    a.li(1, 0x42)                # 0x0040
+    a.sw(1, 0x62)                # 0x0042
+    a.spin()                     # 0x0044
+    a.org(0x0050)
+    a.dw(0x0040)
+    a.org(0x0060)
+    a.dw(0x0000)
+    a.org(0x0062)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     _set_ui(dut, rdy=True, irqb=True, nmib=True)
     dut.ena.value = 1
     dut.rst_n.value = 0
@@ -779,26 +867,35 @@ async def test_srw_enables_irq(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
+    a = Asm()
     # Reset jumps to 0x0020 where BRK triggers (I=1 from reset, IRQ masked)
-    _place(prog, 0x0000, _encode_jr(rs=7, imm=0x20))
-    _place(prog, 0x0002, _spin(0x0002))
-    # IRQ vector at 0x0004: jump to handler at 0x0040
-    _place(prog, 0x0004, _encode_jr(rs=7, imm=0x40))
+    a.jr(7, 0x20)                # 0x0000: reset vector → 0x0020
+    a.org(0x0002)
+    a.spin()                     # 0x0002: NMI handler spin
+    # BRK vector at 0x0004: jump to handler at 0x0030
+    a.org(0x0004)
+    a.jr(7, 0x30)                # 0x0004: BRK handler → 0x0030
+    # IRQ vector at 0x0006: jump to handler at 0x0040
+    a.org(0x0006)
+    a.jr(7, 0x40)                # 0x0006: IRQ handler → 0x0040
     # IRQ handler: store marker 0x33 to [R0+0x60], spin
-    _place(prog, 0x0040, _encode_li(rd=1, imm=0x33))
-    _place(prog, 0x0042, _encode_sw(rs=1, imm=0x60))
-    _place(prog, 0x0044, _spin(0x0044))
+    a.org(0x0040)
+    a.li(1, 0x33)                # 0x0040
+    a.sw(1, 0x60)                # 0x0042
+    a.spin()                     # 0x0044
     # BRK at 0x0020
-    _place(prog, 0x0020, _encode_brk())
-    _place(prog, 0x0022, _spin(0x0022))
+    a.org(0x0020)
+    a.brk()                      # 0x0020
+    a.spin()                     # 0x0022
     # BRK handler at 0x0030: SRW clears I, IRQ fires at next dispatch
-    _place(prog, 0x0030, _encode_li(rd=2, imm=0))
-    _place(prog, 0x0032, _encode_srw(rs=2))
-    _place(prog, 0x0034, _spin(0x0034))
-    prog[0x0060] = 0x00; prog[0x0061] = 0x00
+    a.org(0x0030)
+    a.li(2, 0)                   # 0x0030
+    a.srw(2)                     # 0x0032
+    a.spin()                     # 0x0034
+    a.org(0x0060)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     dut.ena.value = 1
     dut.ui_in.value = 0x06  # IRQB asserted
     dut.rst_n.value = 0
@@ -816,19 +913,23 @@ async def test_irq_interrupts_jr(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_cli())
-    _place(prog, 0x0002, _encode_jr(rs=7, imm=0x20))
-    _place(prog, 0x0006, _encode_li(rd=1, imm=0x5A))
-    _place(prog, 0x0008, _encode_sw(rs=1, imm=0x60))
-    _place(prog, 0x000A, _encode_reti())
-    _place(prog, 0x0020, _encode_li(rd=2, imm=0x7E))
-    _place(prog, 0x0022, _encode_sw(rs=2, imm=0x62))
-    _place(prog, 0x0024, _spin(0x0024))
-    prog[0x0060] = 0x00; prog[0x0061] = 0x00
-    prog[0x0062] = 0x00; prog[0x0063] = 0x00
+    a = Asm()
+    a.cli()                      # 0x0000: reset vector
+    a.jr(7, 0x20)                # 0x0002: jump to 0x0020
+    a.org(0x0006)
+    a.li(1, 0x5A)                # 0x0006: IRQ handler
+    a.sw(1, 0x60)                # 0x0008
+    a.reti()                     # 0x000A
+    a.org(0x0020)
+    a.li(2, 0x7E)                # 0x0020
+    a.sw(2, 0x62)                # 0x0022
+    a.spin()                     # 0x0024
+    a.org(0x0060)
+    a.dw(0x0000)
+    a.org(0x0062)
+    a.dw(0x0000)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     dut.ena.value = 1
     dut.ui_in.value = 0x06
     dut.rst_n.value = 0

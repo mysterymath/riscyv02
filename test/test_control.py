@@ -15,19 +15,17 @@ async def test_jr_computed(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    prog[0x0030] = 0x20
-    prog[0x0031] = 0x00
-    prog[0x0032] = 0xEF
-    prog[0x0033] = 0xBE
+    a = Asm()
+    a.lw(1, 0x30)
+    a.lw(2, 0x32)
+    a.jr(1, 0)
+    a.org(0x0020)
+    a.sw(2, 0x40)
+    a.spin()
+    a.org(0x0030)
+    a.db(0x20, 0x00, 0xEF, 0xBE)
 
-    _place(prog, 0x0000, _encode_lw(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_lw(rd=2, imm=0x32))
-    _place(prog, 0x0004, _encode_jr(rs=1, imm=0))
-    _place(prog, 0x0020, _encode_sw(rs=2, imm=0x40))
-    _place(prog, 0x0022, _spin(0x0022))
-
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
@@ -41,20 +39,19 @@ async def test_jr_after_lw(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    prog[0x0030] = 0x40
-    prog[0x0031] = 0x00
+    a = Asm()
+    a.lw(1, 0x30)
+    a.jr(1, 0)
+    a.org(0x0040)
+    a.li(1, 0)
+    a.sw(1, 0x50)
+    a.spin()
+    a.org(0x0030)
+    a.db(0x40, 0x00)
+    a.org(0x0050)
+    a.db(0xFF, 0xFF)
 
-    _place(prog, 0x0000, _encode_lw(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_jr(rs=1, imm=0))
-    _place(prog, 0x0040, _encode_li(rd=1, imm=0))
-    _place(prog, 0x0042, _encode_sw(rs=1, imm=0x50))
-    _place(prog, 0x0044, _spin(0x0044))
-
-    prog[0x0050] = 0xFF
-    prog[0x0051] = 0xFF
-
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
@@ -70,26 +67,25 @@ async def test_branches(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_li(rd=2, imm=1))
+    a = Asm()
+    a.li(2, 1)
     # BZ R1 (R1=0 after reset): taken → skip to 0x000A
-    _place(prog, 0x0002, _encode_bz(rs=1, imm=3))
-    _place(prog, 0x0004, _encode_li(rd=3, imm=0x13))
-    _place(prog, 0x0006, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
+    a.bz(1, 3)
+    a.li(3, 0x13)
+    a.sw(3, 0x40)
+    a.spin()
     # BNZ R2 (R2=1): taken → skip to 0x0012
-    _place(prog, 0x000A, _encode_bnz(rs=2, imm=3))
-    _place(prog, 0x000C, _encode_li(rd=3, imm=0x13))
-    _place(prog, 0x000E, _encode_sw(rs=3, imm=0x42))
-    _place(prog, 0x0010, _spin(0x0010))
-    _place(prog, 0x0012, _encode_li(rd=3, imm=0x42))
-    _place(prog, 0x0014, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0016, _spin(0x0016))
+    a.bnz(2, 3)
+    a.li(3, 0x13)
+    a.sw(3, 0x42)
+    a.spin()
+    a.li(3, 0x42)
+    a.sw(3, 0x40)
+    a.spin()
+    a.org(0x0040)
+    a.db(0x00, 0x00)
 
-    prog[0x0040] = 0x00
-    prog[0x0041] = 0x00
-
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
@@ -103,14 +99,16 @@ async def test_j_jal(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_j(off10=8))
-    _place(prog, 0x0012, _encode_jal(off10=4))
-    _place(prog, 0x0014, _spin(0x0014))
-    _place(prog, 0x001C, _encode_sw(rs=6, imm=0x40))
-    _place(prog, 0x001E, _spin(0x001E))
+    a = Asm()
+    a.j(8)
+    a.org(0x0012)
+    a.jal(4)
+    a.spin()
+    a.org(0x001C)
+    a.sw(6, 0x40)
+    a.spin()
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
@@ -124,15 +122,16 @@ async def test_jalr(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    prog[0x0030] = 0x40
-    prog[0x0031] = 0x00
-    _place(prog, 0x0000, _encode_lw(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_jalr(rs=1, imm=0))
-    _place(prog, 0x0040, _encode_sw(rs=1, imm=0x50))
-    _place(prog, 0x0042, _spin(0x0042))
+    a = Asm()
+    a.lw(1, 0x30)
+    a.jalr(1, 0)
+    a.org(0x0040)
+    a.sw(1, 0x50)
+    a.spin()
+    a.org(0x0030)
+    a.db(0x40, 0x00)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
 
@@ -146,14 +145,14 @@ async def test_single_step(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
-    prog = {}
-    _place(prog, 0x0000, _encode_li(rd=1, imm=0x11))
-    _place(prog, 0x0002, _encode_li(rd=2, imm=0x22))
-    _place(prog, 0x0004, _encode_li(rd=3, imm=0x33))
-    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0008, _encode_sw(rs=2, imm=0x42))
-    _place(prog, 0x000A, _encode_sw(rs=3, imm=0x44))
-    _place(prog, 0x000C, _spin(0x000C))
+    a = Asm()
+    a.li(1, 0x11)
+    a.li(2, 0x22)
+    a.li(3, 0x33)
+    a.sw(1, 0x40)
+    a.sw(2, 0x42)
+    a.sw(3, 0x44)
+    a.spin()
 
     def get_sync():
         return (int(dut.uo_out.value) >> 1) & 1
@@ -194,7 +193,7 @@ async def test_single_step(dut):
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 5)
 
-    _load_program(dut, prog)
+    _load_program(dut, a.assemble())
     for addr in range(0x40, 0x46):
         dut.ram[addr].value = 0x00
 
@@ -226,17 +225,21 @@ async def test_bnz_high_byte(dut):
     """BNZ detects nonzero in high byte only."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
-    prog[0x0030] = 0x00; prog[0x0031] = 0x01
-    _place(prog, 0x0000, _encode_lw(rd=1, imm=0x30))
-    _place(prog, 0x0002, _encode_bnz(rs=1, imm=2))
-    _place(prog, 0x0004, _encode_li(rd=3, imm=0x13))
-    _place(prog, 0x0006, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0008, _encode_li(rd=3, imm=0x42))
-    _place(prog, 0x000A, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x000C, _spin(0x000C))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+
+    a = Asm()
+    a.lw(1, 0x30)
+    a.bnz(1, 2)
+    a.li(3, 0x13)
+    a.sw(3, 0x40)
+    a.li(3, 0x42)
+    a.sw(3, 0x40)
+    a.spin()
+    a.org(0x0030)
+    a.db(0x00, 0x01)
+    a.org(0x0040)
+    a.db(0x00, 0x00)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -248,14 +251,19 @@ async def test_j_backward(dut):
     """J with negative offset jumps backward."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
-    _place(prog, 0x0000, _encode_j(off10=15))
-    _place(prog, 0x0010, _encode_li(rd=3, imm=0x42))
-    _place(prog, 0x0012, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0014, _spin(0x0014))
-    _place(prog, 0x0020, _encode_j(off10=-9))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+
+    a = Asm()
+    a.j(15)
+    a.org(0x0010)
+    a.li(3, 0x42)
+    a.sw(3, 0x40)
+    a.spin()
+    a.org(0x0020)
+    a.j(-9)
+    a.org(0x0040)
+    a.db(0x00, 0x00)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -267,13 +275,17 @@ async def test_jal_link_value(dut):
     """JAL stores correct return address in R6."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
-    _place(prog, 0x0000, _encode_jal(off10=4))
-    _place(prog, 0x0002, _spin(0x0002))
-    _place(prog, 0x000A, _encode_sw(rs=6, imm=0x40))
-    _place(prog, 0x000C, _spin(0x000C))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+
+    a = Asm()
+    a.jal(4)
+    a.spin()
+    a.org(0x000A)
+    a.sw(6, 0x40)
+    a.spin()
+    a.org(0x0040)
+    a.db(0x00, 0x00)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -285,14 +297,17 @@ async def test_bz_not_taken(dut):
     """BZ on non-zero register -> branch not taken."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
-    _place(prog, 0x0000, _encode_li(rd=1, imm=5))
-    _place(prog, 0x0002, _encode_bz(rs=1, imm=3))
-    _place(prog, 0x0004, _encode_li(rd=2, imm=7))
-    _place(prog, 0x0006, _encode_sw(rs=2, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+
+    a = Asm()
+    a.li(1, 5)
+    a.bz(1, 3)
+    a.li(2, 7)
+    a.sw(2, 0x40)
+    a.spin()
+    a.org(0x0040)
+    a.db(0x00, 0x00)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -304,13 +319,16 @@ async def test_bnz_not_taken(dut):
     """BNZ on zero register -> branch not taken."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
-    _place(prog, 0x0000, _encode_bnz(rs=0, imm=3))
-    _place(prog, 0x0002, _encode_li(rd=1, imm=7))
-    _place(prog, 0x0004, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0006, _spin(0x0006))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+
+    a = Asm()
+    a.bnz(0, 3)
+    a.li(1, 7)
+    a.sw(1, 0x40)
+    a.spin()
+    a.org(0x0040)
+    a.db(0x00, 0x00)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -322,17 +340,21 @@ async def test_jr_ignores_low_bit(dut):
     """JR ignores bit 0 of the computed target address."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
+
+    a = Asm()
     # R1 = 0x0011 (odd)
-    _place(prog, 0x0000, _encode_li(rd=1, imm=0x11))
+    a.li(1, 0x11)
     # JR R1, 0 → should jump to 0x0010 (bit 0 ignored), not 0x0011
-    _place(prog, 0x0002, _encode_jr(rs=1, imm=0))
+    a.jr(1, 0)
     # At 0x0010: identifiable instruction proves we arrived correctly
-    _place(prog, 0x0010, _encode_li(rd=3, imm=0x42))
-    _place(prog, 0x0012, _encode_sw(rs=3, imm=0x40))
-    _place(prog, 0x0014, _spin(0x0014))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+    a.org(0x0010)
+    a.li(3, 0x42)
+    a.sw(3, 0x40)
+    a.spin()
+    a.org(0x0040)
+    a.db(0x00, 0x00)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -344,21 +366,24 @@ async def test_bt_taken(dut):
     """BT with T=1 branches forward."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
+
+    a = Asm()
     # SLTI R0, 1 sets T=1 (0 < 1 = true)
-    _place(prog, 0x0000, _encode_slti(rs=0, imm=1))
+    a.slti(0, 1)
     # BT +3: target = (0x0002+2) + 3*2 = 0x000A
-    _place(prog, 0x0002, _encode_bt(imm=3))
+    a.bt(3)
     # Skipped:
-    _place(prog, 0x0004, _encode_li(rd=1, imm=0x11))
-    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
+    a.li(1, 0x11)
+    a.sw(1, 0x40)
+    a.spin()
     # Branch target:
-    _place(prog, 0x000A, _encode_li(rd=1, imm=0x22))
-    _place(prog, 0x000C, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000E, _spin(0x000E))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+    a.li(1, 0x22)
+    a.sw(1, 0x40)
+    a.spin()
+    a.org(0x0040)
+    a.db(0x00, 0x00)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -370,20 +395,23 @@ async def test_bt_not_taken(dut):
     """BT with T=0 falls through."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
+
+    a = Asm()
     # SLTI R0, 0 sets T=0 (0 < 0 = false)
-    _place(prog, 0x0000, _encode_slti(rs=0, imm=0))
-    _place(prog, 0x0002, _encode_bt(imm=3))
+    a.slti(0, 0)
+    a.bt(3)
     # Fall-through:
-    _place(prog, 0x0004, _encode_li(rd=1, imm=0x33))
-    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
+    a.li(1, 0x33)
+    a.sw(1, 0x40)
+    a.spin()
     # Branch target (should NOT reach):
-    _place(prog, 0x000A, _encode_li(rd=1, imm=0x44))
-    _place(prog, 0x000C, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000E, _spin(0x000E))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+    a.li(1, 0x44)
+    a.sw(1, 0x40)
+    a.spin()
+    a.org(0x0040)
+    a.db(0x00, 0x00)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -395,18 +423,21 @@ async def test_bf_taken(dut):
     """BF with T=0 branches forward."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
+
+    a = Asm()
     # SLTI R0, 0 sets T=0 (0 < 0 = false)
-    _place(prog, 0x0000, _encode_slti(rs=0, imm=0))
-    _place(prog, 0x0002, _encode_bf(imm=3))
-    _place(prog, 0x0004, _encode_li(rd=1, imm=0x11))
-    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
-    _place(prog, 0x000A, _encode_li(rd=1, imm=0x55))
-    _place(prog, 0x000C, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000E, _spin(0x000E))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+    a.slti(0, 0)
+    a.bf(3)
+    a.li(1, 0x11)
+    a.sw(1, 0x40)
+    a.spin()
+    a.li(1, 0x55)
+    a.sw(1, 0x40)
+    a.spin()
+    a.org(0x0040)
+    a.db(0x00, 0x00)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
@@ -418,18 +449,21 @@ async def test_bf_not_taken(dut):
     """BF with T=1 falls through."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
-    prog = {}
+
+    a = Asm()
     # SLTI R0, 1 sets T=1 (0 < 1 = true)
-    _place(prog, 0x0000, _encode_slti(rs=0, imm=1))
-    _place(prog, 0x0002, _encode_bf(imm=3))
-    _place(prog, 0x0004, _encode_li(rd=1, imm=0x66))
-    _place(prog, 0x0006, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x0008, _spin(0x0008))
-    _place(prog, 0x000A, _encode_li(rd=1, imm=0x77))
-    _place(prog, 0x000C, _encode_sw(rs=1, imm=0x40))
-    _place(prog, 0x000E, _spin(0x000E))
-    prog[0x0040] = 0x00; prog[0x0041] = 0x00
-    _load_program(dut, prog)
+    a.slti(0, 1)
+    a.bf(3)
+    a.li(1, 0x66)
+    a.sw(1, 0x40)
+    a.spin()
+    a.li(1, 0x77)
+    a.sw(1, 0x40)
+    a.spin()
+    a.org(0x0040)
+    a.db(0x00, 0x00)
+
+    _load_program(dut, a.assemble())
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)

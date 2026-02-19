@@ -42,12 +42,14 @@ async def test_reset_pin_trace(dut):
     # Load a known program: NOP (0x0000) everywhere, except a spin loop
     # at address 0 so behavior is deterministic.
     # J -1 at address 0: self-loop
-    from test_helpers import _encode_j
-    j_spin = _encode_j(-1)
+    from asm import Asm
+    a = Asm()
+    a.spin()
+    prog = a.assemble()
     for i in range(65536):
         dut.ram[i].value = 0
-    dut.ram[0].value = j_spin[0]
-    dut.ram[1].value = j_spin[1]
+    for addr, val in prog.items():
+        dut.ram[addr].value = val
 
     # Reset
     dut.ena.value = 1
