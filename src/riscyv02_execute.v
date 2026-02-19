@@ -77,10 +77,8 @@ module riscyv02_execute (
   reg [2:0]  state;
   reg [15:0] ir;        // Instruction register (raw or synthesized for interrupts)
   // Cycle-to-cycle temporary (mem addr, branch target, ALU/shift result).
-  // All bits use gated latches — zero DFFs.
-  wire [7:0] tmp_lo;      // Latched at E_EXEC_LO (lo-byte result / addr lo)
-  wire [7:0] tmp_hi;      // Latched at E_EXEC_HI (hi-byte addr)
-  reg        carry_r;     // ALU carry (DFF — feeds ci_ext, can't be latch)
+  // Declared as regs below, captured in the main sequential block.
+  reg        carry_r;     // ALU carry (DFF — feeds ci_ext)
   reg        mem_carry;   // Low-byte all-ones carry for E_MEM_HI increment
   reg        saved_i_bit; // i_bit save for INT, captured at negedge when fsm_ready
   wire [15:0] tmp = {tmp_hi, tmp_lo};
@@ -221,58 +219,16 @@ module riscyv02_execute (
   reg         w_we;
   reg  [15:0] w_data;
 
-  // Pipeline registers (transparent-high latches): capture write signals at
-  // negedge for the register file.  These bridge the compute phase (clk=1)
-  // to the write phase (clk=0), providing stable inputs during writes.
-  // Every pipelined RISC CPU has equivalent staging; this is pipeline
-  // infrastructure, not register-file overhead.
-  wire [15:0] w_data_r;
-  wire [3:0]  w_sel_r;
-  wire        w_we_r;
-
-  generate
-    genvar pi;
-    for (pi = 0; pi < 16; pi = pi + 1) begin : gen_wr_data
-      sg13g2_dlhrq_1 u_wr_data (
-        .D(w_data[pi]), .GATE(clk), .RESET_B(rst_n), .Q(w_data_r[pi])
-      );
-    end
-    for (pi = 0; pi < 4; pi = pi + 1) begin : gen_wr_sel
-      sg13g2_dlhrq_1 u_wr_sel (
-        .D(w_sel_mux[pi]), .GATE(clk), .RESET_B(rst_n), .Q(w_sel_r[pi])
-      );
-    end
-  endgenerate
-
-  sg13g2_dlhrq_1 u_wr_we (
-    .D(w_we), .GATE(clk), .RESET_B(rst_n), .Q(w_we_r)
-  );
-
   // -------------------------------------------------------------------------
-  // Temporary register: gated latches + 1 DFF (carry_r).
-  //   tmp_lo[7:0]:  ICG at E_EXEC_LO
-  //   tmp_hi[7:0]:  ICG at E_EXEC_HI
-  //   carry_r:      DFF (feeds ALU ci_ext — latch would create STA false path)
+  // Temporary register: negedge DFFs with enable.
+  //   tmp_lo[7:0]:  captured at E_EXEC_LO
+  //   tmp_hi[7:0]:  captured at E_EXEC_HI
+  //   carry_r:      DFF (feeds ALU ci_ext)
   //   saved_i_bit:  DFF at negedge (full-period constraint avoids half-period
-  //                 ICG path through ALU carry chain → insn_completing → fsm_ready)
+  //                 path through ALU carry chain → insn_completing → fsm_ready)
   // -------------------------------------------------------------------------
-  wire gclk_tmp_lo, gclk_tmp_hi;
-  sg13g2_lgcp_1 u_icg_tmp_lo (.CLK(clk), .GATE(state == E_EXEC_LO), .GCLK(gclk_tmp_lo));
-  sg13g2_lgcp_1 u_icg_tmp_hi (.CLK(clk), .GATE(state == E_EXEC_HI), .GCLK(gclk_tmp_hi));
-
-  generate
-    genvar ti;
-    for (ti = 0; ti < 8; ti = ti + 1) begin : gen_tmp_lo
-      sg13g2_dlhrq_1 u_tmp (
-        .D(next_tmp_lo[ti]), .GATE(gclk_tmp_lo), .RESET_B(rst_n), .Q(tmp_lo[ti])
-      );
-    end
-    for (ti = 0; ti < 8; ti = ti + 1) begin : gen_tmp_hi
-      sg13g2_dlhrq_1 u_tmp (
-        .D(alu_result[ti]), .GATE(gclk_tmp_hi), .RESET_B(rst_n), .Q(tmp_hi[ti])
-      );
-    end
-  endgenerate
+  reg [7:0] tmp_lo;
+  reg [7:0] tmp_hi;
 
   wire is_mem_phase = (state == E_MEM_LO || state == E_MEM_HI);
 
@@ -326,9 +282,9 @@ module riscyv02_execute (
   riscyv02_regfile u_regfile (
     .clk    (clk),
     .rst_n  (rst_n),
-    .w_sel  (w_sel_r),
-    .w_data (w_data_r),
-    .w_we   (w_we_r),
+    .w_sel  (w_sel_mux),
+    .w_data (w_data),
+    .w_we   (w_we),
     .r1_sel (r1_sel),
     .r1     (r1),
     .r2_sel (r2_sel),
@@ -383,24 +339,10 @@ module riscyv02_execute (
   // Combinational register-file select from (state, ir)
   // -------------------------------------------------------------------------
 
-  // r1_sel: read port 1 register select
-  //   Default ir[2:0] works for all formats: reg/rs1/rs is always at [2:0].
-  //   R,9 loads/stores override to R0 during execute (base address).
-  //   SP loads/stores override to R7 during execute (base address).
-  //   During E_MEM readback, R,9 and SP loads read ir[2:0] (data register).
-  always @(*) begin
-    if (is_mem_phase && !mem_is_store) begin
-      if (is_r9_load || is_sp_load) r1_sel = {1'b0, ir[2:0]};  // data reg readback
-      else                          r1_sel = {1'b0, ir[5:3]};   // R,R load dest
-    end else if (is_reti || is_epcr)
-      r1_sel = 4'd8;                                   // EPC (entry 8)
-    else if (is_r9_load || is_r9_store)
-      r1_sel = 4'd0;                                   // R0 base
-    else if (is_sp_load || is_sp_store)
-      r1_sel = 4'd7;                                   // SP (R7) base
-    else
-      r1_sel = {1'b0, ir[2:0]};                        // Default: reg at [2:0]
-  end
+  // r1_sel: registered read port 1 select.
+  // Set at dispatch (from fetch_ir) and at E_EXEC_HI→E_MEM transitions.
+  // Registering removes the instruction decode chain from the critical
+  // path (regfile read → ALU → writeback).
 
   // -------------------------------------------------------------------------
   // Combinational intermediates and next-state values
@@ -419,8 +361,9 @@ module riscyv02_execute (
   reg [1:0]  next_esr;
   reg        next_r2_hi_r;
   reg        next_mem_carry;
+  reg [3:0]  next_r1_sel;
 
-  // Combinational signal for tmp[7:0] latch at E_EXEC_LO negedge
+  // Combinational signal for tmp[7:0] DFF at E_EXEC_LO negedge
   reg [7:0]  next_tmp_lo;
 
   // Interrupt control
@@ -448,6 +391,7 @@ module riscyv02_execute (
     next_esr        = esr;
     next_r2_hi_r    = r2_hi_r;
     next_mem_carry  = mem_carry;
+    next_r1_sel     = r1_sel;
 
     // --- Output defaults ---
     alu_a           = r1[7:0];
@@ -584,6 +528,8 @@ module riscyv02_execute (
           // Address high byte: sign-extend imm bit 7
           alu_a      = r1[15:8];
           alu_b      = {8{ir[10]}};
+          if (!mem_is_store)
+            next_r1_sel = {1'b0, ir[2:0]};  // data reg readback for loads
           next_state = E_MEM_LO;
         end else if (is_auipc) begin
           alu_a           = pc[15:8];
@@ -595,6 +541,8 @@ module riscyv02_execute (
           // Address high byte: carry propagation only
           alu_a      = r1[15:8];
           alu_b      = 8'd0;
+          if (!mem_is_store)
+            next_r1_sel = {1'b0, ir[5:3]};  // R,R load dest readback
           next_state = E_MEM_LO;
         end else if (is_jr_jalr) begin
           // JR/JALR high byte: sign-extend imm bit 7
@@ -781,6 +729,7 @@ module riscyv02_execute (
     if (take_nmi || take_irq) begin
       next_ir    = {10'b1111100000, 2'b11, 2'b00, !take_nmi, 1'b0};
       next_i_bit = 1'b1;
+      next_r1_sel = 4'd0;  // INT doesn't read r1; don't care
       next_state = E_EXEC_LO;
     end
 
@@ -793,6 +742,25 @@ module riscyv02_execute (
       next_r2_hi_r = 1'b0;
       if (fetch_ir[15:4] == 12'b1111100000_11)
         next_i_bit = 1'b1;
+      // Pre-compute r1_sel for execute phase from incoming instruction.
+      // Not timing-critical: computed during E_IDLE, registered at negedge.
+      if (fetch_ir == 16'b1111100000000011        // RETI
+          || fetch_ir[15:3] == 13'b1111100000010) // EPCR
+        next_r1_sel = 4'd8;                       // EPC
+      else if (fetch_ir[15:11] == 5'b00010        // LW
+            || fetch_ir[15:11] == 5'b00011        // LB
+            || fetch_ir[15:11] == 5'b00100        // LBU
+            || fetch_ir[15:11] == 5'b00101        // SW
+            || fetch_ir[15:11] == 5'b00110)       // SB
+        next_r1_sel = 4'd0;                       // R0 base
+      else if (fetch_ir[15:11] == 5'b10001        // LW.S
+            || fetch_ir[15:11] == 5'b10010        // LB.S
+            || fetch_ir[15:11] == 5'b10011        // LBU.S
+            || fetch_ir[15:11] == 5'b10100        // SW.S
+            || fetch_ir[15:11] == 5'b10101)       // SB.S
+        next_r1_sel = 4'd7;                       // SP (R7)
+      else
+        next_r1_sel = {1'b0, fetch_ir[2:0]};     // Default: reg at [2:0]
       next_state = E_EXEC_LO;
     end
 
@@ -814,6 +782,9 @@ module riscyv02_execute (
       esr       <= 2'b10;  // {I=1, T=0}
       r2_hi_r   <= 1'b0;
       mem_carry <= 1'b0;
+      tmp_lo    <= 8'h00;
+      tmp_hi    <= 8'h00;
+      r1_sel    <= 4'd0;
     end else begin
       state     <= next_state;
       ir        <= next_ir;
@@ -824,6 +795,9 @@ module riscyv02_execute (
       esr       <= next_esr;
       r2_hi_r   <= next_r2_hi_r;
       mem_carry <= next_mem_carry;
+      r1_sel    <= next_r1_sel;
+      if (state == E_EXEC_LO) tmp_lo <= next_tmp_lo;
+      if (state == E_EXEC_HI) tmp_hi <= alu_result;
     end
   end
 

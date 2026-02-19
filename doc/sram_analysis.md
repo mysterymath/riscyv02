@@ -19,16 +19,15 @@ The Arlet 6502 has no regular arrays — its registers (A, X, Y, SP) are asymmet
 
 The register file is a single Verilog module (`riscyv02_regfile`) marked `(* keep_hierarchy *)`. This prevents the synthesizer from flattening it into the parent module, so its cell counts appear as a sub-module in `stat.json` — extracted from the same synthesis run as the total, eliminating cross-run non-determinism.
 
-It contains only storage (follower latches) and read/write peripherals — no pipeline staging. Write inputs (w_data, w_sel, w_we) must be stable during clk=0; the execute module's pipeline registers guarantee this.
+It contains leader latches (21, transparent-high: 16 data + 4 sel + 1 we), follower latches (144, gated by ~clk & decoded wen), and read mux trees. Write inputs are combinational from execute; the leader-follower pair acts as a negedge-triggered write.
 
-The exact cell counts vary slightly between synthesis runs (Yosys ABC optimization is non-deterministic), but the 144 follower latches are always present. A representative synthesis gives ~4,960T total (144 latches + ~352 combinational cells). The `transistor_count.py` script reads the actual count from each build's `stat.json`.
+The exact cell counts vary slightly between synthesis runs (Yosys ABC optimization is non-deterministic), but the 165 latches are always present. The `transistor_count.py` script reads the actual count from each build's `stat.json`.
 
 ### Functional Breakdown
 
+- **21 leader latches** (16 w_data + 4 w_sel + 1 w_we): write port staging, transparent during clk=1
 - **144 follower latches** (8 regs × 16 bits + 1 EPC × 16 bits): pure storage array, perfectly regular
-- **~350 combinational cells**: write decode (3-to-8 + sel[3] gating + enable) and 2 read mux trees (9:1 × 16 bits on port 1, 8:1 × 16 bits on port 2)
-
-Note: The write pipeline registers (21 latches capturing w_data, w_sel, w_we at negedge) live in the execute module, not the register file. Every pipelined RISC CPU has equivalent staging — this is pipeline infrastructure, not register-file overhead. See `riscyv02_execute.v` for details.
+- **Combinational cells**: write decode (3-to-8 + sel[3] gating) and 2 read mux trees (9:1 × 16 bits on port 1, 8:1 × 16 bits on port 2)
 
 Tx/cell counts are from the PDK's CDL SPICE netlist (one M-line = one MOSFET), the same source used for all transistor count estimates in this project.
 
@@ -96,7 +95,20 @@ Generate complementary data for the bit lines. 16 data/complement pairs drive al
 | INV | ~w_data[i] (complement) | 16 | 2 | 32 |
 | **Subtotal** | | | | **32** |
 
-**Write path total: 206T**
+**Write decode + drivers total: 206T**
+
+#### Write Staging
+
+Both the standard cell regfile and the SRAM equivalent need write staging. The standard cell version uses leader latches (included in the module). The SRAM equivalent uses input latches to hold w_data/w_sel/w_we stable during the write pulse:
+
+| Component | Count | Tx/each | Transistors |
+|---|---|---|---|
+| Data latch (TG + inverter loop) | 16 | 6 | 96 |
+| Address latch | 4 | 6 | 24 |
+| Enable latch (with reset) | 1 | 8 | 8 |
+| **Subtotal** | | | **128** |
+
+**Write path total: 206 + 128 = 334T**
 
 ### Read Path 1 (RW Port, Differential)
 
@@ -132,11 +144,11 @@ Only 8 GP rows are accessed — the EPC row's read-only port word line is tied l
 
 | Component | Transistors | % |
 |---|---|---|
-| Storage array (144 x 8T) | 1,152 | 71.6% |
-| Write path (decode + enable + drivers) | 206 | 12.8% |
-| Read path 1 (RW, differential) | 168 | 10.4% |
-| Read path 2 (R, single-ended) | 86 | 5.3% |
-| **Total** | **1,612** | **100%** |
+| Storage array (144 x 8T) | 1,152 | 66.2% |
+| Write path (decode + drivers + staging) | 334 | 19.2% |
+| Read path 1 (RW, differential) | 168 | 9.7% |
+| Read path 2 (R, single-ended) | 86 | 4.9% |
+| **Total** | **1,740** | **100%** |
 
 ### Gate Transistor Counts Used
 
@@ -156,16 +168,14 @@ All counts use standard CMOS complementary logic:
 
 | | Standard Cell | 8T SRAM |
 |---|---|---|
-| Storage | 144 latches × 20T = 2,880 | 144 cells × 8T = 1,152 |
-| Peripherals | ~350 combo cells ≈ 2,080 | Decode + drivers = 460 |
-| **Total** | **~4,960** | **1,612** |
-| **Discount** | | **~3,348** |
+| Write staging | 21 leader latches × 20T = 420 | 21 latches × 6T = 128 (TG-based) |
+| Storage | 144 follower latches × 20T = 2,880 | 144 cells × 8T = 1,152 |
+| Peripherals | decode + read mux trees | Decode + drivers = 460 |
+| **Total** | **(from synthesis)** | **1,740** |
 
-Standard cell peripheral count varies slightly between synthesis runs (~350 ± 50 cells). The exact count for each build is extracted automatically from `stat.json`.
+Standard cell counts vary slightly between synthesis runs. The exact count for each build is extracted automatically from `stat.json`.
 
-The SRAM saves on both storage (8T vs 20T per bit) and peripherals (word-line decode replaces explicit mux trees — asserting one word line selects all 16 bits of one register, eliminating the 8:1 mux per bit that standard cells require). The 16-bit port widening further reduces peripherals by eliminating byte-select muxes on both read and write paths.
-
-Note: Write pipeline registers (21 latches, 420T) are excluded from both sides of this comparison. They live in the execute module and are present in any pipelined implementation regardless of whether the register file uses SRAM or standard cells.
+The SRAM saves on both storage (8T vs 20T per bit) and peripherals (word-line decode replaces explicit mux trees — asserting one word line selects all 16 bits of one register, eliminating the 8:1 mux per bit that standard cells require). Write staging is present in both: leader latches in standard cells, input latches in SRAM.
 
 ## SRAM-Adjusted Figures
 
@@ -173,12 +183,8 @@ These figures are computed automatically by `transistor_count.py` from each buil
 
 | Metric | Value |
 |---|---|
-| Standard cell (synthesis) | 16,004 |
-| Register file (standard cell) | 4,960 |
-| Register file (8T SRAM equivalent) | 1,612 |
-| SRAM discount | -3,348 |
-| **SRAM-adjusted total** | **12,656** |
-| vs Arlet 6502 (13,176) | -3.9% |
+| Register file (8T SRAM equivalent) | 1,740 |
+| Other values | (computed by `transistor_count.py`) |
 
 ## Methodology Notes
 
