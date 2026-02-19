@@ -407,6 +407,7 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   reg        insn_completing;
   reg        jump;
+  reg        insn_i_bit;    // Instruction's effect on i_bit (before interrupt override)
 
   // Next-state values for all DFFs (computed in combinational block)
   reg [2:0]  next_state;
@@ -425,14 +426,7 @@ module riscyv02_execute (
   // Interrupt control
   wire fsm_ready = (state == E_IDLE) || insn_completing;
   wire take_nmi = fsm_ready && (nmi_pending || nmi_edge) && !nmi_ack;
-  // Forwarded i_bit: reflects SEI/CLI/SRW/RETI effect completing this cycle
-  reg i_bit_fwd;
-  always @(*) begin
-    if (is_srw)       i_bit_fwd = r1[1];
-    else if (is_reti) i_bit_fwd = esr[1];
-    else              i_bit_fwd = (i_bit || is_sei) && !is_cli;
-  end
-  wire take_irq = fsm_ready && !irqb && !i_bit_fwd && !take_nmi;
+  wire take_irq = fsm_ready && !irqb && !insn_i_bit && !take_nmi;
   assign ir_accept = fsm_ready && ir_valid && !fetch_flush;
   assign waiting = (state == E_IDLE) && is_wai;
   assign stopped = (state == E_IDLE) && is_stp;
@@ -463,6 +457,7 @@ module riscyv02_execute (
     w_we            = 1'b0;
     insn_completing = 1'b0;
     jump            = 1'b0;
+    insn_i_bit      = i_bit;
     shifter_din     = 15'b0;
     next_tmp_lo     = alu_result;
 
@@ -617,7 +612,7 @@ module riscyv02_execute (
           if (is_reti) begin
             jump       = 1'b1;
             next_pc    = r1[15:1];               // EPC is clean 16-bit address
-            next_i_bit = esr[1];
+            insn_i_bit = esr[1];
             next_t_bit = esr[0];
           end else if (is_int) begin
             w_data  = {pc, 1'b0};             // EPC = clean return address
@@ -736,16 +731,16 @@ module riscyv02_execute (
             w_data = {14'b0, i_bit, t_bit};
             w_we   = 1'b1;
           end
-          // Flag effects (mutually exclusive with each other)
-          if (is_sei) next_i_bit = 1'b1;
-          if (is_cli) next_i_bit = 1'b0;
+          if (is_sei) insn_i_bit = 1'b1;
+          if (is_cli) insn_i_bit = 1'b0;
           if (is_srw) begin
-            next_i_bit = r1[1];
+            insn_i_bit = r1[1];
             next_t_bit = r1[0];
           end
           end
           next_state = E_IDLE;
         end
+        next_i_bit = insn_i_bit;
       end
 
       E_MEM_LO: begin
@@ -848,7 +843,7 @@ module riscyv02_execute (
     if (!rst_n)
       saved_i_bit <= 1'b1;
     else if (fsm_ready)
-      saved_i_bit <= i_bit_fwd;
+      saved_i_bit <= insn_i_bit;
   end
 
 endmodule
