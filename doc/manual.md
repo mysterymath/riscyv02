@@ -10,11 +10,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 61.8% | 45.3% |
-| Transistor count (synth) | 16,580 | 13,176 |
-| SRAM-adjusted | 12,968 | 13,176 |
+| Utilization | 64.7% | 45.3% |
+| Transistor count (synth) | 17,258 | 13,176 |
+| SRAM-adjusted | 13,642 | 13,176 |
 
-The SRAM-adjusted total is 1.6% below the 6502, with significantly more capability per transistor: 16-bit registers, 3-operand ALU instructions, 2-cycle execute, PC-relative jumps, hardware call/return, and immediate arithmetic/logic. Unrecognized opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The SRAM-adjusted total is 3.5% above the 6502, with significantly more capability per transistor: 16-bit registers, 3-operand ALU instructions, 2-cycle execute, PC-relative jumps, hardware call/return, and immediate arithmetic/logic. Unrecognized opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Bus Protocol
 
@@ -115,7 +115,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 
 | Register | Name | Suggested Purpose |
 |---|---|---|
-| R0 | a0 | Accumulator / implicit base address (R,8 format loads/stores) |
+| R0 | a0 | Accumulator / implicit base address (I-type loads/stores) |
 | R1 | a1 | Argument / scratch |
 | R2 | t0 | Temporary 0 |
 | R3 | t1 | Temporary 1 |
@@ -124,7 +124,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | R6 | ra | Return address (link register) |
 | R7 | sp | Stack pointer |
 
-R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. Comparisons (CLTI, CLTUI, CEQI, CLT, CLTU, CEQ) write to the T flag rather than a destination register, preserving all GPRs. R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
+R0 is the implicit base address register for I-type loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[7:5]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. Comparisons (CLTI, CLTUI, CEQI, CLT, CLTU, CEQ) write to the T flag rather than a destination register, preserving all GPRs. R-type loads and stores allow explicit register selection for both data and base, with no offset.
 
 ### Link Register (R6)
 
@@ -134,108 +134,89 @@ R6 is a normal register in all contexts, including interrupt handlers. The inter
 
 ## Instruction Encoding
 
-All instructions are 16 bits. The encoding uses a **variable-width prefix-free** scheme: shorter prefixes for more common instructions. The word `0x0000` is ADDI R0, 0 = NOP.
+All instructions are 16 bits. The encoding follows RISC-V principles: **fixed 5-bit opcode at [4:0]**, register at [7:5], sign bit always at [15], immediates at the top. The word `0x0000` is ADDI R0, 0 = NOP. All immediates are sign-extended (including ANDI/ORI/XORI), same as RISC-V.
 
 ### Encoding Overview
 
-**57 instructions defined. 9,467 of 65,536 encodings free (14.4%).**
+**57 instructions defined.**
 
-| Format | Prefix | Layout | Used |
-|---|---|---|---|
-| R,8 | 5-bit | `[imm8:8\|reg:3]` | 22 |
-| B,8 | 8-bit | `[imm8:8]` | 2 |
-| R,7 | 6-bit | `[imm7:7\|reg:3]` | 2 |
-| "10" | 6-bit | `[imm10:10]` | 2 |
-| R,R,R | 7-bit | `[rd:3\|rs2:3\|rs1:3]` | 8 |
-| R,4 | 9-bit | `[shamt:4\|reg:3]` | 3 |
-| R,R | 10-bit | `[rd:3\|rs:3]` | 8 |
-| System | 11-16 bit | various | 10 |
+| Format | Layout (MSB→LSB) | Used |
+|---|---|---|
+| I | `[imm8:8\|rs/rd:3\|opcode:5]` | 24 |
+| B | `[imm8:8\|funct3:3\|opcode:5]` | 2 |
+| J | `[s:1\|imm[6:0]:7\|imm[8:7]:2\|fn1:1\|opcode:5]` | 2 |
+| R | `[fn2:2\|rd:3\|rs2:3\|rs1:3\|opcode:5]` | 16 |
+| SI | `[fn2:2\|dc:2\|shamt:4\|rs/rd:3\|opcode:5]` | 3 |
+| SYS | `[sub:8\|reg:3\|opcode:5]` | 10 |
 
-Fields are packed MSB-first: prefix at top, register at LSB. One R,8 uses the space of 4 R,R,R or 32 R,R. The B,8 format (BT/BF) occupies the former ANDIF prefix slot (10110); the 3-bit selector field in ir[10:8] selects the branch type, leaving 6 sub-codes free within that slot.
+Fields are packed MSB-first: opcode at bottom, immediates at top. The sign bit is always ir[15] in every format, enabling sign extension in parallel with decode. The primary register field ir[7:5] is shared across I-type, SI-type, SYS, and R-type (as rs1), enabling speculative register file reads before format decode completes. In R-type, rs2 is at [10:8] and rd at [13:11].
 
-### Prefix Table
+### Opcode Table
 
 ```
---- R,8 format (5-bit prefix) ---
-00000   ADDI    rd = rd + sext(imm8)
-00001   LI      rd = sext(imm8)
-00010   LW      rd = mem16[R0 + sext(imm8)]
-00011   LB      rd = sext(mem[R0 + sext(imm8)])
-00100   LBU     rd = zext(mem[R0 + sext(imm8)])
-00101   SW      mem16[R0 + sext(imm8)] = rs
-00110   SB      mem[R0 + sext(imm8)] = rs[7:0]
-00111   JR      pc = rs + sext(imm8) << 1
-01000   JALR    rs = pc+2; pc = rs + sext(imm8) << 1
+--- I-type (opcode 0-23) ---
+00000 (0)   ADDI    rd = rd + sext(imm8)
+00001 (1)   LI      rd = sext(imm8)
+00010 (2)   LW      rd = mem16[R0 + sext(imm8)]
+00011 (3)   LB      rd = sext(mem[R0 + sext(imm8)])
+00100 (4)   LBU     rd = zext(mem[R0 + sext(imm8)])
+00101 (5)   SW      mem16[R0 + sext(imm8)] = rs
+00110 (6)   SB      mem[R0 + sext(imm8)] = rs[7:0]
+00111 (7)   JR      pc = rs + sext(imm8)
+01000 (8)   JALR    rs = pc+2; pc = rs + sext(imm8)
+01001 (9)   ANDI    rd = rd & sext(imm8)
+01010 (10)  ORI     rd = rd | sext(imm8)
+01011 (11)  XORI    rd = rd ^ sext(imm8)
+01100 (12)  CLTI    T = (rs < sext(imm8))             (signed)
+01101 (13)  CLTUI   T = (rs <u sext(imm8))            (unsigned)
+01110 (14)  BZ      if rs == 0, pc += sext(imm8) << 1
+01111 (15)  BNZ     if rs != 0, pc += sext(imm8) << 1
+10000 (16)  CEQI    T = (rs == sext(imm8))
+10001 (17)  LWS     rd = mem16[R7 + sext(imm8)]
+10010 (18)  LBS     rd = sext(mem[R7 + sext(imm8)])
+10011 (19)  LBUS    rd = zext(mem[R7 + sext(imm8)])
+10100 (20)  SWS     mem16[R7 + sext(imm8)] = rs
+10101 (21)  SBS     mem[R7 + sext(imm8)] = rs[7:0]
+10110 (22)  LUI     rd = imm8 << 8
+10111 (23)  AUIPC   rd = pc + (imm8 << 8)
 
-01001   ANDI    rd = rd & zext(imm8)
-01010   ORI     rd = rd | zext(imm8)
-01011   XORI    rd = rd ^ zext(imm8)
-01100   CLTI    T = (rs < sext(imm8))             (signed)
-01101   CLTUI   T = (rs <u sext(imm8))            (unsigned)
-01110   BZ      if rs == 0, pc += sext(imm8) << 1
-01111   BNZ     if rs != 0, pc += sext(imm8) << 1
-10000   CEQI    T = (rs == sext(imm8))
-10001   LWS    rd = mem16[R7 + sext(imm8)]
-10010   LBS    rd = sext(mem[R7 + sext(imm8)])
-10011   LBUS   rd = zext(mem[R7 + sext(imm8)])
-10100   SWS    mem16[R7 + sext(imm8)] = rs
-10101   SBS    mem[R7 + sext(imm8)] = rs[7:0]
+--- B-type (opcode 24, funct3 at [7:5]) ---
+11000.000   BT      if T == 1, pc += sext(imm8) << 1
+11000.001   BF      if T == 0, pc += sext(imm8) << 1
 
---- B,8 format (8-bit prefix, occupies prefix 10110) ---
-10110000  BT    if T == 1, pc += sext(imm8) << 1
-10110001  BF    if T == 0, pc += sext(imm8) << 1
+--- J-type (opcode 25, fn1 at [5]) ---
+11001.0     J       pc += sext(imm10) << 1
+11001.1     JAL     R6 = pc+2; pc += sext(imm10) << 1
 
---- R,7 format (6-bit prefix) ---
-110100  LUI     rd = sext(imm7) << 9
-110101  AUIPC   rd = pc + (sext(imm7) << 9)
+--- R-type (opcodes 26-29, fn2 at [15:14]) ---
+Opcode 26 (R-ALU1): 00=ADD, 01=SUB, 10=AND, 11=OR
+Opcode 27 (R-ALU2): 00=XOR, 01=SLL, 10=SRL, 11=SRA
+Opcode 28 (R-MEM):  00=LWR, 01=LBR, 10=LBUR, 11=SWR
+Opcode 29 (R-MISC): 00=SBR, 01=CLT, 10=CLTU, 11=CEQ
 
---- "10" format (6-bit prefix) ---
-110110  J       pc += sext(imm10) << 1
-110111  JAL     R6 = pc+2; pc += sext(imm10) << 1
+--- SI-type (opcode 30, fn2 at [15:14]) ---
+11110.00    SLLI    rd = rd << shamt
+11110.01    SRLI    rd = rd >>u shamt
+11110.10    SRAI    rd = rd >>s shamt
 
---- R,R,R format (7-bit prefix) ---
-1110000 ADD     rd = rs1 + rs2
-1110001 SUB     rd = rs1 - rs2
-1110010 AND     rd = rs1 & rs2
-1110011 OR      rd = rs1 | rs2
-1110100 XOR     rd = rs1 ^ rs2
-1110111 SLL     rd = rs1 << rs2[3:0]
-1111000 SRL     rd = rs1 >>u rs2[3:0]
-1111001 SRA     rd = rs1 >>s rs2[3:0]
-
---- R,4 format (9-bit prefix) ---
-111101000  SLLI   rd = rd << shamt
-111101001  SRLI   rd = rd >>u shamt
-111101010  SRAI   rd = rd >>s shamt
-
---- R,R format (10-bit prefix) ---
-1111010110  LWR    rd = mem16[rs]
-1111010111  LBR    rd = sext(mem[rs])
-1111011000  LBUR   rd = zext(mem[rs])
-1111011001  SWR    mem16[rs] = rd
-1111011010  SBR    mem[rs] = rd[7:0]
-1111011011  CLT    T = (rs1 < rs2)                  (signed)
-1111011100  CLTU   T = (rs1 <u rs2)                  (unsigned)
-1111011101  CEQ    T = (rs1 == rs2)
-
---- System format (10-bit prefix + sub) ---
-1111100000 000001  SEI    I = 1
-1111100000 000010  CLI    I = 0
-1111100000 000011  RETI   {I, T} = ESR; pc = EPC
-1111100000 001rrr  SRW    {I, T} = rs[1:0]
-1111100000 010rrr  EPCR   rd = EPC
-1111100000 011rrr  EPCW   EPC = rs
-1111100000 101rrr  SRR    rd = {14'b0, I, T}
-1111100000 1xxxxx  INT    ESR = {I, T}; EPC = pc+2; I = 1; pc = (vec+1)*2
-1111100000 000101  WAI    halt until interrupt
-1111100000 000111  STP    halt permanently (reset only)
+--- SYS-type (opcode 31, sub8 at [15:8]) ---
+sub8=0x01   SEI     I = 1
+sub8=0x02   CLI     I = 0
+sub8=0x03   RETI    {I, T} = ESR; pc = EPC
+sub8=0x05   WAI     halt until interrupt
+sub8=0x07   STP     halt permanently (reset only)
+sub8=0x08   SRW     {I, T} = rs[1:0]           (reg at [7:5])
+sub8=0x10   EPCR    rd = EPC                    (reg at [7:5])
+sub8=0x18   EPCW    EPC = rs                    (reg at [7:5])
+sub8=0x28   SRR     rd = {14'b0, I, T}          (reg at [7:5])
+sub8=0xC0+  INT     ESR={I,T}; EPC=pc+2; I=1; pc=(vec+1)*2  (vec at [7:6])
 
 All other encodings execute as NOP (2-cycle no-op).
 ```
 
 ## Instruction Set
 
-### R,8 Format -- Loads, Stores, Immediate, Jumps
+### I-type -- Loads, Stores, Immediate, Jumps
 
 #### ADDI -- Add Immediate
 
@@ -253,62 +234,62 @@ Loads a sign-extended 8-bit immediate (-128 to +127) into a register. No memory 
 
 `rd = MEM16[R0 + sext(imm8)]` -- 4 cycles
 
-Loads a 16-bit word from memory into the register at ir[2:0]. R0 is the implicit base address; the 8-bit signed offset is a byte offset (not scaled), giving a range of -128 to +127 bytes from R0. The low byte is read first, then the high byte.
+Loads a 16-bit word from memory into the register at ir[7:5]. R0 is the implicit base address; the 8-bit signed offset is a byte offset (not scaled), giving a range of -128 to +127 bytes from R0. The low byte is read first, then the high byte.
 
 #### LB -- Load Byte (Sign-Extend)
 
 `rd = sext(MEM[R0 + sext(imm8)])` -- 3 cycles
 
-Loads a single byte and sign-extends it to 16 bits into the register at ir[2:0]. R0 is the implicit base. If bit 7 is set, the high byte is filled with 0xFF; otherwise 0x00.
+Loads a single byte and sign-extends it to 16 bits into the register at ir[7:5]. R0 is the implicit base. If bit 7 is set, the high byte is filled with 0xFF; otherwise 0x00.
 
 #### LBU -- Load Byte (Zero-Extend)
 
 `rd = zext(MEM[R0 + sext(imm8)])` -- 3 cycles
 
-Loads a single byte and zero-extends it to 16 bits into the register at ir[2:0]. R0 is the implicit base. The high byte is always 0x00.
+Loads a single byte and zero-extends it to 16 bits into the register at ir[7:5]. R0 is the implicit base. The high byte is always 0x00.
 
 #### SW -- Store Word
 
 `MEM16[R0 + sext(imm8)] = rs` -- 4 cycles
 
-Stores the register at ir[2:0] as a 16-bit word to memory. R0 is the implicit base address. The low byte is written first, then the high byte.
+Stores the register at ir[7:5] as a 16-bit word to memory. R0 is the implicit base address. The low byte is written first, then the high byte.
 
 #### SB -- Store Byte
 
 `MEM[R0 + sext(imm8)] = rs[7:0]` -- 3 cycles
 
-Stores the low byte of the register at ir[2:0] to memory. R0 is the implicit base address.
+Stores the low byte of the register at ir[7:5] to memory. R0 is the implicit base address.
 
 #### JR -- Jump Register
 
-`PC = rs + sext(imm8) << 1` -- 4 cycles
+`PC = rs + sext(imm8)` -- 4 cycles
 
-Unconditional jump to a register plus a scaled signed offset. The 8-bit offset is shifted left by 1, giving a range of -256 to +254 bytes from the register value.
+Unconditional jump to a register plus a signed byte offset. The 8-bit offset gives a range of -128 to +127 bytes from the register value.
 
 #### JALR -- Jump and Link Register
 
-`rs = PC+2; PC = rs + sext(imm8) << 1` -- 4 cycles
+`rs = PC+2; PC = rs + sext(imm8)` -- 4 cycles
 
-Register-indirect jump that saves the return address in the source register. In the R,8 format, the single register field serves as both jump base and link destination. The conventional call sequence uses R6: `JALR R6, offset` reads the jump target from R6, then writes the return address back to R6. Pairs with AUIPC for full 16-bit PC-relative function calls: `AUIPC t0, upper; JALR t0, lower`.
+Register-indirect jump that saves the return address in the source register. In I-type, the single register field serves as both jump base and link destination. The conventional call sequence uses R6: `JALR R6, offset` reads the jump target from R6, then writes the return address back to R6. Pairs with AUIPC for full 16-bit PC-relative function calls: `AUIPC t0, upper; JALR t0, lower`.
 
 
 #### ANDI -- And Immediate
 
-`rd = rd & zext(imm8)` -- 2 cycles
+`rd = rd & sext(imm8)` -- 2 cycles
 
-Bitwise AND with a zero-extended 8-bit immediate (0 to 255). Only the low byte is masked; the high byte of rd is always cleared.
+Bitwise AND with a sign-extended 8-bit immediate (-128 to +127). With a positive immediate (0-127), masks the low 7 bits and clears the high byte. With a negative immediate, masks the low byte and preserves the high byte. Note: `ANDI rd, 0xFF` is a no-op (sign-extends to 0xFFFF); use `LBU` to extract a low byte instead.
 
 #### ORI -- Or Immediate
 
-`rd = rd | zext(imm8)` -- 2 cycles
+`rd = rd | sext(imm8)` -- 2 cycles
 
-Bitwise OR with a zero-extended 8-bit immediate. Sets bits in the low byte without affecting the high byte.
+Bitwise OR with a sign-extended 8-bit immediate. With a positive immediate, sets bits in the low byte without affecting the high byte. With a negative immediate, sets all high-byte bits.
 
 #### XORI -- Xor Immediate
 
-`rd = rd ^ zext(imm8)` -- 2 cycles
+`rd = rd ^ sext(imm8)` -- 2 cycles
 
-Bitwise XOR with a zero-extended 8-bit immediate. Toggles bits in the low byte without affecting the high byte.
+Bitwise XOR with a sign-extended 8-bit immediate. With a positive immediate, toggles bits in the low byte without affecting the high byte. With a negative immediate (`XORI rd, -1`), inverts all 16 bits (bitwise NOT).
 
 #### CLTI -- Compare Less Than Immediate (Signed)
 
@@ -340,9 +321,9 @@ Branches to a PC-relative target if the source register is non-zero. Useful for 
 
 Compares the source register against a sign-extended 8-bit immediate (-128 to +127) for equality. Sets T=1 if equal, T=0 otherwise. No register is modified. Pattern: `CEQI rs, val; BT equal_label` (branch if rs == val).
 
-### B,8 Format -- T-Flag Branches
+### B-type -- T-Flag Branches
 
-BT and BF occupy the 10110 prefix slot (former ANDIF). They branch based on the T flag set by comparison instructions.
+BT and BF use opcode 24 with funct3 at ir[7:5]. They branch based on the T flag set by comparison instructions.
 
 #### BT -- Branch if T Set
 
@@ -356,21 +337,21 @@ Branches if T=1. Same-page taken: 3 cycles; page-crossing: 4 cycles. Pattern: `C
 
 Branches if T=0. Pattern: `CLTU rs1, rs2; BF target` (branch if rs1 >= rs2). `CLTI rs, val; BF target` (branch if rs >= val).
 
-### R,7 Format -- Upper Immediate
+### I-type -- Upper Immediate
 
 #### LUI -- Load Upper Immediate
 
-`rd = sext(imm7) << 9` -- 2 cycles
+`rd = imm8 << 8` -- 2 cycles
 
-Loads a sign-extended 7-bit immediate, shifted left by 9, into a register. The low 9 bits are cleared. The immediate range is -64 to +63, covering the full 16-bit address space when shifted. Pairs with ADDI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`.
+Loads an 8-bit immediate into the upper byte of a register, clearing the low byte. The immediate range covers the full 16-bit address space (any upper byte). Pairs with ADDI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`. When the low byte is negative (bit 7 set), compensate the upper byte by adding 1, same as RISC-V's LUI+ADDI convention.
 
 #### AUIPC -- Add Upper Immediate to PC
 
-`rd = (PC+2) + (sext(imm7) << 9)` -- 2 cycles
+`rd = (PC+2) + (imm8 << 8)` -- 2 cycles
 
-Adds a sign-extended 7-bit immediate, shifted left by 9, to the address of the next instruction (PC+2). Pairs with LW/SW/JR's offset for PC-relative addressing: AUIPC provides the upper bits and the subsequent load/store/jump provides the lower bits.
+Adds an 8-bit immediate, placed in the upper byte, to the address of the next instruction (PC+2). Pairs with LW/SW/JR's offset for PC-relative addressing: AUIPC provides the upper bits and the subsequent load/store/jump provides the lower bits.
 
-### "10" Format -- PC-Relative Jumps
+### J-type -- PC-Relative Jumps
 
 #### J -- Jump
 
@@ -384,9 +365,9 @@ Unconditional PC-relative jump. The 10-bit signed offset is shifted left by 1, g
 
 Unconditional PC-relative jump that saves the return address in R6. Used for subroutine calls; return with `JR R6, 0`.
 
-### R,R,R Format -- Register ALU
+### R-type -- Register ALU
 
-All R,R,R instructions are 2 cycles.
+All R-type ALU instructions are 2 cycles. rd at ir[13:11], rs2 at ir[10:8], rs1 at ir[7:5].
 
 #### ADD -- `rd = rs1 + rs2`
 #### SUB -- `rd = rs1 - rs2`
@@ -412,7 +393,7 @@ Shifts rs1 right by the amount in rs2 (low 4 bits). Vacated bits are filled with
 
 Shifts rs1 right by the amount in rs2 (low 4 bits). Vacated bits are filled with copies of the sign bit (rs1[15]).
 
-### R,4 Format -- Shift Immediate
+### SI-type -- Shift Immediate
 
 All shift immediate instructions are 2 cycles and operate in-place (rd = rd shift shamt).
 
@@ -420,9 +401,9 @@ All shift immediate instructions are 2 cycles and operate in-place (rd = rd shif
 #### SRLI -- `rd = rd >>u shamt` (shamt 0-15)
 #### SRAI -- `rd = rd >>s shamt` (shamt 0-15)
 
-### R,R Format -- Register Load/Store
+### R-type -- Register Load/Store and Compare
 
-R,R-format loads and stores use explicit registers for both data and base, with no offset.
+R-type loads and stores use explicit registers for both data and base, with no offset. For loads, rd at ir[13:11] is the destination and rs1 at ir[7:5] is the address. For stores, rs2 at ir[10:8] is the data and rs1 at ir[7:5] is the address.
 
 #### LWR -- `rd = MEM16[rs]` -- 4 cycles
 #### LBR -- `rd = sext(MEM[rs])` -- 3 cycles
@@ -472,25 +453,25 @@ Restores both I and T flags from the ESR register and returns to the interrupted
 
 `rd = EPC` -- 2 cycles
 
-Copies the Exception PC register to a general-purpose register. EPC is a clean 16-bit return address. Register is at ir[2:0].
+Copies the Exception PC register to a general-purpose register. EPC is a clean 16-bit return address. Register is at ir[7:5].
 
 #### EPCW -- Write Exception PC
 
 `EPC = rs` -- 2 cycles
 
-Copies a general-purpose register to the Exception PC register. Register is at ir[2:0]. Modifies only the return address; the saved {I, T} flags are in ESR, not EPC.
+Copies a general-purpose register to the Exception PC register. Register is at ir[7:5]. Modifies only the return address; the saved {I, T} flags are in ESR, not EPC.
 
 #### SRR -- Read Status Register
 
 `rd = {14'b0, I, T}` -- 2 cycles
 
-Reads the current status register into a GP register. Bit 1 = I (interrupt disable), bit 0 = T (condition flag). Bits 15:2 are cleared. Register is at ir[2:0]. Pair with SRW to save/restore interrupt context.
+Reads the current status register into a GP register. Bit 1 = I (interrupt disable), bit 0 = T (condition flag). Bits 15:2 are cleared. Register is at ir[7:5]. Pair with SRW to save/restore interrupt context.
 
 #### SRW -- Write Status Register
 
 `{I, T} = rs[1:0]` -- 2 cycles
 
-Writes the I and T flags from bits 1 and 0 of the source register. Both flags take effect immediately (forwarded to the next instruction boundary). Register is at ir[2:0]. Pair with SRR: `SRR rd` to save, `SRW rs` to restore.
+Writes the I and T flags from bits 1 and 0 of the source register. Both flags take effect immediately (forwarded to the next instruction boundary). Register is at ir[7:5]. Pair with SRR: `SRR rd` to save, `SRW rs` to restore.
 
 #### INT -- Software Interrupt
 
@@ -758,13 +739,12 @@ Total code: **12 bytes**
 
 Both versions store the byte before testing for the null terminator — the 65C02 via `BEQ` after `STA`, RISCY-V02 via `BNZ` after `SBR`. The 65C02 needs an extra `BEQ` branch (2 cycles, not taken) on every character to check for termination, plus page-crossing logic. RISCY-V02 folds the termination check into the loop's back-edge branch.
 
-Word-copy variant (RISCY-V02 only):
+Word-copy variant (RISCY-V02 only, R7 = 0x00FF preloaded):
 
 ```
 strcpy:
     LWR  R5, R3         ;  4 cy   2 B    ; load 2 chars
-    LI   R1, 0xFF       ;  2 cy   2 B
-    AND  R1, R5, R1     ;  2 cy   2 B    ; R1 = low byte
+    AND  R1, R5, R7     ;  2 cy   2 B    ; R1 = low byte
     BZ   R1, lo         ;  2 cy   2 B
     SUB  R1, R5, R1     ;  2 cy   2 B    ; R1 = high byte << 8
     BZ   R1, hi         ;  2 cy   2 B
@@ -778,7 +758,7 @@ hi: SWR  R5, R2         ;  4 cy   2 B    ; store char + null
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Word loop: 25 cy / 2 chars = **12.5 cy/char**, 28 B. The null-byte detection (`LI` + `AND` + `BZ` + `SUB` + `BZ` = 10 cy) eats the word-load savings, so the speedup over the byte version is marginal (~4%). Unlike memcpy, where word copies nearly halve throughput, strcpy's per-element null check limits the benefit.
+Word loop: 23 cy / 2 chars = **11.5 cy/char**, 26 B. The null-byte detection (`AND` + `BZ` + `SUB` + `BZ` = 8 cy) eats the word-load savings, so the speedup over the byte version is modest (~12%). Unlike memcpy, where word copies nearly halve throughput, strcpy's per-element null check limits the benefit.
 
 ### 16×16 → 16 Multiply
 
@@ -997,7 +977,6 @@ no_xor:
     ADDI R3, -1         ;  2 cy   2 B    len--
     BNZ  R3, byte_loop  ;  3 cy   2 B
     SRLI R4, 8          ;  2 cy   2 B    move to low byte
-    ANDI R4, 0xFF       ;  2 cy   2 B    mask
     JR   R6, 0          ;  3 cy   2 B
 ```
 
@@ -1005,13 +984,13 @@ Bit loop (no xor): **12 cy** — `CLTI`+`SLLI`+`BF`(taken)+`ADDI`+`BNZ`
 
 Bit loop (xor): **13 cy** — adds `XOR`
 
-Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **116 cy**. Total code: **36 bytes**
+Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **116 cy**. Total code: **34 bytes**
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
 | Bit loop (avg) | 10.5 cy | 12.5 cy |
 | Per byte | 101 cy | 116 cy |
-| Code size | 22 B | 36 B |
+| Code size | 22 B | 34 B |
 
 The 65C02 wins CRC-8. The carry flag is the difference: `ASL` shifts the CRC and captures the overflow bit in one instruction; RISCY-V02 needs a separate `CLTI` to extract bit 15 before shifting. By keeping the CRC in the upper byte of a 16-bit register, `CLTI` (test sign bit) works naturally. The setup cost (shifting data into the upper byte, pre-loading the polynomial) adds per-byte overhead. With the CRC, byte overhead, and polynomial all fitting naturally in 8-bit operations, the 6502 plays to its strengths.
 
@@ -1066,7 +1045,7 @@ Average: **25.5 cy/bit**, 204 cy/byte bit processing. Per byte: **227 cy**. Tota
 ```
 crc16:
     LI   R4, -1         ;  2 cy   2 B    crc = 0xFFFF
-    LUI  R0, 8          ;  2 cy   2 B    R0 = 0x1000
+    LUI  R0, 0x10       ;  2 cy   2 B    R0 = 0x1000
     ORI  R0, 0x21       ;  2 cy   2 B    R0 = 0x1021
 byte_loop:
     LBUR R5, R2         ;  3 cy   2 B    R5 = *data
@@ -1141,7 +1120,7 @@ Total code: **15 bytes**
 
 **RISCY-V02** — color byte at $0002 (zero page), VIC-II at $D000
 
-Every register the handler touches must be saved and restored. The handler needs R0 (implicit base for R,8 memory ops) and R5 (scratch). The color byte is not within reach of the VIC registers, so R0 must be loaded twice — once for zero page, once for $D000.
+Every register the handler touches must be saved and restored. The handler needs R0 (implicit base for I-type memory ops) and R5 (scratch). The color byte is not within reach of the VIC registers, so R0 must be loaded twice — once for zero page, once for $D000.
 
 Register saves go below the current SP without adjusting it. This is safe because RISCY-V02's IRQ entry sets I=1, masking further IRQs, and NMI handlers cannot return (RETI from NMI is undefined behavior per the architecture — NMI handlers reset, halt, or spin). Since nothing that could resume the handler will touch the stack, the space below SP is exclusively ours for the handler's lifetime.
 
@@ -1154,7 +1133,7 @@ irq_handler:
     LBU  R5, 2          ;  3 cy   2 B    R5 = color ($0002)
     ADDI R5, 1          ;  2 cy   2 B    color++
     SB   R5, 2          ;  3 cy   2 B    save color ($0002)
-    LUI  R0, -24        ;  2 cy   2 B    R0 = $D000
+    LUI  R0, 0xD0       ;  2 cy   2 B    R0 = $D000
     SB   R5, $21        ;  3 cy   2 B    $D021: background color
     SB   R5, $19        ;  3 cy   2 B    $D019: ack raster interrupt
     LWS  R5, -2         ;  4 cy   2 B    restore R5
@@ -1226,29 +1205,30 @@ rc4_byte:
 
 **61 cycles, 34 bytes.** S[i] is saved with `PHA` before the j computation (avoiding a re-read), then restored with `PLA` for the swap. The i and j indices must live in zero page because X and Y are needed for array indexing.
 
-**RISCY-V02** — S base in R0, i in R1, j in R2; output in R3
+**RISCY-V02** — S base in R0, i in R1, j in R2; output in R3; R7 = 0x00FF (preloaded once)
 
 ```
+; Setup (once): LI R7, -1; SRLI R7, 8  →  R7 = 0x00FF
 rc4_byte:
     ADDI R1, 1          ; 2 cy  2 B    i++
-    ANDI R1, 0xFF       ; 2 cy  2 B    mod 256
+    AND  R1, R1, R7     ; 2 cy  2 B    mod 256
     ADD  R3, R0, R1     ; 2 cy  2 B    R3 = &S[i]
     LBUR R4, R3         ; 3 cy  2 B    R4 = S[i]
     ADD  R2, R2, R4     ; 2 cy  2 B    j += S[i]
-    ANDI R2, 0xFF       ; 2 cy  2 B    mod 256
+    AND  R2, R2, R7     ; 2 cy  2 B    mod 256
     ADD  R3, R0, R2     ; 2 cy  2 B    R3 = &S[j]
     LBUR R5, R3         ; 3 cy  2 B    R5 = S[j]
     SBR  R4, R3         ; 3 cy  2 B    S[j] = old S[i]
     ADD  R3, R0, R1     ; 2 cy  2 B    R3 = &S[i]
     SBR  R5, R3         ; 3 cy  2 B    S[i] = old S[j]
     ADD  R3, R4, R5     ; 2 cy  2 B    R3 = S[i]+S[j]
-    ANDI R3, 0xFF       ; 2 cy  2 B    mod 256
+    AND  R3, R3, R7     ; 2 cy  2 B    mod 256
     ADD  R3, R0, R3     ; 2 cy  2 B    R3 = &S[sum]
     LBUR R3, R3         ; 3 cy  2 B    output byte
     JR   R6, 0          ; 3 cy  2 B
 ```
 
-**38 cycles, 32 bytes.** Three `ANDI` instructions (6 cy) are needed for mod-256 masking that the 6502 gets for free from 8-bit registers. Five `ADD` instructions (10 cy) compute array addresses that the 6502 folds into its indexed addressing modes. Despite this 16-cycle tax, RISCY-V02 wins by a wide margin.
+**38 cycles, 32 bytes.** Three `AND` instructions (6 cy) with a preloaded mask register are needed for mod-256 masking that the 6502 gets for free from 8-bit registers (the mask setup is amortized over many calls). Five `ADD` instructions (10 cy) compute array addresses that the 6502 folds into its indexed addressing modes. Despite this 16-cycle tax, RISCY-V02 wins by a wide margin.
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
@@ -1256,7 +1236,7 @@ rc4_byte:
 | Code size | 34 B | 32 B |
 | Speedup | 1.0× | 1.6× |
 
-RISCY-V02 wins decisively. Two factors overwhelm the mod-256 and address-computation tax:
+RISCY-V02 wins decisively. The mod-256 masking requires a preloaded mask register (R7 = 0x00FF) since ANDI is sign-extended, but the per-call cost is identical. Two factors overwhelm the mod-256 and address-computation tax:
 
 1. **Registers eliminate state traffic.** The 6502 stores i and j in zero page — every call does INC+LDX+ADC+STA (14 cy) just to read, update, and write back two index variables. RISCY-V02 keeps i, j, and the S base in registers: state overhead is a single `ADDI` (2 cy).
 

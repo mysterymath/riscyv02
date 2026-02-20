@@ -22,21 +22,20 @@
 // mid-instruction. The ALU serializes 8 bits at a time internally; tmp[7:0]
 // holds the lo-byte result between E_EXEC_LO and E_EXEC_HI.
 //
-// ISA encoding: variable-width prefix-free encoding
-// -------------------------------------------------
-// Prefix at MSB, registers at LSB for fixed positions.
+// ISA encoding: RV32I-style 16-bit encoding
+// ------------------------------------------
+// Fixed 5-bit opcode at [4:0]. Register rs1/rd at [7:5]. Sign at [15].
+// Immediates at [15:8] with sign always at ir[15].
 //
-//   Level  Format  Layout                             Instructions
-//   5      R,8     [prefix:5|imm8:8|reg:3]            21: ADDI..SBS
-//   6      R,7     [prefix:6|imm7:7|reg:3]            2: LUI,AUIPC
-//   6      "10"    [prefix:6|imm10:10]                 2: J,JAL
-//   7      R,R,R   [prefix:7|rd:3|rs2:3|rs1:3]        8: ADD..SRA
-//   8      "8"     [prefix:8|imm8:8]                   2: BT,BF
-//   9      R,4     [prefix:9|shamt:4|reg:3]            3: SLLI,SRLI,SRAI
-//  10      R,R     [prefix:10|rd:3|rs:3]               8: LWR..CEQ
-//  11-16   System  (full-width decode)                 11: SEI..STP
+//   Format  Layout (MSB to LSB)                              Instructions
+//   I       [imm8:8|rs/rd:3|opcode:5]                        24 (incl LUI,AUIPC)
+//   B       [imm8:8|funct3:3|opcode:5]                       BT, BF
+//   J       [s:1|imm[6:0]:7|imm[8:7]:2|fn1:1|opcode:5]      J, JAL
+//   R       [fn2:2|rd:3|rs2:3|rs1:3|opcode:5]                R,R,R(8) + R,R(8)
+//   SI      [fn2:2|dc:2|shamt:4|rs/rd:3|opcode:5]            SLLI,SRLI,SRAI
+//   SYS     [sub:8|reg:3|opcode:5]                           11 system insns
 //
-// ADDI has prefix 0000 so that 0x0000 = ADDI R0, 0 = NOP.
+// ADDI has opcode 0 so that 0x0000 = ADDI R0, 0 = NOP.
 // T flag: single-bit condition flag set by comparisons (CLTI, CLTUI, CEQI,
 // CLT, CLTU, CEQ), tested by BT/BF branches. SR = {I, T}; ESR saves SR on INT.
 // ============================================================================
@@ -79,7 +78,7 @@ module riscyv02_execute (
   // Cycle-to-cycle temporary (mem addr, branch target, ALU/shift result).
   // Declared as regs below, captured in the main sequential block.
   reg        carry_r;     // ALU carry (DFF — feeds ci_ext)
-  reg        mem_carry;   // Low-byte all-ones carry for E_MEM_HI increment
+  // mem_carry eliminated: tmp is pre-incremented at E_MEM_LO (registered)
   reg        saved_i_bit; // i_bit save for INT, captured at negedge when fsm_ready
   wire [15:0] tmp = {tmp_hi, tmp_lo};
 
@@ -93,77 +92,78 @@ module riscyv02_execute (
   // Instruction decode: all properties derived directly from ir
   // -------------------------------------------------------------------------
 
-  // --- R,8 format (5-bit prefix @ [15:11]) ---
-  wire is_addi = ir[15:11] == 5'b00000;
-  wire is_li   = ir[15:11] == 5'b00001;
-  wire is_lw   = ir[15:11] == 5'b00010;
-  wire is_lb   = ir[15:11] == 5'b00011;
-  wire is_lbu  = ir[15:11] == 5'b00100;
-  wire is_sw   = ir[15:11] == 5'b00101;
-  wire is_sb   = ir[15:11] == 5'b00110;
-  wire is_jr   = ir[15:11] == 5'b00111;
-  wire is_jalr = ir[15:11] == 5'b01000;
+  // --- I-type (opcode at [4:0]) ---
+  wire is_addi  = ir[4:0] == 5'd0;
+  wire is_li    = ir[4:0] == 5'd1;
+  wire is_lw    = ir[4:0] == 5'd2;
+  wire is_lb    = ir[4:0] == 5'd3;
+  wire is_lbu   = ir[4:0] == 5'd4;
+  wire is_sw    = ir[4:0] == 5'd5;
+  wire is_sb    = ir[4:0] == 5'd6;
+  wire is_jr    = ir[4:0] == 5'd7;
+  wire is_jalr  = ir[4:0] == 5'd8;
+  wire is_andi  = ir[4:0] == 5'd9;
+  wire is_ori   = ir[4:0] == 5'd10;
+  wire is_xori  = ir[4:0] == 5'd11;
+  wire is_clti  = ir[4:0] == 5'd12;
+  wire is_cltui = ir[4:0] == 5'd13;
+  wire is_bz    = ir[4:0] == 5'd14;
+  wire is_bnz   = ir[4:0] == 5'd15;
+  wire is_ceqi  = ir[4:0] == 5'd16;
+  wire is_lw_s  = ir[4:0] == 5'd17;
+  wire is_lb_s  = ir[4:0] == 5'd18;
+  wire is_lbu_s = ir[4:0] == 5'd19;
+  wire is_sw_s  = ir[4:0] == 5'd20;
+  wire is_sb_s  = ir[4:0] == 5'd21;
+  wire is_lui   = ir[4:0] == 5'd22;
+  wire is_auipc = ir[4:0] == 5'd23;
 
+  // --- B-type (opcode 24, funct3 at [7:5]) ---
+  wire is_bt = ir[4:0] == 5'd24 && ir[7:5] == 3'd0;
+  wire is_bf = ir[4:0] == 5'd24 && ir[7:5] == 3'd1;
 
-  wire is_andi  = ir[15:11] == 5'b01001;
-  wire is_ori   = ir[15:11] == 5'b01010;
-  wire is_xori  = ir[15:11] == 5'b01011;
-  wire is_clti  = ir[15:11] == 5'b01100;
-  wire is_cltui = ir[15:11] == 5'b01101;
-  wire is_bz    = ir[15:11] == 5'b01110;
-  wire is_bnz   = ir[15:11] == 5'b01111;
-  wire is_ceqi  = ir[15:11] == 5'b10000;
-  wire is_lw_s  = ir[15:11] == 5'b10001;
-  wire is_lb_s  = ir[15:11] == 5'b10010;
-  wire is_lbu_s = ir[15:11] == 5'b10011;
-  wire is_sw_s  = ir[15:11] == 5'b10100;
-  wire is_sb_s  = ir[15:11] == 5'b10101;
-  // --- "8" format (8-bit prefix @ [15:8], imm8 @ [7:0]) ---
-  wire is_bt = ir[15:8] == 8'b10110_000;
-  wire is_bf = ir[15:8] == 8'b10110_001;
+  // --- J-type (opcode 25, fn1 at [5]) ---
+  wire is_j   = ir[4:0] == 5'd25 && !ir[5];
+  wire is_jal = ir[4:0] == 5'd25 &&  ir[5];
 
-  // --- R,7 / "10" format (6-bit prefix @ [15:10]) ---
-  wire is_lui   = ir[15:10] == 6'b110100;
-  wire is_auipc = ir[15:10] == 6'b110101;
-  wire is_j     = ir[15:10] == 6'b110110;
-  wire is_jal   = ir[15:10] == 6'b110111;
+  // --- R-type (opcodes 26-29, funct2 at [15:14]) ---
+  // R-ALU1 (opcode 26): ADD=00, SUB=01, AND=10, OR=11
+  wire is_add  = ir[4:0] == 5'd26 && ir[15:14] == 2'd0;
+  wire is_sub  = ir[4:0] == 5'd26 && ir[15:14] == 2'd1;
+  wire is_and  = ir[4:0] == 5'd26 && ir[15:14] == 2'd2;
+  wire is_or   = ir[4:0] == 5'd26 && ir[15:14] == 2'd3;
+  // R-ALU2 (opcode 27): XOR=00, SLL=01, SRL=10, SRA=11
+  wire is_xor  = ir[4:0] == 5'd27 && ir[15:14] == 2'd0;
+  wire is_sll  = ir[4:0] == 5'd27 && ir[15:14] == 2'd1;
+  wire is_srl  = ir[4:0] == 5'd27 && ir[15:14] == 2'd2;
+  wire is_sra  = ir[4:0] == 5'd27 && ir[15:14] == 2'd3;
+  // R-MEM (opcode 28): LWR=00, LBR=01, LBUR=10, SWR=11
+  wire is_lw_rr  = ir[4:0] == 5'd28 && ir[15:14] == 2'd0;
+  wire is_lb_rr  = ir[4:0] == 5'd28 && ir[15:14] == 2'd1;
+  wire is_lbu_rr = ir[4:0] == 5'd28 && ir[15:14] == 2'd2;
+  wire is_sw_rr  = ir[4:0] == 5'd28 && ir[15:14] == 2'd3;
+  // R-MISC (opcode 29): SBR=00, CLT=01, CLTU=10, CEQ=11
+  wire is_sb_rr  = ir[4:0] == 5'd29 && ir[15:14] == 2'd0;
+  wire is_clt    = ir[4:0] == 5'd29 && ir[15:14] == 2'd1;
+  wire is_cltu   = ir[4:0] == 5'd29 && ir[15:14] == 2'd2;
+  wire is_ceq    = ir[4:0] == 5'd29 && ir[15:14] == 2'd3;
 
-  // --- R,R,R format (7-bit prefix @ [15:9]) ---
-  wire is_add  = ir[15:9] == 7'b1110000;
-  wire is_sub  = ir[15:9] == 7'b1110001;
-  wire is_and  = ir[15:9] == 7'b1110010;
-  wire is_or   = ir[15:9] == 7'b1110011;
-  wire is_xor  = ir[15:9] == 7'b1110100;
-  wire is_sll  = ir[15:9] == 7'b1110111;
-  wire is_srl  = ir[15:9] == 7'b1111000;
-  wire is_sra  = ir[15:9] == 7'b1111001;
+  // --- SI-type (opcode 30, funct2 at [15:14]) ---
+  wire is_slli = ir[4:0] == 5'd30 && ir[15:14] == 2'd0;
+  wire is_srli = ir[4:0] == 5'd30 && ir[15:14] == 2'd1;
+  wire is_srai = ir[4:0] == 5'd30 && ir[15:14] == 2'd2;
 
-  // --- R,4 format (9-bit prefix @ [15:7]) ---
-  wire is_slli = ir[15:7] == 9'b111101000;
-  wire is_srli = ir[15:7] == 9'b111101001;
-  wire is_srai = ir[15:7] == 9'b111101010;
-
-  // --- R,R format (10-bit prefix @ [15:6]) ---
-  wire is_lw_rr  = ir[15:6] == 10'b1111010110;
-  wire is_lb_rr  = ir[15:6] == 10'b1111010111;
-  wire is_lbu_rr = ir[15:6] == 10'b1111011000;
-  wire is_sw_rr  = ir[15:6] == 10'b1111011001;
-  wire is_sb_rr  = ir[15:6] == 10'b1111011010;
-  wire is_clt    = ir[15:6] == 10'b1111011011;
-  wire is_cltu   = ir[15:6] == 10'b1111011100;
-  wire is_ceq    = ir[15:6] == 10'b1111011101;
-
-  // --- System format (full-width decode) ---
-  wire is_sei  = ir == 16'b1111100000000001;
-  wire is_cli  = ir == 16'b1111100000000010;
-  wire is_reti = ir == 16'b1111100000000011;
-  wire is_wai  = ir == 16'b1111100000000101;
-  wire is_stp  = ir == 16'b1111100000000111;
-  wire is_epcr = ir[15:3] == 13'b1111100000010;
-  wire is_epcw = ir[15:3] == 13'b1111100000011;
-  wire is_srr  = ir[15:3] == 13'b1111100000_101;
-  wire is_srw  = ir[15:3] == 13'b1111100000_001;
-  wire is_int  = ir[15:4] == 12'b1111100000_11;
+  // --- System (opcode 31, sub8 at [15:8]) ---
+  wire is_sei  = ir[4:0] == 5'd31 && ir[15:8] == 8'h01;
+  wire is_cli  = ir[4:0] == 5'd31 && ir[15:8] == 8'h02;
+  wire is_reti = ir[4:0] == 5'd31 && ir[15:8] == 8'h03;
+  wire is_wai  = ir[4:0] == 5'd31 && ir[15:8] == 8'h05;
+  wire is_stp  = ir[4:0] == 5'd31 && ir[15:8] == 8'h07;
+  wire is_srw  = ir[4:0] == 5'd31 && ir[15:8] == 8'h08;
+  wire is_epcr = ir[4:0] == 5'd31 && ir[15:8] == 8'h10;
+  wire is_epcw = ir[4:0] == 5'd31 && ir[15:8] == 8'h18;
+  wire is_srr  = ir[4:0] == 5'd31 && ir[15:8] == 8'h28;
+  wire is_int  = ir[4:0] == 5'd31 && ir[15:14] == 2'b11;
 
   // --- Behavioral groups ---
 
@@ -182,10 +182,10 @@ module riscyv02_execute (
   wire mem_is_byte_store = is_sb || is_sb_rr || is_sb_s;
   wire mem_is_lbu        = is_lbu || is_lbu_rr || is_lbu_s;
 
-  // R,R,R group
-  wire is_rrr = is_add || is_sub || is_and || is_or || is_xor
-              || is_sll || is_srl || is_sra;
+  // ALU R,R,R groups
+  wire is_alu1     = ir[4:0] == 5'd26;   // ADD/SUB/AND/OR
   wire is_alu_rrr  = is_add || is_sub || is_and || is_or || is_xor;
+  wire is_rrr      = is_alu_rrr || is_sll || is_srl || is_sra;
   wire is_shift_rr = is_sll || is_srl || is_sra;
 
   // Shift groups
@@ -237,12 +237,13 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   assign bus_active = is_mem_phase;
 
+  // AB for both E_MEM_LO and E_MEM_HI is just tmp — at E_MEM_LO the
+  // sequential block overwrites tmp with tmp+1, so E_MEM_HI reads the
+  // incremented address with no carry chain on the critical path.
   always @(*) begin
     ab = 16'bx;
-    if (state == E_MEM_LO)
+    if (is_mem_phase)
       ab = tmp;
-    else if (state == E_MEM_HI)
-      ab = {tmp[15:8] + {7'd0, mem_carry}, tmp[7:0] + 8'd1};
   end
 
   always @(*) begin
@@ -261,21 +262,19 @@ module riscyv02_execute (
       w_sel_mux = 4'd8;                                        // INT/EPCW → EPC
     else if (is_jal)
       w_sel_mux = {1'b0, LINK_REG};                            // JAL → R6
-    else if (is_rrr)
-      w_sel_mux = {1'b0, ir[8:6]};                             // R,R,R: rd at [8:6]
-    else if (is_mem_phase && is_rr_load)
-      w_sel_mux = {1'b0, ir[5:3]};                             // R,R loads: rd at [5:3]
+    else if (is_rrr || (is_mem_phase && is_rr_load))
+      w_sel_mux = {1'b0, ir[13:11]};                           // R-type: rd at [13:11]
     else
-      w_sel_mux = {1'b0, ir[2:0]};                             // Default: reg at [2:0]
+      w_sel_mux = {1'b0, ir[7:5]};                             // Default: reg at [7:5]
   end
 
   // r2_sel: read port 2 register select
-  //   Default ir[5:3] works for R,R,R (rs2) and R,R loads/stores (rd/data).
-  //   Override to ir[2:0] for R,9 and SP stores (data reg in R,8 reg field).
+  //   Default ir[10:8] works for R,R,R (rs2), R-type stores (data), and R,R loads (dc).
+  //   Override to ir[7:5] for I-type stores (data reg in I-type reg field).
   reg [2:0] r2_sel;
   always @(*) begin
-    if (is_r9_store || is_sp_store) r2_sel = ir[2:0];
-    else                            r2_sel = ir[5:3];
+    if (is_r9_store || is_sp_store) r2_sel = ir[7:5];
+    else                            r2_sel = ir[10:8];
   end
   reg        r2_hi_r;   // dout byte select: 0=r2[7:0], 1=r2[15:8]
 
@@ -316,7 +315,7 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Barrel shifter
   // -------------------------------------------------------------------------
-  wire [3:0] shamt = is_shift_rr ? r2[3:0] : ir[6:3];
+  wire [3:0] shamt = is_shift_rr ? r2[3:0] : ir[11:8];
 
   reg  [14:0] shifter_din;
   wire [7:0]  shifter_result;
@@ -360,7 +359,7 @@ module riscyv02_execute (
   reg        next_t_bit;
   reg [1:0]  next_esr;
   reg        next_r2_hi_r;
-  reg        next_mem_carry;
+  // next_mem_carry eliminated
   reg [3:0]  next_r1_sel;
 
   // Combinational signal for tmp[7:0] DFF at E_EXEC_LO negedge
@@ -390,7 +389,7 @@ module riscyv02_execute (
     next_t_bit      = t_bit;
     next_esr        = esr;
     next_r2_hi_r    = r2_hi_r;
-    next_mem_carry  = mem_carry;
+    // (mem_carry eliminated)
     next_r1_sel     = r1_sel;
 
     // --- Output defaults ---
@@ -415,9 +414,9 @@ module riscyv02_execute (
           // Deferred to E_EXEC_HI
         end else if (is_r9_load || is_r9_store || is_sp_load || is_sp_store) begin
           // Address: base + sext(imm8), byte offset (no shift)
-          alu_b      = ir[10:3];            // imm[7:0]
+          alu_b      = ir[15:8];            // imm8
         end else if (is_auipc) begin
-          // pc + (sext(imm7) << 9): lo byte is pc + 0
+          // pc + (imm8 << 8): lo byte is pc + 0
           alu_a       = {pc[7:1], 1'b0};
           alu_b       = 8'h00;
           next_tmp_lo = alu_result;
@@ -426,41 +425,41 @@ module riscyv02_execute (
           alu_b      = 8'd0;
         end else if (is_jr_jalr) begin
           // JR/JALR: rs + sext(imm8), no shift
-          alu_b      = ir[10:3];            // imm[7:0]
+          alu_b      = ir[15:8];            // imm8
           // JR same-page: high byte unchanged, 1 exec cycle
-          if (is_jr && (alu_co == ir[10])) begin
+          if (is_jr && (alu_co == ir[15])) begin
             jump            = 1'b1;
             next_pc         = {r1[15:8], alu_result[7:1]};
             insn_completing = 1'b1;
           end
         end else if (is_addi) begin
-          alu_b       = ir[10:3];            // imm[7:0]
+          alu_b       = ir[15:8];            // imm8
           next_tmp_lo = alu_result;
         end else if (is_li) begin
-          next_tmp_lo = ir[10:3];            // imm[7:0]
+          next_tmp_lo = ir[15:8];            // imm8
         end else if (is_alu_rrr) begin
-          alu_op      = ir[11:9];            // ADD=0, SUB=1, AND=2, OR=3, XOR=4
+          alu_op      = is_alu1 ? {1'b0, ir[15:14]} : 3'd4;  // ALU1: mapped, ALU2(XOR): 4
           alu_b       = r2[7:0];
           next_tmp_lo = alu_result;
         end else if (is_andi) begin
           alu_op      = 3'd2;
-          alu_b       = ir[10:3];            // imm8 (zero-extended: hi byte = 0 in HI)
+          alu_b       = ir[15:8];            // imm8 (sign-extended in HI)
           next_tmp_lo = alu_result;
         end else if (is_ori) begin
           alu_op      = 3'd3;
-          alu_b       = ir[10:3];
+          alu_b       = ir[15:8];
           next_tmp_lo = alu_result;
         end else if (is_xori) begin
           alu_op      = 3'd4;
-          alu_b       = ir[10:3];
+          alu_b       = ir[15:8];
           next_tmp_lo = alu_result;
         end else if (is_ceqi) begin
           alu_op      = 3'd4;
-          alu_b       = ir[10:3];
+          alu_b       = ir[15:8];
           next_tmp_lo = alu_result;
         end else if (is_clti || is_cltui) begin
           alu_op     = 3'd1;                // SUB
-          alu_b      = ir[10:3];            // imm8 low byte
+          alu_b      = ir[15:8];            // imm8 low byte
           // No write — just save borrow for E_EXEC_HI
         end else if (is_clt || is_cltu) begin
           alu_op     = 3'd1;                // SUB
@@ -487,30 +486,32 @@ module riscyv02_execute (
             next_tmp_lo = rev8(shifter_result);
           end
         end else if (is_lui) begin
-          next_tmp_lo = 8'h00;           // lo byte = 0 (sext(imm7) << 9)
+          next_tmp_lo = 8'h00;           // lo byte = 0
         end else if (is_branch) begin
+          // BZ/BNZ: ×2 format, pc + sext(imm8) << 1
           alu_a      = {pc[7:1], 1'b0};
-          alu_b      = {ir[3], ir[9:4], 1'b0};  // RISC-V trick: imm[6],imm[5:0],0
+          alu_b      = {ir[14:8], 1'b0};  // imm8[6:0] << 1
           // Same-page taken: high byte unchanged, 1 exec cycle (3 total)
-          if ((!(|r1) ^ is_bnz) && (alu_co == ir[10])) begin
+          if ((!(|r1) ^ is_bnz) && (alu_co == ir[15])) begin
             jump            = 1'b1;
             next_pc         = {pc[15:8], alu_result[7:1]};
             insn_completing = 1'b1;
           end
         end else if (is_t_branch) begin
           alu_a      = {pc[7:1], 1'b0};
-          alu_b      = {ir[6:0], 1'b0};     // imm8[6:0] << 1
+          alu_b      = {ir[14:8], 1'b0};     // imm8[6:0] << 1
           // Same-page taken: high byte unchanged, 1 exec cycle (3 total)
-          if ((t_bit ^ is_bf) && (alu_co == ir[7])) begin
+          if ((t_bit ^ is_bf) && (alu_co == ir[15])) begin
             jump            = 1'b1;
             next_pc         = {pc[15:8], alu_result[7:1]};
             insn_completing = 1'b1;
           end
         end else if (is_jump_imm) begin
+          // J/JAL: ×2 format, shares {ir[14:8], 1'b0} with all branch formats
           alu_a      = {pc[7:1], 1'b0};
-          alu_b      = {ir[6:0], 1'b0};     // imm10[6:0] << 1
+          alu_b      = {ir[14:8], 1'b0};     // imm10[6:0] << 1
           // J same-page (small offset): high byte unchanged, 1 exec cycle
-          if (is_j && ir[8:7] == {2{ir[9]}} && (alu_co == ir[9])) begin
+          if (is_j && ir[7:6] == {2{ir[15]}} && (alu_co == ir[15])) begin
             jump            = 1'b1;
             next_pc         = {pc[15:8], alu_result[7:1]};
             insn_completing = 1'b1;
@@ -531,13 +532,13 @@ module riscyv02_execute (
         if (is_r9_load || is_r9_store || is_sp_load || is_sp_store) begin
           // Address high byte: sign-extend imm bit 7
           alu_a      = r1[15:8];
-          alu_b      = {8{ir[10]}};
+          alu_b      = {8{ir[15]}};
           if (!mem_is_store)
-            next_r1_sel = {1'b0, ir[2:0]};  // data reg readback for loads
+            next_r1_sel = {1'b0, ir[7:5]};  // data reg readback for loads
           next_state = E_MEM_LO;
         end else if (is_auipc) begin
           alu_a           = pc[15:8];
-          alu_b           = {ir[9:3], 1'b0};    // (sext(imm7) << 9) hi byte
+          alu_b           = ir[15:8];            // imm8 = upper byte directly
           w_we            = 1'b1;
           insn_completing = 1'b1;
           next_state      = E_IDLE;
@@ -546,12 +547,12 @@ module riscyv02_execute (
           alu_a      = r1[15:8];
           alu_b      = 8'd0;
           if (!mem_is_store)
-            next_r1_sel = {1'b0, ir[5:3]};  // R,R load dest readback
+            next_r1_sel = {1'b0, ir[13:11]};  // R-type load dest readback
           next_state = E_MEM_LO;
         end else if (is_jr_jalr) begin
           // JR/JALR high byte: sign-extend imm bit 7
           alu_a           = r1[15:8];
-          alu_b           = {8{ir[10]}};
+          alu_b           = {8{ir[15]}};
           jump            = 1'b1;
           next_pc         = {alu_result, tmp[7:1]};
           insn_completing = 1'b1;
@@ -570,53 +571,53 @@ module riscyv02_execute (
             w_data  = {pc, 1'b0};             // EPC = clean return address
             w_we    = 1'b1;
             jump    = 1'b1;
-            next_pc = {13'b0, ir[1:0] + 2'd1};
+            next_pc = {13'b0, ir[7:6] + 2'd1};  // vector at ir[7:6]
             next_esr = {saved_i_bit, t_bit};
           end else begin
           // Execute high byte: completes this cycle
           insn_completing = 1'b1;
           if (is_addi) begin
             alu_a      = r1[15:8];
-            alu_b      = {8{ir[10]}};           // sign-extend imm bit 7
+            alu_b      = {8{ir[15]}};           // sign-extend imm bit 7
             w_we       = 1'b1;
           end else if (is_li) begin
-            w_data = {{8{ir[10]}}, tmp[7:0]};  // sign-extend imm bit 7
+            w_data = {{8{ir[15]}}, tmp[7:0]};  // sign-extend imm bit 7
             w_we   = 1'b1;
           end else if (is_alu_rrr) begin
             alu_a      = r1[15:8];
-            alu_op     = ir[11:9];
+            alu_op     = is_alu1 ? {1'b0, ir[15:14]} : 3'd4;
             alu_b      = r2[15:8];
             w_we       = 1'b1;
           end else if (is_andi) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd2;
-            alu_b      = 8'h00;                 // zero-extend
+            alu_b      = {8{ir[15]}};           // sign-extend
             w_we       = 1'b1;
           end else if (is_ori) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd3;
-            alu_b      = 8'h00;
+            alu_b      = {8{ir[15]}};           // sign-extend
             w_we       = 1'b1;
           end else if (is_xori) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd4;
-            alu_b      = 8'h00;
+            alu_b      = {8{ir[15]}};           // sign-extend
             w_we       = 1'b1;
           end else if (is_ceqi) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd4;
-            alu_b      = {8{ir[10]}};           // sign-extend imm8 bit 7
+            alu_b      = {8{ir[15]}};           // sign-extend imm8 bit 7
             // T = (result == 0): no bits set in lo or hi
             next_t_bit = ~((|tmp[7:0]) || (|alu_result));
           end else if (is_clti) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd1;
-            alu_b      = {8{ir[10]}};           // sign-extend imm8 bit 7
-            next_t_bit = (r1[15] ^ ir[10]) ? r1[15] : alu_result[7];
+            alu_b      = {8{ir[15]}};           // sign-extend imm8 bit 7
+            next_t_bit = (r1[15] ^ ir[15]) ? r1[15] : alu_result[7];
           end else if (is_cltui) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd1;
-            alu_b      = {8{ir[10]}};           // sign-extend for unsigned comparison
+            alu_b      = {8{ir[15]}};           // sign-extend for unsigned comparison
             next_t_bit = ~alu_co;
           end else if (is_clt || is_cltu) begin
             alu_a      = r1[15:8];
@@ -652,11 +653,12 @@ module riscyv02_execute (
               w_we   = 1'b1;
             end
           end else if (is_lui) begin
-            w_data = {{ir[9:3], 1'b0}, tmp[7:0]};  // (sext(imm7) << 9) hi byte
+            w_data = {ir[15:8], tmp[7:0]};  // imm8 IS the upper byte
             w_we   = 1'b1;
           end else if (is_branch) begin
+            // BZ/BNZ HI: sign-extend
             alu_a      = pc[15:8];
-            alu_b      = {8{ir[10]}};           // sign-extend imm8 bit 7
+            alu_b      = {8{ir[15]}};           // sign-extend
             // BZ/BNZ: full 16-bit zero check (r1[15:0] stable, no write in LO)
             if (!(|r1) ^ is_bnz) begin
               jump    = 1'b1;
@@ -664,14 +666,15 @@ module riscyv02_execute (
             end
           end else if (is_t_branch) begin
             alu_a      = pc[15:8];
-            alu_b      = {8{ir[7]}};            // sign-extend imm8 bit 7
+            alu_b      = {8{ir[15]}};            // sign-extend
             if (t_bit ^ is_bf) begin
               jump    = 1'b1;
               next_pc = {alu_result, tmp[7:1]};
             end
           end else if (is_jump_imm) begin
+            // J/JAL HI: sext(imm10[9:7]) = {6{sign}, imm[8], imm[7]}
             alu_a      = pc[15:8];
-            alu_b      = {{6{ir[9]}}, ir[8], ir[7]};  // sext(imm10[9:7])
+            alu_b      = {{6{ir[15]}}, ir[7], ir[6]};  // sext(imm10[9:7])
             jump       = 1'b1;
             next_pc    = {alu_result, tmp[7:1]};
             if (is_jal) begin
@@ -714,7 +717,6 @@ module riscyv02_execute (
           w_we   = 1'b1;
         end
         next_r2_hi_r   = mem_is_store;
-        next_mem_carry = &tmp[7:0];
         next_state     = (mem_is_byte_store || mem_is_byte_load) ? E_IDLE : E_MEM_HI;
       end
 
@@ -733,7 +735,7 @@ module riscyv02_execute (
     // Interrupt entry (overrides state machine)
     // -----------------------------------------------------------------
     if (take_nmi || take_irq) begin
-      next_ir    = {10'b1111100000, 2'b11, 2'b00, !take_nmi, 1'b0};
+      next_ir    = {8'b11000000, !take_nmi, 1'b0, 1'b0, 5'b11111};
       next_i_bit = 1'b1;
       next_r1_sel = 4'd0;  // INT doesn't read r1; don't care
       next_state = E_EXEC_LO;
@@ -746,27 +748,27 @@ module riscyv02_execute (
       next_pc    = pc + 15'd1;
       next_ir    = fetch_ir;
       next_r2_hi_r = 1'b0;
-      if (fetch_ir[15:4] == 12'b1111100000_11)
+      if (fetch_ir[4:0] == 5'd31 && fetch_ir[15:14] == 2'b11)
         next_i_bit = 1'b1;
       // Pre-compute r1_sel for execute phase from incoming instruction.
       // Not timing-critical: computed during E_IDLE, registered at negedge.
-      if (fetch_ir == 16'b1111100000000011        // RETI
-          || fetch_ir[15:3] == 13'b1111100000010) // EPCR
-        next_r1_sel = 4'd8;                       // EPC
-      else if (fetch_ir[15:11] == 5'b00010        // LW
-            || fetch_ir[15:11] == 5'b00011        // LB
-            || fetch_ir[15:11] == 5'b00100        // LBU
-            || fetch_ir[15:11] == 5'b00101        // SW
-            || fetch_ir[15:11] == 5'b00110)       // SB
-        next_r1_sel = 4'd0;                       // R0 base
-      else if (fetch_ir[15:11] == 5'b10001        // LW.S
-            || fetch_ir[15:11] == 5'b10010        // LB.S
-            || fetch_ir[15:11] == 5'b10011        // LBU.S
-            || fetch_ir[15:11] == 5'b10100        // SW.S
-            || fetch_ir[15:11] == 5'b10101)       // SB.S
-        next_r1_sel = 4'd7;                       // SP (R7)
+      if ((fetch_ir[4:0] == 5'd31 && fetch_ir[15:8] == 8'h03)     // RETI
+          || (fetch_ir[4:0] == 5'd31 && fetch_ir[15:8] == 8'h10)) // EPCR
+        next_r1_sel = 4'd8;                                        // EPC
+      else if (fetch_ir[4:0] == 5'd2                               // LW
+            || fetch_ir[4:0] == 5'd3                               // LB
+            || fetch_ir[4:0] == 5'd4                               // LBU
+            || fetch_ir[4:0] == 5'd5                               // SW
+            || fetch_ir[4:0] == 5'd6)                              // SB
+        next_r1_sel = 4'd0;                                        // R0 base
+      else if (fetch_ir[4:0] == 5'd17                              // LW.S
+            || fetch_ir[4:0] == 5'd18                              // LB.S
+            || fetch_ir[4:0] == 5'd19                              // LBU.S
+            || fetch_ir[4:0] == 5'd20                              // SW.S
+            || fetch_ir[4:0] == 5'd21)                             // SB.S
+        next_r1_sel = 4'd7;                                        // SP (R7)
       else
-        next_r1_sel = {1'b0, fetch_ir[2:0]};     // Default: reg at [2:0]
+        next_r1_sel = {1'b0, fetch_ir[7:5]};                      // Default: reg at [7:5]
       next_state = E_EXEC_LO;
     end
 
@@ -787,7 +789,6 @@ module riscyv02_execute (
       t_bit     <= 1'b0;
       esr       <= 2'b10;  // {I=1, T=0}
       r2_hi_r   <= 1'b0;
-      mem_carry <= 1'b0;
       tmp_lo    <= 8'h00;
       tmp_hi    <= 8'h00;
       r1_sel    <= 4'd0;
@@ -800,10 +801,12 @@ module riscyv02_execute (
       t_bit     <= next_t_bit;
       esr       <= next_esr;
       r2_hi_r   <= next_r2_hi_r;
-      mem_carry <= next_mem_carry;
+      // (mem_carry eliminated)
       r1_sel    <= next_r1_sel;
       if (state == E_EXEC_LO) tmp_lo <= next_tmp_lo;
+      else if (state == E_MEM_LO) tmp_lo <= tmp_lo + 8'd1;
       if (state == E_EXEC_HI) tmp_hi <= alu_result;
+      else if (state == E_MEM_LO) tmp_hi <= tmp_hi + {7'd0, &tmp_lo};
     end
   end
 

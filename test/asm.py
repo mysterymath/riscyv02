@@ -5,250 +5,286 @@
 #
 # Contains all instruction encoding functions (canonical source) and the Asm
 # class for building programs with auto-advancing PC and label support.
+#
+# Encoding: RV32I-style 16-bit encoding
+#   Fixed 5-bit opcode at [4:0], register at [7:5], sign at [15].
+#   Immediates at [15:8] with sign always at ir[15].
+#
+#   Format  Layout (MSB→LSB)                                   Used by
+#   ──────  ─────────────────────────────────────────────────   ────────────────
+#   I       [imm8:8|rs/rd:3|opcode:5]                          24 instructions
+#   B       [imm8:8|funct3:3|opcode:5]                         BT, BF
+#   J       [s:1|imm[6:0]:7|imm[8:7]:2|fn1:1|opcode:5]        J, JAL
+#   R       [fn2:2|rd:3|rs2:3|rs1:3|opcode:5]                  R,R,R + R,R
+#   SI      [fn2:2|dc:2|shamt:4|rs/rd:3|opcode:5]              SLLI,SRLI,SRAI
+#   SYS     [sub:8|reg:3|opcode:5]                             11 system insns
 
 __all__ = ['Asm']
 
 
 # ===========================================================================
-# Encoding helpers — variable-width prefix-free encoding
+# Encoding helpers — RV32I-style 16-bit encoding
 # ===========================================================================
 
-# R,8 format: [prefix:5 @ 15:11][imm8:8 @ 10:3][reg:3 @ 2:0]
-def _encode_r8(prefix, imm8, reg):
-    insn = (prefix << 11) | ((imm8 & 0xFF) << 3) | (reg & 0x7)
+# I-type: [imm8:8 @ 15:8][rs/rd:3 @ 7:5][opcode:5 @ 4:0]
+def _encode_i(opcode, imm8, reg):
+    insn = ((imm8 & 0xFF) << 8) | ((reg & 0x7) << 5) | (opcode & 0x1F)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+# B-type: [imm8:8 @ 15:8][funct3:3 @ 7:5][opcode:5 @ 4:0]  opcode=24
+def _encode_b(funct3, imm8):
+    insn = ((imm8 & 0xFF) << 8) | ((funct3 & 0x7) << 5) | 24
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+# J-type: [s:1 @ 15][imm[6:0]:7 @ 14:8][imm[8:7]:2 @ 7:6][fn1:1 @ 5][opcode:5 @ 4:0]
+def _encode_j(funct1, imm10):
+    imm10 &= 0x3FF
+    sign = (imm10 >> 9) & 1
+    imm_lo = imm10 & 0x7F            # imm[6:0] → ir[14:8]
+    imm_hi = (imm10 >> 7) & 0x3      # imm[8:7] → ir[7:6]
+    insn = (sign << 15) | (imm_lo << 8) | (imm_hi << 6) | ((funct1 & 1) << 5) | 25
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+# R-type: [fn2:2 @ 15:14][rd:3 @ 13:11][rs2:3 @ 10:8][rs1:3 @ 7:5][opcode:5 @ 4:0]
+def _encode_r(opcode, funct2, rd, rs2, rs1):
+    insn = ((funct2 & 0x3) << 14) | ((rd & 0x7) << 11) | ((rs2 & 0x7) << 8) \
+         | ((rs1 & 0x7) << 5) | (opcode & 0x1F)
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+# SI-type: [fn2:2 @ 15:14][dc:2 @ 13:12][shamt:4 @ 11:8][rs/rd:3 @ 7:5][opcode:5 @ 4:0]
+def _encode_si(funct2, shamt, reg):
+    insn = ((funct2 & 0x3) << 14) | ((shamt & 0xF) << 8) | ((reg & 0x7) << 5) | 30
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+# SYS-type: [sub:8 @ 15:8][reg:3 @ 7:5][opcode:5 @ 4:0]  opcode=31
+def _encode_sys(sub8, reg=0):
+    insn = ((sub8 & 0xFF) << 8) | ((reg & 0x7) << 5) | 31
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+
+# ---------------------------------------------------------------------------
+# I-type instructions (opcode 0-23)
+# ---------------------------------------------------------------------------
 
 def _encode_addi(rd, imm):
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b00000, imm, rd)
+    return _encode_i(0, imm, rd)
 
 def _encode_li(rd, imm):
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b00001, imm, rd)
+    return _encode_i(1, imm, rd)
 
 def _encode_lw(rd, imm):
     """LW: rd = mem16[R0 + sext(imm)]. Base is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b00010, imm, rd)
+    return _encode_i(2, imm, rd)
 
 def _encode_lb(rd, imm):
     """LB: rd = sext(mem[R0 + sext(imm)]). Base is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b00011, imm, rd)
+    return _encode_i(3, imm, rd)
 
 def _encode_lbu(rd, imm):
     """LBU: rd = zext(mem[R0 + sext(imm)]). Base is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b00100, imm, rd)
+    return _encode_i(4, imm, rd)
 
 def _encode_sw(rs, imm):
     """SW: mem16[R0 + sext(imm)] = rs. Base is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b00101, imm, rs)
+    return _encode_i(5, imm, rs)
 
 def _encode_sb(rs, imm):
     """SB: mem[R0 + sext(imm)] = rs[7:0]. Base is R0."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b00110, imm, rs)
+    return _encode_i(6, imm, rs)
 
 def _encode_jr(rs, imm):
     """JR: pc = rs + sext(imm). Byte offset, no shift."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b00111, imm, rs)
+    return _encode_i(7, imm, rs)
 
 def _encode_jalr(rs, imm):
     """JALR: rs=pc+2; pc = rs + sext(imm). Byte offset, no shift."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b01000, imm, rs)
+    return _encode_i(8, imm, rs)
 
 def _encode_andi(rd, imm):
-    assert 0 <= imm <= 255, f"imm out of range: {imm}"
-    return _encode_r8(0b01001, imm, rd)
+    """ANDI: rd = rd & sext(imm8). All immediates sign-extended."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_i(9, imm, rd)
 
 def _encode_ori(rd, imm):
-    assert 0 <= imm <= 255, f"imm out of range: {imm}"
-    return _encode_r8(0b01010, imm, rd)
+    """ORI: rd = rd | sext(imm8). All immediates sign-extended."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_i(10, imm, rd)
 
 def _encode_xori(rd, imm):
-    assert 0 <= imm <= 255, f"imm out of range: {imm}"
-    return _encode_r8(0b01011, imm, rd)
+    """XORI: rd = rd ^ sext(imm8). All immediates sign-extended."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_i(11, imm, rd)
 
 def _encode_clti(rs, imm):
     """CLTI: T = (rs < sext(imm)). Signed comparison, sets T flag."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b01100, imm, rs)
+    return _encode_i(12, imm, rs)
 
 def _encode_cltui(rs, imm):
     """CLTUI: T = (rs <u sext(imm)). Unsigned comparison, sets T flag."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b01101, imm, rs)
+    return _encode_i(13, imm, rs)
 
 def _encode_bz(rs, imm):
-    """BZ: if rs == 0, pc += sext(imm) << 1.
-
-    RISC-V trick encoding: imm is the half-word offset. Bits are scrambled
-    so that ir[9:4] matches the non-shifted immediate format, reducing the
-    ALU input mux from 8 bits to 2.
-    """
+    """BZ: if rs == 0, pc += sext(imm8) << 1. Half-word offset."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    imm8 = imm & 0xFF
-    scrambled = ((imm8 & 0x80) |          # imm[7] → bit 7 (sign)
-                 ((imm8 & 0x3F) << 1) |   # imm[5:0] → bits [6:1]
-                 ((imm8 >> 6) & 1))       # imm[6] → bit 0
-    return _encode_r8(0b01110, scrambled, rs)
+    return _encode_i(14, imm, rs)
 
 def _encode_bnz(rs, imm):
-    """BNZ: if rs != 0, pc += sext(imm) << 1.
-
-    Same RISC-V trick encoding as BZ.
-    """
+    """BNZ: if rs != 0, pc += sext(imm8) << 1. Half-word offset."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    imm8 = imm & 0xFF
-    scrambled = ((imm8 & 0x80) |          # imm[7] → bit 7 (sign)
-                 ((imm8 & 0x3F) << 1) |   # imm[5:0] → bits [6:1]
-                 ((imm8 >> 6) & 1))       # imm[6] → bit 0
-    return _encode_r8(0b01111, scrambled, rs)
+    return _encode_i(15, imm, rs)
 
 def _encode_ceqi(rs, imm):
     """CEQI: T = (rs == sext(imm)). Equality comparison, sets T flag."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b10000, imm, rs)
-
-def _encode_8(prefix8, imm8):
-    """Encode an 8-bit prefix instruction: [prefix:8|imm8:8]."""
-    insn = (prefix8 << 8) | (imm8 & 0xFF)
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
-
-def _encode_bt(imm):
-    """BT: if T, pc += sext(imm8) << 1."""
-    assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_8(0b10110_000, imm)
-
-def _encode_bf(imm):
-    """BF: if !T, pc += sext(imm8) << 1."""
-    assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_8(0b10110_001, imm)
+    return _encode_i(16, imm, rs)
 
 def _encode_lw_s(rd, imm):
     """LWS: rd = mem16[R7 + sext(imm)]. Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b10001, imm, rd)
+    return _encode_i(17, imm, rd)
 
 def _encode_lb_s(rd, imm):
     """LBS: rd = sext(mem[R7 + sext(imm)]). Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b10010, imm, rd)
+    return _encode_i(18, imm, rd)
 
 def _encode_lbu_s(rd, imm):
     """LBUS: rd = zext(mem[R7 + sext(imm)]). Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b10011, imm, rd)
+    return _encode_i(19, imm, rd)
 
 def _encode_sw_s(rd, imm):
     """SWS: mem16[R7 + sext(imm)] = rd. Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b10100, imm, rd)
+    return _encode_i(20, imm, rd)
 
 def _encode_sb_s(rd, imm):
     """SBS: mem[R7 + sext(imm)] = rd[7:0]. Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_r8(0b10101, imm, rd)
+    return _encode_i(21, imm, rd)
 
-# R,7 format: [prefix:6 @ 15:10][imm7:7 @ 9:3][reg:3 @ 2:0]
-def _encode_r7(prefix, imm7, reg):
-    insn = (prefix << 10) | ((imm7 & 0x7F) << 3) | (reg & 0x7)
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+def _encode_lui(rd, imm8):
+    """LUI: rd = imm8 << 8. Upper byte load."""
+    assert -128 <= imm8 <= 255, f"imm8 out of range: {imm8}"
+    return _encode_i(22, imm8, rd)
 
-def _encode_lui(rd, imm7):
-    """LUI: rd = sext(imm7) << 9."""
-    assert -64 <= imm7 <= 63, f"imm7 out of range: {imm7}"
-    return _encode_r7(0b110100, imm7, rd)
+def _encode_auipc(rd, imm8):
+    """AUIPC: rd = pc + (imm8 << 8). Upper byte add to PC."""
+    assert -128 <= imm8 <= 255, f"imm8 out of range: {imm8}"
+    return _encode_i(23, imm8, rd)
 
-def _encode_auipc(rd, imm7):
-    """AUIPC: rd = pc + (sext(imm7) << 9)."""
-    assert -64 <= imm7 <= 63, f"imm7 out of range: {imm7}"
-    return _encode_r7(0b110101, imm7, rd)
+# ---------------------------------------------------------------------------
+# B-type (opcode 24): BT, BF
+# ---------------------------------------------------------------------------
 
-# "10" format: [prefix:6 @ 15:10][imm10:10 @ 9:0]
-def _encode_10(prefix, imm10):
-    insn = (prefix << 10) | (imm10 & 0x3FF)
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+def _encode_bt(imm):
+    """BT: if T, pc += sext(imm8) << 1."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_b(0, imm)
 
-def _encode_j(imm10):
+def _encode_bf(imm):
+    """BF: if !T, pc += sext(imm8) << 1."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    return _encode_b(1, imm)
+
+# ---------------------------------------------------------------------------
+# J-type (opcode 25): J, JAL
+# ---------------------------------------------------------------------------
+
+def _encode_j_insn(imm10):
     """J: pc += sext(imm10) << 1."""
     assert -512 <= imm10 <= 511, f"imm10 out of range: {imm10}"
-    return _encode_10(0b110110, imm10)
+    return _encode_j(0, imm10)
 
-def _encode_jal(imm10):
+def _encode_jal_insn(imm10):
     """JAL: R6 = pc+2; pc += sext(imm10) << 1. Links to R6."""
     assert -512 <= imm10 <= 511, f"imm10 out of range: {imm10}"
-    return _encode_10(0b110111, imm10)
+    return _encode_j(1, imm10)
 
-# R,R,R format: [prefix:7 @ 15:9][rd:3 @ 8:6][rs2:3 @ 5:3][rs1:3 @ 2:0]
-def _encode_rrr(prefix, rd, rs2, rs1):
-    insn = (prefix << 9) | ((rd & 0x7) << 6) | ((rs2 & 0x7) << 3) | (rs1 & 0x7)
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+# ---------------------------------------------------------------------------
+# R-type (opcodes 26-29)
+# ---------------------------------------------------------------------------
 
-def _encode_add(rd, rs1, rs2):  return _encode_rrr(0b1110000, rd, rs2, rs1)
-def _encode_sub(rd, rs1, rs2):  return _encode_rrr(0b1110001, rd, rs2, rs1)
-def _encode_and_rr(rd, rs1, rs2): return _encode_rrr(0b1110010, rd, rs2, rs1)
-def _encode_or_rr(rd, rs1, rs2):  return _encode_rrr(0b1110011, rd, rs2, rs1)
-def _encode_xor_rr(rd, rs1, rs2): return _encode_rrr(0b1110100, rd, rs2, rs1)
-def _encode_sll(rd, rs1, rs2):  return _encode_rrr(0b1110111, rd, rs2, rs1)
-def _encode_srl(rd, rs1, rs2):  return _encode_rrr(0b1111000, rd, rs2, rs1)
-def _encode_sra(rd, rs1, rs2):  return _encode_rrr(0b1111001, rd, rs2, rs1)
+# R-ALU1 (opcode 26): ADD=00, SUB=01, AND=10, OR=11
+def _encode_add(rd, rs1, rs2):  return _encode_r(26, 0, rd, rs2, rs1)
+def _encode_sub(rd, rs1, rs2):  return _encode_r(26, 1, rd, rs2, rs1)
+def _encode_and_rr(rd, rs1, rs2): return _encode_r(26, 2, rd, rs2, rs1)
+def _encode_or_rr(rd, rs1, rs2):  return _encode_r(26, 3, rd, rs2, rs1)
 
-# R,4 format: [prefix:9 @ 15:7][shamt:4 @ 6:3][reg:3 @ 2:0]
-def _encode_r4(prefix, shamt, reg):
-    insn = (prefix << 7) | ((shamt & 0xF) << 3) | (reg & 0x7)
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+# R-ALU2 (opcode 27): XOR=00, SLL=01, SRL=10, SRA=11
+def _encode_xor_rr(rd, rs1, rs2): return _encode_r(27, 0, rd, rs2, rs1)
+def _encode_sll(rd, rs1, rs2):  return _encode_r(27, 1, rd, rs2, rs1)
+def _encode_srl(rd, rs1, rs2):  return _encode_r(27, 2, rd, rs2, rs1)
+def _encode_sra(rd, rs1, rs2):  return _encode_r(27, 3, rd, rs2, rs1)
 
-def _encode_slli(rd, shamt): return _encode_r4(0b111101000, shamt, rd)
-def _encode_srli(rd, shamt): return _encode_r4(0b111101001, shamt, rd)
-def _encode_srai(rd, shamt): return _encode_r4(0b111101010, shamt, rd)
+# R-MEM (opcode 28): LWR=00, LBR=01, LBUR=10, SWR=11
+# Loads: rd @ [13:11]=dest, rs1 @ [7:5]=addr, rs2=dc
+# Stores: rs2 @ [10:8]=data, rs1 @ [7:5]=addr, rd=dc
+def _encode_lw_rr(rd, rs):  return _encode_r(28, 0, rd, 0, rs)
+def _encode_lb_rr(rd, rs):  return _encode_r(28, 1, rd, 0, rs)
+def _encode_lbu_rr(rd, rs): return _encode_r(28, 2, rd, 0, rs)
+def _encode_sw_rr(data, rs):  return _encode_r(28, 3, 0, data, rs)
 
-# R,R format: [prefix:10 @ 15:6][rd:3 @ 5:3][rs:3 @ 2:0]
-def _encode_rr(prefix, rd, rs):
-    insn = (prefix << 6) | ((rd & 0x7) << 3) | (rs & 0x7)
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+# R-MISC (opcode 29): SBR=00, CLT=01, CLTU=10, CEQ=11
+def _encode_sb_rr(data, rs):  return _encode_r(29, 0, 0, data, rs)
+def _encode_clt(rs1, rs2):  return _encode_r(29, 1, 0, rs2, rs1)
+def _encode_cltu(rs1, rs2): return _encode_r(29, 2, 0, rs2, rs1)
+def _encode_ceq(rs1, rs2):  return _encode_r(29, 3, 0, rs2, rs1)
 
-def _encode_lw_rr(rd, rs):  return _encode_rr(0b1111010110, rd, rs)
-def _encode_lb_rr(rd, rs):  return _encode_rr(0b1111010111, rd, rs)
-def _encode_lbu_rr(rd, rs): return _encode_rr(0b1111011000, rd, rs)
-def _encode_sw_rr(rd, rs):  return _encode_rr(0b1111011001, rd, rs)
-def _encode_sb_rr(rd, rs):  return _encode_rr(0b1111011010, rd, rs)
-def _encode_clt(rs1, rs2):  return _encode_rr(0b1111011011, rs2, rs1)
-def _encode_cltu(rs1, rs2): return _encode_rr(0b1111011100, rs2, rs1)
-def _encode_ceq(rs1, rs2):  return _encode_rr(0b1111011101, rs2, rs1)
+# ---------------------------------------------------------------------------
+# SI-type (opcode 30): SLLI, SRLI, SRAI
+# ---------------------------------------------------------------------------
 
-# System format: [1111100000:10 @ 15:6][sub:6 @ 5:0]
-def _encode_sys(sub):
-    insn = (0b1111100000 << 6) | (sub & 0x3F)
-    return (insn & 0xFF, (insn >> 8) & 0xFF)
+def _encode_slli(rd, shamt): return _encode_si(0, shamt, rd)
+def _encode_srli(rd, shamt): return _encode_si(1, shamt, rd)
+def _encode_srai(rd, shamt): return _encode_si(2, shamt, rd)
 
-def _encode_sei():  return _encode_sys(0b000001)
-def _encode_cli():  return _encode_sys(0b000010)
-def _encode_reti(): return _encode_sys(0b000011)
+# ---------------------------------------------------------------------------
+# System (opcode 31)
+# ---------------------------------------------------------------------------
+
+# sub8 assignments:
+#   0x01=SEI, 0x02=CLI, 0x03=RETI, 0x05=WAI, 0x07=STP
+#   0x08=SRW, 0x10=EPCR, 0x18=EPCW, 0x28=SRR
+#   0xC0+ = INT (ir[15:14]=11, vector at ir[7:6])
+
+def _encode_sei():  return _encode_sys(0x01)
+def _encode_cli():  return _encode_sys(0x02)
+def _encode_reti(): return _encode_sys(0x03)
+def _encode_wai():  return _encode_sys(0x05)
+def _encode_stp():  return _encode_sys(0x07)
 
 def _encode_epcr(rd):
     """EPCR Rd: copy EPC to Rd."""
-    return _encode_sys(0b010_000 | (rd & 0x7))
+    return _encode_sys(0x10, rd)
 
 def _encode_epcw(rs):
     """EPCW Rs: copy Rs to EPC."""
-    return _encode_sys(0b011_000 | (rs & 0x7))
+    return _encode_sys(0x18, rs)
 
 def _encode_srr(rd):
     """SRR Rd: rd = SR ({I, T})."""
-    return _encode_sys(0b101_000 | (rd & 0x7))
+    return _encode_sys(0x28, rd)
 
 def _encode_srw(rs):
     """SRW Rs: SR = rs ({I, T})."""
-    return _encode_sys(0b001_000 | (rs & 0x7))
+    return _encode_sys(0x08, rs)
 
-def _encode_brk():  return _encode_sys(0b11_0001)  # INT, sub[5:4]=11, vector 1 → addr 0x0004
-def _encode_wai():  return _encode_sys(0b000101)
-def _encode_stp():  return _encode_sys(0b000111)
+def _encode_brk():
+    """BRK: INT with vector 1 → handler at $0004.
+    ir[7:6]=01 for vector 1, so reg field [7:5]=010=2."""
+    return _encode_sys(0xC0, 2)
 
 def _encode_nop():
     """NOP = ADDI R0, 0 = 0x0000."""
@@ -256,7 +292,7 @@ def _encode_nop():
 
 def _spin(addr=None):
     """Self-loop: J -1 (pc-relative, works at any address)."""
-    return _encode_j(imm10=-1)
+    return _encode_j_insn(imm10=-1)
 
 
 # ===========================================================================
@@ -292,7 +328,7 @@ class Asm:
         self.prog[self.pc + 1] = (word >> 8) & 0xFF
         self.pc += 2
 
-    # R,8 format
+    # I-type instructions
     def li(self, rd, imm):      self._emit(_encode_li(rd, imm))
     def addi(self, rd, imm):    self._emit(_encode_addi(rd, imm))
     def lw(self, rd, imm):      self._emit(_encode_lw(rd, imm))
@@ -314,10 +350,10 @@ class Asm:
     def lbu_s(self, rd, imm):   self._emit(_encode_lbu_s(rd, imm))
     def sw_s(self, rs, imm):    self._emit(_encode_sw_s(rs, imm))
     def sb_s(self, rs, imm):    self._emit(_encode_sb_s(rs, imm))
-    # R,7 format
-    def lui(self, rd, imm7):    self._emit(_encode_lui(rd, imm7))
-    def auipc(self, rd, imm7):  self._emit(_encode_auipc(rd, imm7))
-    # R,R,R format
+    # LUI / AUIPC (I-type, imm8 << 8)
+    def lui(self, rd, imm8):    self._emit(_encode_lui(rd, imm8))
+    def auipc(self, rd, imm8):  self._emit(_encode_auipc(rd, imm8))
+    # R-type ALU
     def add(self, rd, rs1, rs2):   self._emit(_encode_add(rd, rs1, rs2))
     def sub(self, rd, rs1, rs2):   self._emit(_encode_sub(rd, rs1, rs2))
     def and_(self, rd, rs1, rs2):  self._emit(_encode_and_rr(rd, rs1, rs2))
@@ -326,17 +362,17 @@ class Asm:
     def sll(self, rd, rs1, rs2):   self._emit(_encode_sll(rd, rs1, rs2))
     def srl(self, rd, rs1, rs2):   self._emit(_encode_srl(rd, rs1, rs2))
     def sra(self, rd, rs1, rs2):   self._emit(_encode_sra(rd, rs1, rs2))
-    # R,4 format
+    # SI-type shifts
     def slli(self, rd, shamt):  self._emit(_encode_slli(rd, shamt))
     def srli(self, rd, shamt):  self._emit(_encode_srli(rd, shamt))
     def srai(self, rd, shamt):  self._emit(_encode_srai(rd, shamt))
-    # R,R format
+    # R-type memory
     def lw_rr(self, rd, rs):    self._emit(_encode_lw_rr(rd, rs))
     def lb_rr(self, rd, rs):    self._emit(_encode_lb_rr(rd, rs))
     def lbu_rr(self, rd, rs):   self._emit(_encode_lbu_rr(rd, rs))
     def sw_rr(self, rd, rs):    self._emit(_encode_sw_rr(rd, rs))
     def sb_rr(self, rd, rs):    self._emit(_encode_sb_rr(rd, rs))
-    # R,R comparisons
+    # R-type comparisons
     def clt(self, rs1, rs2):    self._emit(_encode_clt(rs1, rs2))
     def cltu(self, rs1, rs2):   self._emit(_encode_cltu(rs1, rs2))
     def ceq(self, rs1, rs2):    self._emit(_encode_ceq(rs1, rs2))
@@ -387,14 +423,14 @@ class Asm:
             self.fixups.append(('j', self.pc, target))
             self._emit((0, 0))
         else:
-            self._emit(_encode_j(target))
+            self._emit(_encode_j_insn(target))
 
     def jal(self, target):
         if isinstance(target, str):
             self.fixups.append(('jal', self.pc, target))
             self._emit((0, 0))
         else:
-            self._emit(_encode_jal(target))
+            self._emit(_encode_jal_insn(target))
 
     # Pseudo-instructions
     def read_t(self, rd):
@@ -424,7 +460,7 @@ class Asm:
                 _, addr, label = fixup
                 assert label in self.labels, f"undefined label: {label}"
                 imm = (self.labels[label] - addr) // 2 - 1
-                bytepair = (_encode_j if kind == 'j' else _encode_jal)(imm)
+                bytepair = (_encode_j_insn if kind == 'j' else _encode_jal_insn)(imm)
             self.prog[addr] = bytepair[0]
             self.prog[addr + 1] = bytepair[1]
         return self.prog

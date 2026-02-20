@@ -944,3 +944,124 @@ async def test_irq_interrupts_jr(dut):
     jr_marker = _read_ram(dut, 0x0062) | (_read_ram(dut, 0x0063) << 8)
     assert irq_marker == 0x005A, f"IRQ handler didn't run! Got {irq_marker:#06x}"
     assert jr_marker == 0x007E, f"RETI didn't return to JR target! Got {jr_marker:#06x}"
+
+
+@cocotb.test()
+async def test_nmi_during_brk_redirect(dut):
+    """NMI during BRK target fetch: NMI preempts, RETI returns to BRK vector."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    # BRK doesn't set insn_completing in RTL, so NMI can't fire until
+    # one cycle after E_EXEC_HI (at E_IDLE). This test verifies that
+    # NMI during the target fetch correctly preempts and that RETI
+    # returns to the BRK handler.
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset → 0x0020
+    a.org(0x0002)
+    a.jr(7, 0x50)                # 0x0002: NMI → 0x0050
+    a.org(0x0004)
+    a.jr(7, 0x30)                # 0x0004: BRK → 0x0030
+    a.org(0x0006)
+    a.spin()                     # 0x0006: IRQ spin
+    a.org(0x0020)
+    a.brk()                      # 0x0020: BRK triggers
+    a.spin()                     # 0x0022
+    # BRK handler
+    a.org(0x0030)
+    a.li(1, 0x22)                # 0x0030
+    a.sw(1, 0x62)                # 0x0032
+    a.spin()                     # 0x0034
+    # NMI handler
+    a.org(0x0050)
+    a.li(1, 0x11)                # 0x0050
+    a.sw(1, 0x60)                # 0x0052
+    a.reti()                     # 0x0054
+    a.org(0x0060)
+    a.dw(0x0000)
+    a.org(0x0062)
+    a.dw(0x0000)
+
+    _load_program(dut, a.assemble())
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Let BRK dispatch, then pulse NMI during its target fetch
+    await ClockCycles(dut.clk, 30)
+    _set_ui(dut, rdy=True, irqb=True, nmib=False)
+    await ClockCycles(dut.clk, 5)
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    await ClockCycles(dut.clk, 300)
+
+    nmi = _read_ram(dut, 0x0060) | (_read_ram(dut, 0x0061) << 8)
+    brk = _read_ram(dut, 0x0062) | (_read_ram(dut, 0x0063) << 8)
+    assert nmi == 0x0011, f"NMI handler didn't run! Got {nmi:#06x}"
+    assert brk == 0x0022, f"BRK handler didn't run after RETI! Got {brk:#06x}"
+
+
+@cocotb.test()
+async def test_nmi_during_reti_redirect(dut):
+    """NMI during RETI target fetch: NMI preempts, RETI returns to original target."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    # RETI also doesn't set insn_completing. This test verifies NMI
+    # during RETI's target fetch correctly preempts and the second
+    # RETI (from NMI handler) returns to the original RETI target.
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset → 0x0020
+    a.org(0x0002)
+    a.jr(7, 0x50)                # 0x0002: NMI → 0x0050
+    a.org(0x0004)
+    a.spin()                     # 0x0004: BRK spin
+    a.org(0x0006)
+    a.jr(7, 0x40)                # 0x0006: IRQ → 0x0040
+    a.org(0x0020)
+    a.cli()                      # 0x0020
+    a.spin()                     # 0x0022: main loop (spin at 0x0022)
+    a.org(0x0024)
+    a.li(1, 0x55)                # 0x0024: post-spin (unreachable from spin)
+    a.sw(1, 0x64)                # 0x0026
+    a.spin()                     # 0x0028
+    # IRQ handler: store marker, RETI back to 0x0022
+    a.org(0x0040)
+    a.li(1, 0x44)                # 0x0040
+    a.sw(1, 0x62)                # 0x0042
+    a.reti()                     # 0x0044
+    # NMI handler: store marker, RETI
+    a.org(0x0050)
+    a.li(1, 0x33)                # 0x0050
+    a.sw(1, 0x60)                # 0x0052
+    a.reti()                     # 0x0054
+    a.org(0x0060)
+    a.dw(0x0000)
+    a.org(0x0062)
+    a.dw(0x0000)
+
+    _load_program(dut, a.assemble())
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+
+    # Assert IRQ to trigger the handler
+    await ClockCycles(dut.clk, 30)
+    _set_ui(dut, rdy=True, irqb=False, nmib=True)
+    await ClockCycles(dut.clk, 30)
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    await ClockCycles(dut.clk, 50)
+
+    # Pulse NMI — may hit during RETI's target fetch
+    _set_ui(dut, rdy=True, irqb=True, nmib=False)
+    await ClockCycles(dut.clk, 5)
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    await ClockCycles(dut.clk, 300)
+
+    irq = _read_ram(dut, 0x0062) | (_read_ram(dut, 0x0063) << 8)
+    nmi = _read_ram(dut, 0x0060) | (_read_ram(dut, 0x0061) << 8)
+    assert irq == 0x0044, f"IRQ handler didn't run! Got {irq:#06x}"
+    assert nmi == 0x0033, f"NMI handler didn't run! Got {nmi:#06x}"

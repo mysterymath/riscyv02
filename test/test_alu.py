@@ -96,7 +96,7 @@ async def test_addi_basic(dut):
 
 @cocotb.test()
 async def test_logic_imm(dut):
-    """ANDI, ORI, XORI with 8-bit zero-extended immediates."""
+    """ANDI, ORI, XORI with 8-bit sign-extended immediates."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -108,7 +108,7 @@ async def test_logic_imm(dut):
     a.ori(2, 0x03)
     a.sw(2, 0x42)
     a.li(3, 0x55)
-    a.xori(3, 0xAA)
+    a.xori(3, 0x0F)
     a.sw(3, 0x44)
     a.spin()
 
@@ -121,12 +121,12 @@ async def test_logic_imm(dut):
     v3 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
     assert v1 == 0x000F, f"ANDI: expected 0x000F, got {v1:#06x}"
     assert v2 == 0x0013, f"ORI: expected 0x0013, got {v2:#06x}"
-    assert v3 == 0x00FF, f"XORI: expected 0x0055, got {v3:#06x}"
+    assert v3 == 0x005A, f"XORI: expected 0x005A, got {v3:#06x}"
 
 
 @cocotb.test()
 async def test_lui(dut):
-    """LUI: rd = sext(imm7) << 9."""
+    """LUI: rd = imm8 << 8."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -143,8 +143,8 @@ async def test_lui(dut):
 
     v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
     v2 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
-    assert v1 == 0x0200, f"LUI 1: expected 0x0200, got {v1:#06x}"
-    assert v2 == 0xFE00, f"LUI -1: expected 0xFE00, got {v2:#06x}"
+    assert v1 == 0x0100, f"LUI 1: expected 0x0100, got {v1:#06x}"
+    assert v2 == 0xFF00, f"LUI -1: expected 0xFF00, got {v2:#06x}"
 
 
 @cocotb.test()
@@ -207,7 +207,7 @@ async def test_clt_cltu(dut):
 
 @cocotb.test()
 async def test_auipc(dut):
-    """AUIPC: rd = pc + (sext(imm7) << 9)."""
+    """AUIPC: rd = pc + (imm8 << 8)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -363,7 +363,7 @@ async def test_addi_overflow(dut):
 
 @cocotb.test()
 async def test_lui_negative(dut):
-    """LUI with negative imm7: sext(-1) << 9 = 0xFE00."""
+    """LUI with negative imm8: (-1 & 0xFF) << 8 = 0xFF00."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -379,12 +379,12 @@ async def test_lui_negative(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0xFE00, f"LUI -1 failed! Got {val:#06x}"
+    assert val == 0xFF00, f"LUI -1 failed! Got {val:#06x}"
 
 
 @cocotb.test()
 async def test_lui_zero(dut):
-    """LUI with imm7=0: result = 0x0000."""
+    """LUI with imm8=0: result = 0x0000."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -819,13 +819,13 @@ async def test_li_zero(dut):
 
 @cocotb.test()
 async def test_andi_all_ones(dut):
-    """ANDI R1, 0xFF: 0xABCD & 0x00FF = 0x00CD (zero-ext imm8)."""
+    """ANDI R1, 0x0F: 0xABCD & 0x000F = 0x000D (sign-ext imm8)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.lw(1, 0x10)
-    a.andi(1, 0xFF)
+    a.andi(1, 0x0F)
     a.sw(1, 0x40)
     a.spin()
     # Data setup
@@ -839,18 +839,18 @@ async def test_andi_all_ones(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0x00CD, f"Expected 0x00CD, got {val:#06x}"
+    assert val == 0x000D, f"Expected 0x000D, got {val:#06x}"
 
 
 @cocotb.test()
 async def test_ori_all_ones(dut):
-    """ORI R1, 0xFF: 0x1234 | 0x00FF = 0x12FF (zero-ext imm8)."""
+    """ORI R1, 0x0F: 0x1234 | 0x000F = 0x123F (sign-ext imm8)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.lw(1, 0x10)
-    a.ori(1, 0xFF)
+    a.ori(1, 0x0F)
     a.sw(1, 0x40)
     a.spin()
     # Data setup
@@ -864,18 +864,18 @@ async def test_ori_all_ones(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0x12FF, f"Expected 0x12FF, got {val:#06x}"
+    assert val == 0x123F, f"Expected 0x123F, got {val:#06x}"
 
 
 @cocotb.test()
 async def test_xori_all_ones(dut):
-    """XORI R1, 0xFF: 0x1234 ^ 0x00FF = 0x12CB (zero-ext imm8)."""
+    """XORI R1, 0x0F: 0x1234 ^ 0x000F = 0x123B (sign-ext imm8)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.lw(1, 0x10)
-    a.xori(1, 0xFF)
+    a.xori(1, 0x0F)
     a.sw(1, 0x40)
     a.spin()
     # Data setup
@@ -889,7 +889,7 @@ async def test_xori_all_ones(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 300)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0x12CB, f"Expected 0x12CB, got {val:#06x}"
+    assert val == 0x123B, f"Expected 0x123B, got {val:#06x}"
 
 
 @cocotb.test()
@@ -1287,7 +1287,7 @@ async def test_srai_by_15_negative(dut):
 
 @cocotb.test()
 async def test_auipc_positive_offset(dut):
-    """AUIPC with positive imm7: R1 = PC+2 + (1 << 9) = 0x0002 + 0x0200 = 0x0202."""
+    """AUIPC with positive imm8: R1 = PC+2 + (1 << 8) = 0x0002 + 0x0100 = 0x0102."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -1303,12 +1303,12 @@ async def test_auipc_positive_offset(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0x0202, f"Expected 0x0202, got {val:#06x}"
+    assert val == 0x0102, f"Expected 0x0102, got {val:#06x}"
 
 
 @cocotb.test()
 async def test_auipc_negative_offset(dut):
-    """AUIPC at 0x0080 with imm7=-1: R1 = 0x0082 + (-1 << 9) = 0xFE82."""
+    """AUIPC at 0x0080 with imm8=-1: R1 = 0x0082 + (0xFF << 8) = 0xFF82."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -1326,7 +1326,7 @@ async def test_auipc_negative_offset(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 400)
     val = _read_ram(dut, 0x0050) | (_read_ram(dut, 0x0051) << 8)
-    assert val == 0xFE82, f"Expected 0xFE82, got {val:#06x}"
+    assert val == 0xFF82, f"Expected 0xFF82, got {val:#06x}"
 
 
 @cocotb.test()
@@ -1359,7 +1359,7 @@ async def test_auipc_with_lw(dut):
 
 @cocotb.test()
 async def test_auipc_large_imm7(dut):
-    """AUIPC with large imm7 (63): R1 = 0x0002 + (63 << 9) = 0x7E02."""
+    """AUIPC with large imm8 (63): R1 = 0x0002 + (63 << 8) = 0x3F02."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -1375,4 +1375,4 @@ async def test_auipc_large_imm7(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0x7E02, f"Expected 0x7E02, got {val:#06x}"
+    assert val == 0x3F02, f"Expected 0x3F02, got {val:#06x}"
