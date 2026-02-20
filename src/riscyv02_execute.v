@@ -25,8 +25,8 @@
 // ALU input muxes (alu_a, alu_b, alu_op) are extracted as standalone
 // combinational blocks outside the state machine. This makes the format-level
 // muxing structure visible:
-//   alu_a:  2-way (register vs PC) — driven by is_pc_base
-//   alu_b:  4-way LO / 5-way HI   — driven by format groups
+//   alu_a:  4-way LO / 3-way HI — zero, flags, PC, register
+//   alu_b:  4-way LO / 5-way HI — driven by format groups
 //   alu_op: pure instruction function — independent of state
 //
 // ISA encoding: RV32I-style 16-bit encoding
@@ -192,8 +192,8 @@ module riscyv02_execute (
   wire mem_is_lbu        = opcode == 5'd4 || opcode == 5'd19     // LBU/LBU.S
                         || (opcode == 5'd28 && fn2 == 2'd2);     // LBUR
 
-  // I-type ALU write group
-  wire is_i_alu_wr = is_addi || is_andi || is_ori || is_xori;
+  // I-type ALU write group (LI/LUI routed through ALU as ADD 0)
+  wire is_i_alu_wr = is_addi || is_andi || is_ori || is_xori || is_li || is_lui;
 
   // Shift groups
   wire is_shift_imm   = is_slli || is_srli || is_srai;
@@ -323,12 +323,18 @@ module riscyv02_execute (
   // ALU input muxes (format-level, outside state machine)
   // -------------------------------------------------------------------------
 
-  // alu_a: 2-way mux — register byte vs PC byte
+  // alu_a: 4-way LO (zero / flags / PC / reg), 3-way HI (zero / PC / reg)
   always @(*) begin
-    if (alu_new_op)
-      alu_a = is_pc_base ? {pc[7:1], 1'b0} : r1[7:0];
-    else
-      alu_a = is_pc_base ? pc[15:8] : r1[15:8];
+    if (alu_new_op) begin
+      if (is_srr)               alu_a = {6'b0, i_bit, t_bit};
+      else if (is_li || is_lui) alu_a = 8'd0;
+      else if (is_pc_base)      alu_a = {pc[7:1], 1'b0};
+      else                      alu_a = r1[7:0];
+    end else begin
+      if (is_li || is_lui || is_srr) alu_a = 8'd0;
+      else if (is_pc_base)           alu_a = pc[15:8];
+      else                           alu_a = r1[15:8];
+    end
   end
 
   // alu_b: format-level operand select
@@ -340,13 +346,13 @@ module riscyv02_execute (
     if (alu_new_op) begin
       if (is_pc_rel)                  alu_b = branch_lo;
       else if (is_rrr || is_cmp_rr)   alu_b = r2[7:0];
-      else if (is_rr_mem || is_auipc) alu_b = 8'd0;
+      else if (is_rr_mem || is_auipc || is_lui || is_epcr || is_epcw || is_srr) alu_b = 8'd0;
       else                            alu_b = imm8;
     end else begin
       if (is_jump_imm)                alu_b = {{6{ir[15]}}, ir[7], ir[6]};
-      else if (is_auipc)              alu_b = imm8;
+      else if (is_auipc || is_lui)     alu_b = imm8;
       else if (is_rrr || is_cmp_rr)   alu_b = r2[15:8];
-      else if (is_rr_mem)             alu_b = 8'd0;
+      else if (is_rr_mem || is_epcr || is_epcw || is_srr) alu_b = 8'd0;
       else                            alu_b = imm_sext_hi;
     end
   end
@@ -464,8 +470,6 @@ module riscyv02_execute (
             next_pc         = {r1[15:8], alu_result[7:1]};
             insn_completing = 1'b1;
           end
-        end else if (is_li) begin
-          next_tmp_lo = imm8;
         end else if (is_shift) begin
           if (shamt[3]) begin
             // Cross-byte: fill byte for the vacated half
@@ -482,8 +486,6 @@ module riscyv02_execute (
             shifter_din = {7'b0, rev8(r1[7:0])};
             next_tmp_lo = rev8(shifter_result);
           end
-        end else if (is_lui) begin
-          next_tmp_lo = 8'h00;           // lo byte = 0
         end else if (is_pc_rel) begin
           // Same-page taken: high byte unchanged, 1 exec cycle (3 total)
           if (((is_branch   && (!(|r1) ^ opcode[0]))
@@ -543,11 +545,8 @@ module riscyv02_execute (
           end else begin
           // Execute high byte: completes this cycle
           insn_completing = 1'b1;
-          if (is_i_alu_wr || is_alu_rrr) begin
+          if (is_i_alu_wr || is_alu_rrr || is_epcr || is_epcw || is_srr) begin
             w_we = 1'b1;
-          end else if (is_li) begin
-            w_data = {imm_sext_hi, tmp[7:0]};  // sign-extend imm bit 7
-            w_we   = 1'b1;
           end else if (is_cmp_imm || is_cmp_rr) begin
             if (is_ceqi || is_ceq)
               next_t_bit = ~((|tmp[7:0]) || (|alu_result));
@@ -575,9 +574,6 @@ module riscyv02_execute (
               w_data = {rev8(shifter_result), tmp[7:0]};
               w_we   = 1'b1;
             end
-          end else if (is_lui) begin
-            w_data = {imm8, tmp[7:0]};  // imm8 IS the upper byte
-            w_we   = 1'b1;
           end else if (is_pc_rel) begin
             if ((is_branch && (!(|r1) ^ opcode[0]))
              || (is_t_branch && (t_bit ^ ir[5]))
@@ -589,12 +585,6 @@ module riscyv02_execute (
               w_data = {pc, 1'b0};
               w_we   = 1'b1;
             end
-          end else if (is_epcr || is_epcw) begin
-            w_data = r1;
-            w_we   = 1'b1;
-          end else if (is_srr) begin
-            w_data = {14'b0, i_bit, t_bit};
-            w_we   = 1'b1;
           end
           if (is_sei) insn_i_bit = 1'b1;
           if (is_cli) insn_i_bit = 1'b0;
