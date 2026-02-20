@@ -22,6 +22,13 @@
 // mid-instruction. The ALU serializes 8 bits at a time internally; tmp[7:0]
 // holds the lo-byte result between E_EXEC_LO and E_EXEC_HI.
 //
+// ALU input muxes (alu_a, alu_b, alu_op) are extracted as standalone
+// combinational blocks outside the state machine. This makes the format-level
+// muxing structure visible:
+//   alu_a:  2-way (register vs PC) — driven by is_pc_base
+//   alu_b:  4-way LO / 5-way HI   — driven by format groups
+//   alu_op: pure instruction function — independent of state
+//
 // ISA encoding: RV32I-style 16-bit encoding
 // ------------------------------------------
 // Fixed 5-bit opcode at [4:0]. Register rs1/rd at [7:5]. Sign at [15].
@@ -173,6 +180,7 @@ module riscyv02_execute (
   wire is_sp_store = opcode == 5'd20 || opcode == 5'd21;   // SW.S/SB.S
   wire is_rr_load  = opcode == 5'd28 && fn2 != 2'd3;       // LWR/LBR/LBUR
   wire is_rr_store = (opcode == 5'd28 && fn2 == 2'd3) || (opcode == 5'd29 && fn2 == 2'd0); // SWR/SBR
+  wire is_rr_mem   = is_rr_load || is_rr_store;
 
   // Combined memory properties for E_MEM and r_hi
   wire mem_is_store      = is_r9_store || is_rr_store || is_sp_store;
@@ -202,18 +210,8 @@ module riscyv02_execute (
   wire is_pc_rel   = is_branch || is_t_branch || is_jump_imm;
   wire is_jr_jalr  = is_jr || is_jalr;
 
-  // WAI/STP go directly from E_EXEC_LO to E_IDLE (2-cycle, no E_EXEC_HI visit)
-
-  // I-type ALU op mapping (from instruction identity)
-  reg [2:0] i_alu_op;
-  always @(*) begin
-    case (1'b1)
-      is_andi:        i_alu_op = 3'd2;  // AND
-      is_ori:         i_alu_op = 3'd3;  // OR
-      is_xori:        i_alu_op = 3'd4;  // XOR
-      default:        i_alu_op = 3'd0;  // ADD (ADDI)
-    endcase
-  end
+  // ALU source selects (format-level)
+  wire is_pc_base = is_auipc || is_pc_rel;    // alu_a = PC (vs register)
 
   // ==========================================================================
   // Shared Infrastructure
@@ -271,7 +269,7 @@ module riscyv02_execute (
       w_sel_mux = 4'd8;                                        // INT/EPCW → EPC
     else if (is_jal)
       w_sel_mux = {1'b0, LINK_REG};                            // JAL → R6
-    else if (is_rrr || (is_mem_phase && is_rr_load))
+    else if (is_rrr || is_rr_load)
       w_sel_mux = {1'b0, rd_r};                                // R-type: rd at [13:11]
     else
       w_sel_mux = {1'b0, rs1_rd};                              // Default: reg at [7:5]
@@ -322,6 +320,49 @@ module riscyv02_execute (
   );
 
   // -------------------------------------------------------------------------
+  // ALU input muxes (format-level, outside state machine)
+  // -------------------------------------------------------------------------
+
+  // alu_a: 2-way mux — register byte vs PC byte
+  always @(*) begin
+    if (alu_new_op)
+      alu_a = is_pc_base ? {pc[7:1], 1'b0} : r1[7:0];
+    else
+      alu_a = is_pc_base ? pc[15:8] : r1[15:8];
+  end
+
+  // alu_b: format-level operand select
+  //   LO: 4-way — branch_lo / r2 / 0 / imm8
+  //   HI: 5-way — J/JAL sext / imm8(AUIPC) / r2 / 0 / imm_sext_hi
+  //   The J/JAL HI entry (sext of imm10[9:7]) is an encoding wart — it's
+  //   the only instruction with a unique alu_b extraction in HI.
+  always @(*) begin
+    if (alu_new_op) begin
+      if (is_pc_rel)                  alu_b = branch_lo;
+      else if (is_rrr || is_cmp_rr)   alu_b = r2[7:0];
+      else if (is_rr_mem || is_auipc) alu_b = 8'd0;
+      else                            alu_b = imm8;
+    end else begin
+      if (is_jump_imm)                alu_b = {{6{ir[15]}}, ir[7], ir[6]};
+      else if (is_auipc)              alu_b = imm8;
+      else if (is_rrr || is_cmp_rr)   alu_b = r2[15:8];
+      else if (is_rr_mem)             alu_b = 8'd0;
+      else                            alu_b = imm_sext_hi;
+    end
+  end
+
+  // alu_op: pure instruction function (same in LO and HI)
+  always @(*) begin
+    if (is_alu1)                                                alu_op = {1'b0, fn2};
+    else if ((is_alu2 && fn2 == 2'd0) || is_ceqi || is_ceq
+          || is_xori)                                           alu_op = 3'd4;  // XOR
+    else if (is_clti || is_cltui || is_clt || is_cltu)          alu_op = 3'd1;  // SUB
+    else if (is_andi)                                           alu_op = 3'd2;  // AND
+    else if (is_ori)                                            alu_op = 3'd3;  // OR
+    else                                                        alu_op = 3'd0;  // ADD
+  end
+
+  // -------------------------------------------------------------------------
   // Barrel shifter
   // -------------------------------------------------------------------------
   wire [3:0] shamt = is_shift_rr ? r2[3:0] : ir[11:8];
@@ -368,11 +409,13 @@ module riscyv02_execute (
   reg        next_t_bit;
   reg [1:0]  next_esr;
   reg        next_r2_hi_r;
-  // next_mem_carry eliminated
   reg [3:0]  next_r1_sel;
 
   // Combinational signal for tmp[7:0] DFF at E_EXEC_LO negedge
   reg [7:0]  next_tmp_lo;
+
+  // Comparison sign-of-B: ir[15] for I-type, r2[15] for R-type
+  wire cmp_b_sign = is_cmp_rr ? r2[15] : ir[15];
 
   // Interrupt control
   wire fsm_ready = (state == E_IDLE) || insn_completing;
@@ -398,13 +441,9 @@ module riscyv02_execute (
     next_t_bit      = t_bit;
     next_esr        = esr;
     next_r2_hi_r    = r2_hi_r;
-    // (mem_carry eliminated)
     next_r1_sel     = r1_sel;
 
     // --- Output defaults ---
-    alu_a           = r1[7:0];
-    alu_b           = 8'bx;
-    alu_op          = 3'd0;    // ADD
     w_data          = {alu_result, tmp[7:0]};
     w_we            = 1'b0;
     insn_completing = 1'b0;
@@ -415,58 +454,18 @@ module riscyv02_execute (
 
     case (state)
       E_EXEC_LO: begin
-        if (is_reti) begin
-          // EPC available on r1[15:0]; no action needed in LO
-        end else if (is_int) begin
-          // Deferred to E_EXEC_HI
-        end else if (is_epcr || is_epcw || is_srr || is_srw) begin
-          // Deferred to E_EXEC_HI
-        end else if (is_r9_load || is_r9_store || is_sp_load || is_sp_store) begin
-          // Address: base + sext(imm8), byte offset (no shift)
-          alu_b      = imm8;
-        end else if (is_auipc) begin
-          // pc + (imm8 << 8): lo byte is pc + 0
-          alu_a       = {pc[7:1], 1'b0};
-          alu_b       = 8'h00;
-          next_tmp_lo = alu_result;
-        end else if (is_rr_load || is_rr_store) begin
-          // Address = rs, no offset
-          alu_b      = 8'd0;
-        end else if (is_jr_jalr) begin
-          // JR/JALR: rs + sext(imm8), no shift
-          alu_b      = imm8;
+        // Most instructions just let the format-level ALU muxes compute
+        // their result into tmp_lo (default: next_tmp_lo = alu_result).
+        // Only instructions with non-ALU behavior need explicit blocks.
+        if (is_jr_jalr) begin
           // JR same-page: high byte unchanged, 1 exec cycle
           if (is_jr && (alu_co == ir[15])) begin
             jump            = 1'b1;
             next_pc         = {r1[15:8], alu_result[7:1]};
             insn_completing = 1'b1;
           end
-        end else if (is_i_alu_wr) begin
-          alu_op      = i_alu_op;
-          alu_b       = imm8;
-          next_tmp_lo = alu_result;
         end else if (is_li) begin
           next_tmp_lo = imm8;
-        end else if (is_alu_rrr) begin
-          alu_op      = is_alu1 ? {1'b0, fn2} : 3'd4;  // ALU1: mapped, ALU2(XOR): 4
-          alu_b       = r2[7:0];
-          next_tmp_lo = alu_result;
-        end else if (is_ceqi) begin
-          alu_op      = 3'd4;
-          alu_b       = imm8;
-          next_tmp_lo = alu_result;
-        end else if (is_clti || is_cltui) begin
-          alu_op     = 3'd1;                // SUB
-          alu_b      = imm8;
-          // No write — just save borrow for E_EXEC_HI
-        end else if (is_clt || is_cltu) begin
-          alu_op     = 3'd1;                // SUB
-          alu_b      = r2[7:0];
-          // No write — just save borrow for E_EXEC_HI
-        end else if (is_ceq) begin
-          alu_op      = 3'd4;               // XOR
-          alu_b       = r2[7:0];
-          next_tmp_lo = alu_result;
         end else if (is_shift) begin
           if (shamt[3]) begin
             // Cross-byte: fill byte for the vacated half
@@ -486,9 +485,6 @@ module riscyv02_execute (
         end else if (is_lui) begin
           next_tmp_lo = 8'h00;           // lo byte = 0
         end else if (is_pc_rel) begin
-          // BZ/BNZ + BT/BF + J/JAL: ×2 format, pc + sext(offset) << 1
-          alu_a      = {pc[7:1], 1'b0};
-          alu_b      = branch_lo;
           // Same-page taken: high byte unchanged, 1 exec cycle (3 total)
           if (((is_branch   && (!(|r1) ^ opcode[0]))
             || (is_t_branch && (t_bit ^ ir[5]))
@@ -512,29 +508,18 @@ module riscyv02_execute (
 
       E_EXEC_HI: begin
         if (is_r9_load || is_r9_store || is_sp_load || is_sp_store) begin
-          // Address high byte: sign-extend imm bit 7
-          alu_a      = r1[15:8];
-          alu_b      = imm_sext_hi;
           if (!mem_is_store)
             next_r1_sel = {1'b0, rs1_rd};  // data reg readback for loads
           next_state = E_MEM_LO;
         end else if (is_auipc) begin
-          alu_a           = pc[15:8];
-          alu_b           = imm8;            // imm8 = upper byte directly
           w_we            = 1'b1;
           insn_completing = 1'b1;
           next_state      = E_IDLE;
-        end else if (is_rr_load || is_rr_store) begin
-          // Address high byte: carry propagation only
-          alu_a      = r1[15:8];
-          alu_b      = 8'd0;
+        end else if (is_rr_mem) begin
           if (!mem_is_store)
             next_r1_sel = {1'b0, rd_r};  // R-type load dest readback
           next_state = E_MEM_LO;
         end else if (is_jr_jalr) begin
-          // JR/JALR high byte: sign-extend imm bit 7
-          alu_a           = r1[15:8];
-          alu_b           = imm_sext_hi;
           jump            = 1'b1;
           next_pc         = {alu_result, tmp[7:1]};
           insn_completing = 1'b1;
@@ -558,41 +543,18 @@ module riscyv02_execute (
           end else begin
           // Execute high byte: completes this cycle
           insn_completing = 1'b1;
-          if (is_i_alu_wr) begin
-            alu_a  = r1[15:8];
-            alu_op = i_alu_op;
-            alu_b  = imm_sext_hi;
-            w_we   = 1'b1;
+          if (is_i_alu_wr || is_alu_rrr) begin
+            w_we = 1'b1;
           end else if (is_li) begin
             w_data = {imm_sext_hi, tmp[7:0]};  // sign-extend imm bit 7
             w_we   = 1'b1;
-          end else if (is_alu_rrr) begin
-            alu_a      = r1[15:8];
-            alu_op     = is_alu1 ? {1'b0, fn2} : 3'd4;
-            alu_b      = r2[15:8];
-            w_we       = 1'b1;
-          end else if (is_cmp_imm) begin
-            alu_a      = r1[15:8];
-            alu_b      = imm_sext_hi;
-            if (is_ceqi) begin
-              alu_op     = 3'd4;
+          end else if (is_cmp_imm || is_cmp_rr) begin
+            if (is_ceqi || is_ceq)
               next_t_bit = ~((|tmp[7:0]) || (|alu_result));
-            end else begin
-              alu_op     = 3'd1;
-              if (is_cltui) next_t_bit = ~alu_co;
-              else          next_t_bit = (r1[15] ^ ir[15]) ? r1[15] : alu_result[7];
-            end
-          end else if (is_cmp_rr) begin
-            alu_a      = r1[15:8];
-            alu_b      = r2[15:8];
-            if (is_ceq) begin
-              alu_op     = 3'd4;
-              next_t_bit = ~((|tmp[7:0]) || (|alu_result));
-            end else begin
-              alu_op     = 3'd1;
-              if (is_cltu) next_t_bit = ~alu_co;
-              else         next_t_bit = (r1[15] ^ r2[15]) ? r1[15] : alu_result[7];
-            end
+            else if (is_cltui || is_cltu)
+              next_t_bit = ~alu_co;
+            else
+              next_t_bit = (r1[15] ^ cmp_b_sign) ? r1[15] : alu_result[7];
           end else if (is_shift) begin
             if (shamt[3]) begin
               if (is_right_shift) begin
@@ -616,19 +578,13 @@ module riscyv02_execute (
           end else if (is_lui) begin
             w_data = {imm8, tmp[7:0]};  // imm8 IS the upper byte
             w_we   = 1'b1;
-          end else if (is_branch || is_t_branch) begin
-            alu_a      = pc[15:8];
-            alu_b      = imm_sext_hi;
-            if (is_branch ? (!(|r1) ^ opcode[0]) : (t_bit ^ ir[5])) begin
+          end else if (is_pc_rel) begin
+            if ((is_branch && (!(|r1) ^ opcode[0]))
+             || (is_t_branch && (t_bit ^ ir[5]))
+             || is_jump_imm) begin
               jump    = 1'b1;
               next_pc = {alu_result, tmp[7:1]};
             end
-          end else if (is_jump_imm) begin
-            // J/JAL HI: sext(imm10[9:7]) = {6{sign}, imm[8], imm[7]}
-            alu_a      = pc[15:8];
-            alu_b      = {{6{ir[15]}}, ir[7], ir[6]};  // sext(imm10[9:7])
-            jump       = 1'b1;
-            next_pc    = {alu_result, tmp[7:1]};
             if (is_jal) begin
               w_data = {pc, 1'b0};
               w_we   = 1'b1;
@@ -745,7 +701,6 @@ module riscyv02_execute (
       t_bit     <= next_t_bit;
       esr       <= next_esr;
       r2_hi_r   <= next_r2_hi_r;
-      // (mem_carry eliminated)
       r1_sel    <= next_r1_sel;
       if (state == E_EXEC_LO) tmp_lo <= next_tmp_lo;
       else if (state == E_MEM_LO) tmp_lo <= tmp_lo + 8'd1;
