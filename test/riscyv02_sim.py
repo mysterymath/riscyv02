@@ -369,11 +369,11 @@ class RISCYV02Sim:
 
             if prefix5 == 0b01110:      # BZ
                 scrambled = imm8_raw
-                off = (((scrambled >> 7) & 1) << 7 |
+                imm = (((scrambled >> 7) & 1) << 7 |
                        (scrambled & 1) << 6 |
                        (scrambled >> 1) & 0x3F)
                 if self.regs[rs_idx] == 0:
-                    target = (next_pc + sext8(off) * 2) & 0xFFFF
+                    target = (next_pc + sext8(imm) * 2) & 0xFFFF
                     self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
                     self.pc = target
                     self._redirect = True
@@ -381,11 +381,11 @@ class RISCYV02Sim:
 
             if prefix5 == 0b01111:      # BNZ
                 scrambled = imm8_raw
-                off = (((scrambled >> 7) & 1) << 7 |
+                imm = (((scrambled >> 7) & 1) << 7 |
                        (scrambled & 1) << 6 |
                        (scrambled >> 1) & 0x3F)
                 if self.regs[rs_idx] != 0:
-                    target = (next_pc + sext8(off) * 2) & 0xFFFF
+                    target = (next_pc + sext8(imm) * 2) & 0xFFFF
                     self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
                     self.pc = target
                     self._redirect = True
@@ -426,17 +426,17 @@ class RISCYV02Sim:
             # --- "8" format: BT/BF (8-bit prefix, no register field) ---
             if prefix5 == 0b10110:
                 prefix8 = ir >> 8
-                off8 = ir & 0xFF
+                imm8 = ir & 0xFF
                 if prefix8 == 0b10110_000:      # BT
                     if self.t_bit:
-                        target = (next_pc + sext8(off8) * 2) & 0xFFFF
+                        target = (next_pc + sext8(imm8) * 2) & 0xFFFF
                         self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
                         self.pc = target
                         self._redirect = True
                     return []
                 if prefix8 == 0b10110_001:      # BF
                     if not self.t_bit:
-                        target = (next_pc + sext8(off8) * 2) & 0xFFFF
+                        target = (next_pc + sext8(imm8) * 2) & 0xFFFF
                         self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
                         self.pc = target
                         self._redirect = True
@@ -465,20 +465,20 @@ class RISCYV02Sim:
         # "10" format (6-bit prefix): J, JAL
         # =================================================================
         if prefix6 == 0b110110:     # J
-            off10 = ir & 0x3FF
-            target = (next_pc + sext10(off10) * 2) & 0xFFFF
-            # Same-page for small offsets (high byte is pure sign extension)
-            off_bytes = sext10(off10) * 2
-            is_small = -256 <= off_bytes <= 254
+            imm10 = ir & 0x3FF
+            target = (next_pc + sext10(imm10) * 2) & 0xFFFF
+            # Same-page for small offset (high byte is pure sign extension)
+            imm_bytes = sext10(imm10) * 2
+            is_small = -256 <= imm_bytes <= 254
             self._fast_redirect = is_small and (next_pc & 0xFF00) == (target & 0xFF00)
             self.pc = target
             self._redirect = True
             return []
 
         if prefix6 == 0b110111:     # JAL (link to R6)
-            off10 = ir & 0x3FF
+            imm10 = ir & 0x3FF
             self.regs[6] = next_pc
-            self.pc = (next_pc + sext10(off10) * 2) & 0xFFFF
+            self.pc = (next_pc + sext10(imm10) * 2) & 0xFFFF
             self._redirect = True
             return []
 

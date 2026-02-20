@@ -31,7 +31,7 @@
 //   6      R,7     [prefix:6|imm7:7|reg:3]            2: LUI,AUIPC
 //   6      "10"    [prefix:6|imm10:10]                 2: J,JAL
 //   7      R,R,R   [prefix:7|rd:3|rs2:3|rs1:3]        8: ADD..SRA
-//   8      "8"     [prefix:8|off8:8]                   2: BT,BF
+//   8      "8"     [prefix:8|imm8:8]                   2: BT,BF
 //   9      R,4     [prefix:9|shamt:4|reg:3]            3: SLLI,SRLI,SRAI
 //  10      R,R     [prefix:10|rd:3|rs:3]               8: LWR..CEQ
 //  11-16   System  (full-width decode)                 11: SEI..STP
@@ -118,7 +118,7 @@ module riscyv02_execute (
   wire is_lbu_s = ir[15:11] == 5'b10011;
   wire is_sw_s  = ir[15:11] == 5'b10100;
   wire is_sb_s  = ir[15:11] == 5'b10101;
-  // --- "8" format (8-bit prefix @ [15:8], offset @ [7:0]) ---
+  // --- "8" format (8-bit prefix @ [15:8], imm8 @ [7:0]) ---
   wire is_bt = ir[15:8] == 8'b10110_000;
   wire is_bf = ir[15:8] == 8'b10110_001;
 
@@ -425,7 +425,7 @@ module riscyv02_execute (
           // Address = rs, no offset
           alu_b      = 8'd0;
         end else if (is_jr_jalr) begin
-          // JR/JALR: rs + sext(imm8) (byte offset, no shift)
+          // JR/JALR: rs + sext(imm8), no shift
           alu_b      = ir[10:3];            // imm[7:0]
           // JR same-page: high byte unchanged, 1 exec cycle
           if (is_jr && (alu_co == ir[10])) begin
@@ -490,7 +490,7 @@ module riscyv02_execute (
           next_tmp_lo = 8'h00;           // lo byte = 0 (sext(imm7) << 9)
         end else if (is_branch) begin
           alu_a      = {pc[7:1], 1'b0};
-          alu_b      = {ir[3], ir[9:4], 1'b0};  // RISC-V trick: off[6],off[5:0],0
+          alu_b      = {ir[3], ir[9:4], 1'b0};  // RISC-V trick: imm[6],imm[5:0],0
           // Same-page taken: high byte unchanged, 1 exec cycle (3 total)
           if ((!(|r1) ^ is_bnz) && (alu_co == ir[10])) begin
             jump            = 1'b1;
@@ -499,7 +499,7 @@ module riscyv02_execute (
           end
         end else if (is_t_branch) begin
           alu_a      = {pc[7:1], 1'b0};
-          alu_b      = {ir[6:0], 1'b0};     // off8[6:0] << 1
+          alu_b      = {ir[6:0], 1'b0};     // imm8[6:0] << 1
           // Same-page taken: high byte unchanged, 1 exec cycle (3 total)
           if ((t_bit ^ is_bf) && (alu_co == ir[7])) begin
             jump            = 1'b1;
@@ -508,7 +508,7 @@ module riscyv02_execute (
           end
         end else if (is_jump_imm) begin
           alu_a      = {pc[7:1], 1'b0};
-          alu_b      = {ir[6:0], 1'b0};     // off10[6:0] << 1
+          alu_b      = {ir[6:0], 1'b0};     // imm10[6:0] << 1
           // J same-page (small offset): high byte unchanged, 1 exec cycle
           if (is_j && ir[8:7] == {2{ir[9]}} && (alu_co == ir[9])) begin
             jump            = 1'b1;
@@ -656,7 +656,7 @@ module riscyv02_execute (
             w_we   = 1'b1;
           end else if (is_branch) begin
             alu_a      = pc[15:8];
-            alu_b      = {8{ir[10]}};           // sign-extend off8 bit 7
+            alu_b      = {8{ir[10]}};           // sign-extend imm8 bit 7
             // BZ/BNZ: full 16-bit zero check (r1[15:0] stable, no write in LO)
             if (!(|r1) ^ is_bnz) begin
               jump    = 1'b1;
@@ -664,14 +664,14 @@ module riscyv02_execute (
             end
           end else if (is_t_branch) begin
             alu_a      = pc[15:8];
-            alu_b      = {8{ir[7]}};            // sign-extend off8 bit 7
+            alu_b      = {8{ir[7]}};            // sign-extend imm8 bit 7
             if (t_bit ^ is_bf) begin
               jump    = 1'b1;
               next_pc = {alu_result, tmp[7:1]};
             end
           end else if (is_jump_imm) begin
             alu_a      = pc[15:8];
-            alu_b      = {{6{ir[9]}}, ir[8], ir[7]};  // sext(off10[9:7])
+            alu_b      = {{6{ir[9]}}, ir[8], ir[7]};  // sext(imm10[9:7])
             jump       = 1'b1;
             next_pc    = {alu_result, tmp[7:1]};
             if (is_jal) begin

@@ -91,10 +91,10 @@ def _encode_bz(rs, imm):
     ALU input mux from 8 bits to 2.
     """
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    off = imm & 0xFF
-    scrambled = ((off & 0x80) |          # off[7] → bit 7 (sign)
-                 ((off & 0x3F) << 1) |   # off[5:0] → bits [6:1]
-                 ((off >> 6) & 1))       # off[6] → bit 0
+    imm8 = imm & 0xFF
+    scrambled = ((imm8 & 0x80) |          # imm[7] → bit 7 (sign)
+                 ((imm8 & 0x3F) << 1) |   # imm[5:0] → bits [6:1]
+                 ((imm8 >> 6) & 1))       # imm[6] → bit 0
     return _encode_r8(0b01110, scrambled, rs)
 
 def _encode_bnz(rs, imm):
@@ -103,10 +103,10 @@ def _encode_bnz(rs, imm):
     Same RISC-V trick encoding as BZ.
     """
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    off = imm & 0xFF
-    scrambled = ((off & 0x80) |          # off[7] → bit 7 (sign)
-                 ((off & 0x3F) << 1) |   # off[5:0] → bits [6:1]
-                 ((off >> 6) & 1))       # off[6] → bit 0
+    imm8 = imm & 0xFF
+    scrambled = ((imm8 & 0x80) |          # imm[7] → bit 7 (sign)
+                 ((imm8 & 0x3F) << 1) |   # imm[5:0] → bits [6:1]
+                 ((imm8 >> 6) & 1))       # imm[6] → bit 0
     return _encode_r8(0b01111, scrambled, rs)
 
 def _encode_ceqi(rs, imm):
@@ -114,18 +114,18 @@ def _encode_ceqi(rs, imm):
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b10000, imm, rs)
 
-def _encode_8(prefix8, off8):
-    """Encode an 8-bit prefix instruction: [prefix:8|off8:8]."""
-    insn = (prefix8 << 8) | (off8 & 0xFF)
+def _encode_8(prefix8, imm8):
+    """Encode an 8-bit prefix instruction: [prefix:8|imm8:8]."""
+    insn = (prefix8 << 8) | (imm8 & 0xFF)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 def _encode_bt(imm):
-    """BT: if T, pc += sext(off8) << 1."""
+    """BT: if T, pc += sext(imm8) << 1."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_8(0b10110_000, imm)
 
 def _encode_bf(imm):
-    """BF: if !T, pc += sext(off8) << 1."""
+    """BF: if !T, pc += sext(imm8) << 1."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_8(0b10110_001, imm)
 
@@ -174,15 +174,15 @@ def _encode_10(prefix, imm10):
     insn = (prefix << 10) | (imm10 & 0x3FF)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
-def _encode_j(off10):
-    """J: pc += sext(off10) << 1."""
-    assert -512 <= off10 <= 511, f"off10 out of range: {off10}"
-    return _encode_10(0b110110, off10)
+def _encode_j(imm10):
+    """J: pc += sext(imm10) << 1."""
+    assert -512 <= imm10 <= 511, f"imm10 out of range: {imm10}"
+    return _encode_10(0b110110, imm10)
 
-def _encode_jal(off10):
-    """JAL: R6 = pc+2; pc += sext(off10) << 1. Links to R6."""
-    assert -512 <= off10 <= 511, f"off10 out of range: {off10}"
-    return _encode_10(0b110111, off10)
+def _encode_jal(imm10):
+    """JAL: R6 = pc+2; pc += sext(imm10) << 1. Links to R6."""
+    assert -512 <= imm10 <= 511, f"imm10 out of range: {imm10}"
+    return _encode_10(0b110111, imm10)
 
 # R,R,R format: [prefix:7 @ 15:9][rd:3 @ 8:6][rs2:3 @ 5:3][rs1:3 @ 2:0]
 def _encode_rrr(prefix, rd, rs2, rs1):
@@ -256,7 +256,7 @@ def _encode_nop():
 
 def _spin(addr=None):
     """Self-loop: J -1 (pc-relative, works at any address)."""
-    return _encode_j(off10=-1)
+    return _encode_j(imm10=-1)
 
 
 # ===========================================================================
@@ -413,18 +413,18 @@ class Asm:
             if kind in ('bz', 'bnz'):
                 _, addr, rs, label = fixup
                 assert label in self.labels, f"undefined label: {label}"
-                off = (self.labels[label] - addr) // 2 - 1
-                bytepair = (_encode_bz if kind == 'bz' else _encode_bnz)(rs, off)
+                imm = (self.labels[label] - addr) // 2 - 1
+                bytepair = (_encode_bz if kind == 'bz' else _encode_bnz)(rs, imm)
             elif kind in ('bt', 'bf'):
                 _, addr, label = fixup
                 assert label in self.labels, f"undefined label: {label}"
-                off = (self.labels[label] - addr) // 2 - 1
-                bytepair = (_encode_bt if kind == 'bt' else _encode_bf)(off)
+                imm = (self.labels[label] - addr) // 2 - 1
+                bytepair = (_encode_bt if kind == 'bt' else _encode_bf)(imm)
             elif kind in ('j', 'jal'):
                 _, addr, label = fixup
                 assert label in self.labels, f"undefined label: {label}"
-                off = (self.labels[label] - addr) // 2 - 1
-                bytepair = (_encode_j if kind == 'j' else _encode_jal)(off)
+                imm = (self.labels[label] - addr) // 2 - 1
+                bytepair = (_encode_j if kind == 'j' else _encode_jal)(imm)
             self.prog[addr] = bytepair[0]
             self.prog[addr + 1] = bytepair[1]
         return self.prog

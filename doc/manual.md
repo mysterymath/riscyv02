@@ -143,9 +143,9 @@ All instructions are 16 bits. The encoding uses a **variable-width prefix-free**
 | Format | Prefix | Layout | Used |
 |---|---|---|---|
 | R,8 | 5-bit | `[imm8:8\|reg:3]` | 22 |
-| B,8 | 8-bit | `[off8:8]` | 2 |
+| B,8 | 8-bit | `[imm8:8]` | 2 |
 | R,7 | 6-bit | `[imm7:7\|reg:3]` | 2 |
-| "10" | 6-bit | `[off10:10]` | 2 |
+| "10" | 6-bit | `[imm10:10]` | 2 |
 | R,R,R | 7-bit | `[rd:3\|rs2:3\|rs1:3]` | 8 |
 | R,4 | 9-bit | `[shamt:4\|reg:3]` | 3 |
 | R,R | 10-bit | `[rd:3\|rs:3]` | 8 |
@@ -182,16 +182,16 @@ Fields are packed MSB-first: prefix at top, register at LSB. One R,8 uses the sp
 10101   SBS    mem[R7 + sext(imm8)] = rs[7:0]
 
 --- B,8 format (8-bit prefix, occupies prefix 10110) ---
-10110000  BT    if T == 1, pc += sext(off8) << 1
-10110001  BF    if T == 0, pc += sext(off8) << 1
+10110000  BT    if T == 1, pc += sext(imm8) << 1
+10110001  BF    if T == 0, pc += sext(imm8) << 1
 
 --- R,7 format (6-bit prefix) ---
 110100  LUI     rd = sext(imm7) << 9
 110101  AUIPC   rd = pc + (sext(imm7) << 9)
 
 --- "10" format (6-bit prefix) ---
-110110  J       pc += sext(off10) << 1
-110111  JAL     R6 = pc+2; pc += sext(off10) << 1
+110110  J       pc += sext(imm10) << 1
+110111  JAL     R6 = pc+2; pc += sext(imm10) << 1
 
 --- R,R,R format (7-bit prefix) ---
 1110000 ADD     rd = rs1 + rs2
@@ -324,13 +324,13 @@ Compares the source register against a sign-extended 8-bit immediate as unsigned
 
 #### BZ -- Branch if Zero
 
-`if rs == 0: PC += sext(off8) << 1` -- 2 cycles (not taken) / 4 cycles (taken)
+`if rs == 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 4 cycles (taken)
 
 Branches to a PC-relative target if the source register is zero. The 8-bit signed offset is shifted left by 1, giving a range of -256 to +254 bytes from the next instruction address. Tests the full 16-bit register value. Useful for loop counters and null-pointer checks.
 
 #### BNZ -- Branch if Non-Zero
 
-`if rs != 0: PC += sext(off8) << 1` -- 2 cycles (not taken) / 4 cycles (taken)
+`if rs != 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 4 cycles (taken)
 
 Branches to a PC-relative target if the source register is non-zero. Useful for loop counters: `ADDI rd, -1; BNZ rd, loop`.
 
@@ -346,13 +346,13 @@ BT and BF occupy the 10110 prefix slot (former ANDIF). They branch based on the 
 
 #### BT -- Branch if T Set
 
-`if T == 1: PC += sext(off8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
+`if T == 1: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
 
 Branches if T=1. Same-page taken: 3 cycles; page-crossing: 4 cycles. Pattern: `CLTI rs, val; BT target` (branch if rs < val). `CLT rs1, rs2; BT target` (branch if rs1 < rs2). `CEQI rs, val; BT target` (branch if rs == val).
 
 #### BF -- Branch if T Clear
 
-`if T == 0: PC += sext(off8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
+`if T == 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
 
 Branches if T=0. Pattern: `CLTU rs1, rs2; BF target` (branch if rs1 >= rs2). `CLTI rs, val; BF target` (branch if rs >= val).
 
@@ -374,13 +374,13 @@ Adds a sign-extended 7-bit immediate, shifted left by 9, to the address of the n
 
 #### J -- Jump
 
-`PC += sext(off10) << 1` -- 4 cycles
+`PC += sext(imm10) << 1` -- 4 cycles
 
 Unconditional PC-relative jump. The 10-bit signed offset is shifted left by 1, giving a range of -1024 to +1022 bytes from the next instruction address.
 
 #### JAL -- Jump and Link
 
-`R6 = PC+2; PC += sext(off10) << 1` -- 4 cycles
+`R6 = PC+2; PC += sext(imm10) << 1` -- 4 cycles
 
 Unconditional PC-relative jump that saves the return address in R6. Used for subroutine calls; return with `JR R6, 0`.
 
