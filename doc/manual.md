@@ -10,11 +10,11 @@ Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 64.7% | 45.3% |
-| Transistor count (synth) | 17,258 | 13,176 |
-| SRAM-adjusted | 13,642 | 13,176 |
+| Utilization | 63.9% | 45.3% |
+| Transistor count (synth) | 17,084 | 13,176 |
+| SRAM-adjusted | 13,422 | 13,176 |
 
-The SRAM-adjusted total is 3.5% above the 6502, with significantly more capability per transistor: 16-bit registers, 3-operand ALU instructions, 2-cycle execute, PC-relative jumps, hardware call/return, and immediate arithmetic/logic. Unrecognized opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The SRAM-adjusted total is 1.9% above the 6502, with significantly more capability per transistor: 16-bit registers, 3-operand ALU instructions, 2-cycle execute, PC-relative jumps, hardware call/return, and immediate arithmetic/logic. Unrecognized opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Bus Protocol
 
