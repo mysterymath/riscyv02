@@ -368,8 +368,8 @@ async def test_bt_taken(dut):
     cocotb.start_soon(clock.start())
 
     a = Asm()
-    # SLTI R0, 1 sets T=1 (0 < 1 = true)
-    a.slti(0, 1)
+    # CLTI R0, 1 sets T=1 (0 < 1 = true)
+    a.clti(0, 1)
     # BT +3: target = (0x0002+2) + 3*2 = 0x000A
     a.bt(3)
     # Skipped:
@@ -397,8 +397,8 @@ async def test_bt_not_taken(dut):
     cocotb.start_soon(clock.start())
 
     a = Asm()
-    # SLTI R0, 0 sets T=0 (0 < 0 = false)
-    a.slti(0, 0)
+    # CLTI R0, 0 sets T=0 (0 < 0 = false)
+    a.clti(0, 0)
     a.bt(3)
     # Fall-through:
     a.li(1, 0x33)
@@ -425,8 +425,8 @@ async def test_bf_taken(dut):
     cocotb.start_soon(clock.start())
 
     a = Asm()
-    # SLTI R0, 0 sets T=0 (0 < 0 = false)
-    a.slti(0, 0)
+    # CLTI R0, 0 sets T=0 (0 < 0 = false)
+    a.clti(0, 0)
     a.bf(3)
     a.li(1, 0x11)
     a.sw(1, 0x40)
@@ -451,8 +451,8 @@ async def test_bf_not_taken(dut):
     cocotb.start_soon(clock.start())
 
     a = Asm()
-    # SLTI R0, 1 sets T=1 (0 < 1 = true)
-    a.slti(0, 1)
+    # CLTI R0, 1 sets T=1 (0 < 1 = true)
+    a.clti(0, 1)
     a.bf(3)
     a.li(1, 0x66)
     a.sw(1, 0x40)

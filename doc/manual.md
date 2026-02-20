@@ -39,7 +39,7 @@ RISCY-V02 uses the same TT mux/demux bus protocol as the Arlet 6502 wrapper. The
 
 - **8 general-purpose registers**: R0-R7, each 16 bits wide (3-bit encoding)
 - **16-bit program counter** (not directly accessible)
-- **T flag**: single-bit condition flag, set by comparisons (SLT, SLTU, SLTI, SLTUI, XORIF), tested by BT/BF branches
+- **T flag**: single-bit condition flag, set by comparisons (CLT, CLTU, CEQ, CLTI, CLTUI, CEQI), tested by BT/BF branches
 - **I flag**: interrupt disable (1 = disabled)
 - **ESR**: 2-bit exception status register {I, T}, saved on interrupt entry, restored by RETI
 - **EPC**: 16-bit exception PC, saved on interrupt entry
@@ -124,7 +124,7 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 | R6 | ra | Return address (link register) |
 | R7 | sp | Stack pointer |
 
-R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. Comparisons (SLTI, SLTUI, XORIF, SLT, SLTU) write to the T flag rather than a destination register, preserving all GPRs. R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
+R0 is the implicit base address register for R,8-format loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[2:0]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. Comparisons (CLTI, CLTUI, CEQI, CLT, CLTU, CEQ) write to the T flag rather than a destination register, preserving all GPRs. R,R-format loads and stores allow explicit register selection for both data and base, with no offset.
 
 ### Link Register (R6)
 
@@ -138,7 +138,7 @@ All instructions are 16 bits. The encoding uses a **variable-width prefix-free**
 
 ### Encoding Overview
 
-**56 instructions defined. 9,979 of 65,536 encodings free (15.2%).**
+**57 instructions defined. 9,467 of 65,536 encodings free (14.4%).**
 
 | Format | Prefix | Layout | Used |
 |---|---|---|---|
@@ -146,9 +146,9 @@ All instructions are 16 bits. The encoding uses a **variable-width prefix-free**
 | B,8 | 8-bit | `[off8:8]` | 2 |
 | R,7 | 6-bit | `[imm7:7\|reg:3]` | 2 |
 | "10" | 6-bit | `[off10:10]` | 2 |
-| R,R,R | 7-bit | `[rd:3\|rs2:3\|rs1:3]` | 10 |
+| R,R,R | 7-bit | `[rd:3\|rs2:3\|rs1:3]` | 8 |
 | R,4 | 9-bit | `[shamt:4\|reg:3]` | 3 |
-| R,R | 10-bit | `[rd:3\|rs:3]` | 5 |
+| R,R | 10-bit | `[rd:3\|rs:3]` | 8 |
 | System | 11-16 bit | various | 10 |
 
 Fields are packed MSB-first: prefix at top, register at LSB. One R,8 uses the space of 4 R,R,R or 32 R,R. The B,8 format (BT/BF) occupies the former ANDIF prefix slot (10110); the 3-bit selector field in ir[10:8] selects the branch type, leaving 6 sub-codes free within that slot.
@@ -170,11 +170,11 @@ Fields are packed MSB-first: prefix at top, register at LSB. One R,8 uses the sp
 01001   ANDI    rd = rd & zext(imm8)
 01010   ORI     rd = rd | zext(imm8)
 01011   XORI    rd = rd ^ zext(imm8)
-01100   SLTI    T = (rs < sext(imm8))             (signed)
-01101   SLTUI   T = (rs <u sext(imm8))            (unsigned)
+01100   CLTI    T = (rs < sext(imm8))             (signed)
+01101   CLTUI   T = (rs <u sext(imm8))            (unsigned)
 01110   BZ      if rs == 0, pc += sext(imm8) << 1
 01111   BNZ     if rs != 0, pc += sext(imm8) << 1
-10000   XORIF   T = (rs ^ zext(imm8)) != 0
+10000   CEQI    T = (rs == sext(imm8))
 10001   LWS    rd = mem16[R7 + sext(imm8)]
 10010   LBS    rd = sext(mem[R7 + sext(imm8)])
 10011   LBUS   rd = zext(mem[R7 + sext(imm8)])
@@ -199,8 +199,6 @@ Fields are packed MSB-first: prefix at top, register at LSB. One R,8 uses the sp
 1110010 AND     rd = rs1 & rs2
 1110011 OR      rd = rs1 | rs2
 1110100 XOR     rd = rs1 ^ rs2
-1110101 SLT     T = (rs1 < rs2)                   (signed)
-1110110 SLTU    T = (rs1 <u rs2)                   (unsigned)
 1110111 SLL     rd = rs1 << rs2[3:0]
 1111000 SRL     rd = rs1 >>u rs2[3:0]
 1111001 SRA     rd = rs1 >>s rs2[3:0]
@@ -216,6 +214,9 @@ Fields are packed MSB-first: prefix at top, register at LSB. One R,8 uses the sp
 1111011000  LBUR   rd = zext(mem[rs])
 1111011001  SWR    mem16[rs] = rd
 1111011010  SBR    mem[rs] = rd[7:0]
+1111011011  CLT    T = (rs1 < rs2)                  (signed)
+1111011100  CLTU   T = (rs1 <u rs2)                  (unsigned)
+1111011101  CEQ    T = (rs1 == rs2)
 
 --- System format (10-bit prefix + sub) ---
 1111100000 000001  SEI    I = 1
@@ -309,13 +310,13 @@ Bitwise OR with a zero-extended 8-bit immediate. Sets bits in the low byte witho
 
 Bitwise XOR with a zero-extended 8-bit immediate. Toggles bits in the low byte without affecting the high byte.
 
-#### SLTI -- Set Less Than Immediate (Signed)
+#### CLTI -- Compare Less Than Immediate (Signed)
 
 `T = (rs < sext(imm8))` -- 2 cycles
 
-Compares the source register against a sign-extended 8-bit immediate (-128 to +127) as signed integers. Sets T=1 if less, T=0 otherwise. No register is modified. Pattern: `SLTI rs, val; BT target` (branch if rs < val).
+Compares the source register against a sign-extended 8-bit immediate (-128 to +127) as signed integers. Sets T=1 if less, T=0 otherwise. No register is modified. Pattern: `CLTI rs, val; BT target` (branch if rs < val).
 
-#### SLTUI -- Set Less Than Immediate (Unsigned)
+#### CLTUI -- Compare Less Than Immediate (Unsigned)
 
 `T = (rs <u sext(imm8))` -- 2 cycles
 
@@ -333,11 +334,11 @@ Branches to a PC-relative target if the source register is zero. The 8-bit signe
 
 Branches to a PC-relative target if the source register is non-zero. Useful for loop counters: `ADDI rd, -1; BNZ rd, loop`.
 
-#### XORIF -- Xor Immediate (Flag-setting)
+#### CEQI -- Compare Equal Immediate
 
-`T = (rs ^ zext(imm8)) != 0` -- 2 cycles
+`T = (rs == sext(imm8))` -- 2 cycles
 
-XORs the source register with a zero-extended 8-bit immediate and sets T based on whether the result is nonzero. No register is modified. Useful for equality testing: T=0 means equal. Pattern: `XORIF rs, val; BF equal_label` (branch if rs == val).
+Compares the source register against a sign-extended 8-bit immediate (-128 to +127) for equality. Sets T=1 if equal, T=0 otherwise. No register is modified. Pattern: `CEQI rs, val; BT equal_label` (branch if rs == val).
 
 ### B,8 Format -- T-Flag Branches
 
@@ -347,13 +348,13 @@ BT and BF occupy the 10110 prefix slot (former ANDIF). They branch based on the 
 
 `if T == 1: PC += sext(off8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
 
-Branches if T=1. Same-page taken: 3 cycles; page-crossing: 4 cycles. Pattern: `SLTI rs, val; BT target` (branch if rs < val). `SLT rs1, rs2; BT target` (branch if rs1 < rs2).
+Branches if T=1. Same-page taken: 3 cycles; page-crossing: 4 cycles. Pattern: `CLTI rs, val; BT target` (branch if rs < val). `CLT rs1, rs2; BT target` (branch if rs1 < rs2). `CEQI rs, val; BT target` (branch if rs == val).
 
 #### BF -- Branch if T Clear
 
 `if T == 0: PC += sext(off8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
 
-Branches if T=0. Pattern: `XORIF rs, val; BF equal_label` (branch if rs == val). `SLTU rs1, rs2; BF target` (branch if rs1 >= rs2).
+Branches if T=0. Pattern: `CLTU rs1, rs2; BF target` (branch if rs1 >= rs2). `CLTI rs, val; BF target` (branch if rs >= val).
 
 ### R,7 Format -- Upper Immediate
 
@@ -393,18 +394,6 @@ All R,R,R instructions are 2 cycles.
 #### OR -- `rd = rs1 | rs2`
 #### XOR -- `rd = rs1 ^ rs2`
 
-#### SLT -- Set Less Than (Signed)
-
-`T = (rs1 < rs2)`
-
-Compares rs1 and rs2 as signed 16-bit integers. Sets T=1 if rs1 < rs2, T=0 otherwise. The rd field in the encoding is unused (no register write). Pattern: `SLT a, b; BT target` (branch if a < b signed).
-
-#### SLTU -- Set Less Than (Unsigned)
-
-`T = (rs1 <u rs2)`
-
-Compares rs1 and rs2 as unsigned 16-bit integers. Sets T=1 if rs1 < rs2, T=0 otherwise. The rd field is unused. Use `SRR rd; ANDI rd, 1` to capture the result in a register if needed.
-
 #### SLL -- Shift Left Logical
 
 `rd = rs1 << rs2[3:0]`
@@ -440,6 +429,24 @@ R,R-format loads and stores use explicit registers for both data and base, with 
 #### LBUR -- `rd = zext(MEM[rs])` -- 3 cycles
 #### SWR -- `MEM16[rs] = rd` -- 4 cycles
 #### SBR -- `MEM[rs] = rd[7:0]` -- 3 cycles
+
+#### CLT -- Compare Less Than (Signed)
+
+`T = (rs1 < rs2)` -- 2 cycles
+
+Compares rs1 and rs2 as signed 16-bit integers. Sets T=1 if rs1 < rs2, T=0 otherwise. No register is modified. Pattern: `CLT a, b; BT target` (branch if a < b signed).
+
+#### CLTU -- Compare Less Than (Unsigned)
+
+`T = (rs1 <u rs2)` -- 2 cycles
+
+Compares rs1 and rs2 as unsigned 16-bit integers. Sets T=1 if rs1 < rs2, T=0 otherwise. No register is modified. Use `SRR rd; ANDI rd, 1` to capture the result in a register if needed.
+
+#### CEQ -- Compare Equal
+
+`T = (rs1 == rs2)` -- 2 cycles
+
+Compares rs1 and rs2 for equality. Sets T=1 if equal, T=0 otherwise. No register is modified. Pattern: `CEQ a, b; BT target` (branch if a == b).
 
 ### System Format
 
@@ -517,7 +524,7 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLT/SLTU/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/SLTI/SLTUI/XORIF/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
+| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/CLTI/CLTUI/CEQI/CLT/CLTU/CEQ/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
 | SEI/CLI/SRR/SRW | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ/BT/BF (not taken) | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ/BT/BF (taken, same page) | 3 | 1 execute + 2 fetch after redirect |
@@ -900,13 +907,13 @@ udiv16:
     LI   R4, 0          ;  2 cy   2 B    ; remainder = 0
     LI   R5, 16         ;  2 cy   2 B    ; counter
 loop:
-    SLTI R2, 0          ;  2 cy   2 B    ; T = bit 15 of dividend
+    CLTI R2, 0          ;  2 cy   2 B    ; T = bit 15 of dividend
     SRR  R0             ;  2 cy   2 B    ; R0 = {I, T}
     ANDI R0, 1          ;  2 cy   2 B    ; R0 = T (0 or 1)
     SLLI R4, 1          ;  2 cy   2 B    ; remainder <<= 1
     OR   R4, R4, R0     ;  2 cy   2 B    ; shift in high bit
     SLLI R2, 1          ;  2 cy   2 B    ; dividend <<= 1
-    SLTU R4, R3         ;  2 cy   2 B    ; T = (rem < div)
+    CLTU R4, R3         ;  2 cy   2 B    ; T = (rem < div)
     BT   no_sub         ;  2.5 cy 2 B    ; skip if can't subtract
     SUB  R4, R4, R3     ;  2 cy   2 B    ; remainder -= divisor
     ORI  R2, 1          ;  2 cy   2 B    ; set quotient bit
@@ -916,7 +923,7 @@ no_sub:
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Per iteration (no sub): **22 cy** — `SLTI`+`SRR`+`ANDI`+`SLLI`+`OR`+`SLLI`+`SLTU`+`BT`(taken)+`ADDI`+`BNZ`
+Per iteration (no sub): **22 cy** — `CLTI`+`SRR`+`ANDI`+`SLLI`+`OR`+`SLLI`+`CLTU`+`BT`(taken)+`ADDI`+`BNZ`
 
 Per iteration (sub): **25 cy** — adds `SUB`+`ORI`
 
@@ -928,7 +935,7 @@ Average: **23.5 cy/iter**. Total code: **30 bytes**
 | 16 iterations | ~784 cy | ~376 cy |
 | Code size | 38 B | 30 B |
 
-The structure is identical — the same restoring division algorithm. The 2.1× speedup comes from the same sources as multiplication: 16-bit shifts are single instructions and the trial subtraction compresses from 6 instructions to 2 (`SLTU`+`SUB`). The T flag adds `SRR`+`ANDI` per iteration (4 cy) to extract the sign bit for the shift-in, since SLTI writes to T rather than a register. The comparison result is used directly via BT (branch if T set) without needing a register intermediate.
+The structure is identical — the same restoring division algorithm. The 2.1× speedup comes from the same sources as multiplication: 16-bit shifts are single instructions and the trial subtraction compresses from 6 instructions to 2 (`CLTU`+`SUB`). The T flag adds `SRR`+`ANDI` per iteration (4 cy) to extract the sign bit for the shift-in, since CLTI writes to T rather than a register. The comparison result is used directly via BT (branch if T set) without needing a register intermediate.
 
 ### CRC-8 (SMBUS)
 
@@ -979,7 +986,7 @@ byte_loop:
     XOR  R4, R4, R5     ;  2 cy   2 B    crc ^= byte
     LI   R5, 8          ;  2 cy   2 B
 bit_loop:
-    SLTI R4, 0          ;  2 cy   2 B    T = bit 15 (= CRC bit 7)
+    CLTI R4, 0          ;  2 cy   2 B    T = bit 15 (= CRC bit 7)
     SLLI R4, 1          ;  2 cy   2 B    crc <<= 1
     BF   no_xor         ;  2.5 cy 2 B    skip if bit was 0
     XOR  R4, R4, R0     ;  2 cy   2 B    crc ^= poly
@@ -994,7 +1001,7 @@ no_xor:
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Bit loop (no xor): **12 cy** — `SLTI`+`SLLI`+`BF`(taken)+`ADDI`+`BNZ`
+Bit loop (no xor): **12 cy** — `CLTI`+`SLLI`+`BF`(taken)+`ADDI`+`BNZ`
 
 Bit loop (xor): **13 cy** — adds `XOR`
 
@@ -1006,7 +1013,7 @@ Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **116 cy**. Tota
 | Per byte | 101 cy | 116 cy |
 | Code size | 22 B | 36 B |
 
-The 65C02 wins CRC-8. The carry flag is the difference: `ASL` shifts the CRC and captures the overflow bit in one instruction; RISCY-V02 needs a separate `SLTI` to extract bit 15 before shifting. By keeping the CRC in the upper byte of a 16-bit register, `SLTI` (test sign bit) replaces the lost `ANDIF` (test bit 7). The setup cost (shifting data into the upper byte, pre-loading the polynomial) adds per-byte overhead. With the CRC, byte overhead, and polynomial all fitting naturally in 8-bit operations, the 6502 plays to its strengths.
+The 65C02 wins CRC-8. The carry flag is the difference: `ASL` shifts the CRC and captures the overflow bit in one instruction; RISCY-V02 needs a separate `CLTI` to extract bit 15 before shifting. By keeping the CRC in the upper byte of a 16-bit register, `CLTI` (test sign bit) works naturally. The setup cost (shifting data into the upper byte, pre-loading the polynomial) adds per-byte overhead. With the CRC, byte overhead, and polynomial all fitting naturally in 8-bit operations, the 6502 plays to its strengths.
 
 ### CRC-16/CCITT
 
@@ -1067,7 +1074,7 @@ byte_loop:
     XOR  R4, R4, R5     ;  2 cy   2 B    crc ^= byte << 8
     LI   R5, 8          ;  2 cy   2 B
 bit_loop:
-    SLTI R4, 0          ;  2 cy   2 B    T = bit 15
+    CLTI R4, 0          ;  2 cy   2 B    T = bit 15
     SLLI R4, 1          ;  2 cy   2 B    crc <<= 1
     BF   no_xor         ;  2.5 cy 2 B    skip if bit was 0
     XOR  R4, R4, R0     ;  2 cy   2 B    crc ^= 0x1021
@@ -1080,7 +1087,7 @@ no_xor:
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Bit loop (no xor): **12 cy** — `SLTI`+`SLLI`+`BF`(taken)+`ADDI`+`BNZ`
+Bit loop (no xor): **12 cy** — `CLTI`+`SLLI`+`BF`(taken)+`ADDI`+`BNZ`
 
 Bit loop (xor): **13 cy** — adds `XOR`
 
@@ -1092,7 +1099,7 @@ Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **116 cy**. Tota
 | Per byte | 227 cy | 116 cy |
 | Code size | 43 B | 36 B |
 
-RISCY-V02 wins CRC-16 by ~2×. The bit loop is identical to CRC-8: `SLTI` extracts bit 15 and `BF` branches on the T flag result — same cost regardless of CRC width. The 6502's bit loop goes from 10.5 to 25.5 cy (2.4× slower) because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2. The polynomial XOR is especially painful: 1 instruction on RISCY-V02 vs 6 on the 6502.
+RISCY-V02 wins CRC-16 by ~2×. The bit loop is identical to CRC-8: `CLTI` extracts bit 15 and `BF` branches on the T flag result — same cost regardless of CRC width. The 6502's bit loop goes from 10.5 to 25.5 cy (2.4× slower) because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2. The polynomial XOR is especially painful: 1 instruction on RISCY-V02 vs 6 on the 6502.
 
 ### Raster Bar Interrupt Handler
 

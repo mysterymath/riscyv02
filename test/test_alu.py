@@ -179,18 +179,18 @@ async def test_shifts(dut):
 
 
 @cocotb.test()
-async def test_slt_sltu(dut):
-    """SLT and SLTU comparisons (T-flag + read_t)."""
+async def test_clt_cltu(dut):
+    """CLT and CLTU comparisons (T-flag + read_t)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, 5)
     a.li(2, 10)
-    a.slt(3, 1, 2)
+    a.clt(1, 2)
     a.read_t(3)
     a.sw(3, 0x40)
-    a.slt(4, 2, 1)
+    a.clt(2, 1)
     a.read_t(4)
     a.sw(4, 0x42)
     a.spin()
@@ -201,8 +201,8 @@ async def test_slt_sltu(dut):
 
     v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
     v2 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
-    assert v1 == 1, f"SLT 5<10: expected 1, got {v1}"
-    assert v2 == 0, f"SLT 10<5: expected 0, got {v2}"
+    assert v1 == 1, f"CLT 5<10: expected 1, got {v1}"
+    assert v2 == 0, f"CLT 10<5: expected 0, got {v2}"
 
 
 @cocotb.test()
@@ -225,23 +225,23 @@ async def test_auipc(dut):
 
 
 @cocotb.test()
-async def test_slti_sltui_xorif(dut):
-    """SLTI, SLTUI, XORIF all set T flag; read_t reads T into a register."""
+async def test_clti_cltui_ceqi(dut):
+    """CLTI, CLTUI, CEQI all set T flag; read_t reads T into a register."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(2, 5)
-    a.slti(2, 10)
+    a.clti(2, 10)
     a.read_t(1)
     a.sw_s(1, 0x40)
-    a.slti(2, 3)
+    a.clti(2, 3)
     a.read_t(1)
     a.sw_s(1, 0x42)
-    a.xorif(2, 5)
+    a.ceqi(2, 5)
     a.read_t(1)
     a.sw_s(1, 0x44)
-    a.xorif(2, 3)
+    a.ceqi(2, 3)
     a.read_t(1)
     a.sw_s(1, 0x46)
     a.spin()
@@ -254,10 +254,10 @@ async def test_slti_sltui_xorif(dut):
     v2 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
     v3 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
     v4 = _read_ram(dut, 0x0046) | (_read_ram(dut, 0x0047) << 8)
-    assert v1 == 1, f"SLTI 5<10: expected 1, got {v1}"
-    assert v2 == 0, f"SLTI 5<3: expected 0, got {v2}"
-    assert v3 == 0, f"XORIF 5^5=0: expected T=0, got {v3}"
-    assert v4 == 1, f"XORIF 5^3!=0: expected T=1, got {v4}"
+    assert v1 == 1, f"CLTI 5<10: expected 1, got {v1}"
+    assert v2 == 0, f"CLTI 5<3: expected 0, got {v2}"
+    assert v3 == 1, f"CEQI 5==5: expected T=1, got {v3}"
+    assert v4 == 0, f"CEQI 5==3: expected T=0, got {v4}"
 
 
 @cocotb.test()
@@ -628,15 +628,15 @@ async def test_xor_basic(dut):
 
 
 @cocotb.test()
-async def test_slt_equal(dut):
-    """SLT: 5 < 5 -> T=0."""
+async def test_clt_equal(dut):
+    """CLT: 5 < 5 -> T=0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, 5)
     a.li(2, 5)
-    a.slt(3, 1, 2)
+    a.clt(1, 2)
     a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
@@ -652,15 +652,15 @@ async def test_slt_equal(dut):
 
 
 @cocotb.test()
-async def test_slt_negative(dut):
-    """SLT: -5 < 5 -> T=1 (signed)."""
+async def test_clt_negative(dut):
+    """CLT: -5 < 5 -> T=1 (signed)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, -5)
     a.li(2, 5)
-    a.slt(3, 1, 2)
+    a.clt(1, 2)
     a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
@@ -676,15 +676,15 @@ async def test_slt_negative(dut):
 
 
 @cocotb.test()
-async def test_slt_negative_false(dut):
-    """SLT: 5 < -5 -> T=0 (signed)."""
+async def test_clt_negative_false(dut):
+    """CLT: 5 < -5 -> T=0 (signed)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, 5)
     a.li(2, -5)
-    a.slt(3, 1, 2)
+    a.clt(1, 2)
     a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
@@ -700,15 +700,15 @@ async def test_slt_negative_false(dut):
 
 
 @cocotb.test()
-async def test_sltu_true(dut):
-    """SLTU: 5 <u 10 -> T=1."""
+async def test_cltu_true(dut):
+    """CLTU: 5 <u 10 -> T=1."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, 5)
     a.li(2, 10)
-    a.sltu(3, 1, 2)
+    a.cltu(1, 2)
     a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
@@ -724,15 +724,15 @@ async def test_sltu_true(dut):
 
 
 @cocotb.test()
-async def test_sltu_false(dut):
-    """SLTU: 10 <u 5 -> T=0."""
+async def test_cltu_false(dut):
+    """CLTU: 10 <u 5 -> T=0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, 10)
     a.li(2, 5)
-    a.sltu(3, 1, 2)
+    a.cltu(1, 2)
     a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
@@ -748,15 +748,15 @@ async def test_sltu_false(dut):
 
 
 @cocotb.test()
-async def test_sltu_large(dut):
-    """SLTU: 5 <u 0xFFFF -> T=1."""
+async def test_cltu_large(dut):
+    """CLTU: 5 <u 0xFFFF -> T=1."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, 5)
     a.li(2, -1)
-    a.sltu(3, 1, 2)
+    a.cltu(1, 2)
     a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
@@ -772,15 +772,15 @@ async def test_sltu_large(dut):
 
 
 @cocotb.test()
-async def test_sltu_large_reverse(dut):
-    """SLTU: 0xFFFF <u 5 -> T=0."""
+async def test_cltu_large_reverse(dut):
+    """CLTU: 0xFFFF <u 5 -> T=0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, -1)
     a.li(2, 5)
-    a.sltu(3, 1, 2)
+    a.cltu(1, 2)
     a.read_t(3)
     a.sw(3, 0x40)
     a.spin()
@@ -893,14 +893,14 @@ async def test_xori_all_ones(dut):
 
 
 @cocotb.test()
-async def test_slti_negative(dut):
-    """SLTI: -2 < -1 -> T=1 (signed compare)."""
+async def test_clti_negative(dut):
+    """CLTI: -2 < -1 -> T=1 (signed compare)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, -2)
-    a.slti(1, -1)
+    a.clti(1, -1)
     a.read_t(2)
     a.sw_s(2, 0x40)
     a.spin()
@@ -916,14 +916,14 @@ async def test_slti_negative(dut):
 
 
 @cocotb.test()
-async def test_slti_equal(dut):
-    """SLTI: 5 < 5 -> T=0."""
+async def test_clti_equal(dut):
+    """CLTI: 5 < 5 -> T=0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, 5)
-    a.slti(1, 5)
+    a.clti(1, 5)
     a.read_t(2)
     a.sw_s(2, 0x40)
     a.spin()
@@ -939,14 +939,14 @@ async def test_slti_equal(dut):
 
 
 @cocotb.test()
-async def test_sltui_true(dut):
-    """SLTUI: 5 <u 10 -> T=1."""
+async def test_cltui_true(dut):
+    """CLTUI: 5 <u 10 -> T=1."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, 5)
-    a.sltui(1, 10)
+    a.cltui(1, 10)
     a.read_t(2)
     a.sw_s(2, 0x40)
     a.spin()
@@ -962,14 +962,14 @@ async def test_sltui_true(dut):
 
 
 @cocotb.test()
-async def test_sltui_false(dut):
-    """SLTUI: 0xFFFF <u sext(3)=3 -> T=0."""
+async def test_cltui_false(dut):
+    """CLTUI: 0xFFFF <u sext(3)=3 -> T=0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, -1)
-    a.sltui(1, 3)
+    a.cltui(1, 3)
     a.read_t(2)
     a.sw_s(2, 0x40)
     a.spin()
@@ -985,14 +985,14 @@ async def test_sltui_false(dut):
 
 
 @cocotb.test()
-async def test_xorif_equality(dut):
-    """XORIF: 5 ^ 5 = 0, T=0 (equality test pattern)."""
+async def test_ceqi_equality(dut):
+    """CEQI: 5 == 5 -> T=1 (equality test)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     a = Asm()
     a.li(1, 5)
-    a.xorif(1, 5)
+    a.ceqi(1, 5)
     a.read_t(2)
     a.sw_s(2, 0x40)
     a.spin()
@@ -1004,7 +1004,7 @@ async def test_xorif_equality(dut):
     await _reset(dut)
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
-    assert val == 0x0000, f"Expected 0x0000, got {val:#06x}"
+    assert val == 0x0001, f"Expected 0x0001, got {val:#06x}"
 
 
 @cocotb.test()

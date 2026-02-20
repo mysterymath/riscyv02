@@ -30,15 +30,15 @@
 //   5      R,8     [prefix:5|imm8:8|reg:3]            21: ADDI..SBS
 //   6      R,7     [prefix:6|imm7:7|reg:3]            2: LUI,AUIPC
 //   6      "10"    [prefix:6|imm10:10]                 2: J,JAL
-//   7      R,R,R   [prefix:7|rd:3|rs2:3|rs1:3]       10: ADD..SRA
+//   7      R,R,R   [prefix:7|rd:3|rs2:3|rs1:3]        8: ADD..SRA
 //   8      "8"     [prefix:8|off8:8]                   2: BT,BF
 //   9      R,4     [prefix:9|shamt:4|reg:3]            3: SLLI,SRLI,SRAI
-//  10      R,R     [prefix:10|rd:3|rs:3]               5: LWR..SBR
+//  10      R,R     [prefix:10|rd:3|rs:3]               8: LWR..CEQ
 //  11-16   System  (full-width decode)                 11: SEI..STP
 //
 // ADDI has prefix 0000 so that 0x0000 = ADDI R0, 0 = NOP.
-// T flag: single-bit condition flag set by comparisons (CMPI, CMPUI, XORIF,
-// SLT, SLTU), tested by BT/BF branches. SR = {I, T}; ESR saves SR on INT.
+// T flag: single-bit condition flag set by comparisons (CLTI, CLTUI, CEQI,
+// CLT, CLTU, CEQ), tested by BT/BF branches. SR = {I, T}; ESR saves SR on INT.
 // ============================================================================
 
 module riscyv02_execute (
@@ -108,11 +108,11 @@ module riscyv02_execute (
   wire is_andi  = ir[15:11] == 5'b01001;
   wire is_ori   = ir[15:11] == 5'b01010;
   wire is_xori  = ir[15:11] == 5'b01011;
-  wire is_slti  = ir[15:11] == 5'b01100;
-  wire is_sltui = ir[15:11] == 5'b01101;
+  wire is_clti  = ir[15:11] == 5'b01100;
+  wire is_cltui = ir[15:11] == 5'b01101;
   wire is_bz    = ir[15:11] == 5'b01110;
   wire is_bnz   = ir[15:11] == 5'b01111;
-  wire is_xorif = ir[15:11] == 5'b10000;
+  wire is_ceqi  = ir[15:11] == 5'b10000;
   wire is_lw_s  = ir[15:11] == 5'b10001;
   wire is_lb_s  = ir[15:11] == 5'b10010;
   wire is_lbu_s = ir[15:11] == 5'b10011;
@@ -134,8 +134,6 @@ module riscyv02_execute (
   wire is_and  = ir[15:9] == 7'b1110010;
   wire is_or   = ir[15:9] == 7'b1110011;
   wire is_xor  = ir[15:9] == 7'b1110100;
-  wire is_slt  = ir[15:9] == 7'b1110101;
-  wire is_sltu = ir[15:9] == 7'b1110110;
   wire is_sll  = ir[15:9] == 7'b1110111;
   wire is_srl  = ir[15:9] == 7'b1111000;
   wire is_sra  = ir[15:9] == 7'b1111001;
@@ -151,6 +149,9 @@ module riscyv02_execute (
   wire is_lbu_rr = ir[15:6] == 10'b1111011000;
   wire is_sw_rr  = ir[15:6] == 10'b1111011001;
   wire is_sb_rr  = ir[15:6] == 10'b1111011010;
+  wire is_clt    = ir[15:6] == 10'b1111011011;
+  wire is_cltu   = ir[15:6] == 10'b1111011100;
+  wire is_ceq    = ir[15:6] == 10'b1111011101;
 
   // --- System format (full-width decode) ---
   wire is_sei  = ir == 16'b1111100000000001;
@@ -183,9 +184,8 @@ module riscyv02_execute (
 
   // R,R,R group
   wire is_rrr = is_add || is_sub || is_and || is_or || is_xor
-              || is_slt || is_sltu || is_sll || is_srl || is_sra;
+              || is_sll || is_srl || is_sra;
   wire is_alu_rrr  = is_add || is_sub || is_and || is_or || is_xor;
-  wire is_slt_rrr  = is_slt || is_sltu;
   wire is_shift_rr = is_sll || is_srl || is_sra;
 
   // Shift groups
@@ -195,7 +195,8 @@ module riscyv02_execute (
   wire is_arith_shift = is_sra || is_srai;
 
   // T-flag comparisons (set T, no register write)
-  wire is_cmp_imm = is_slti || is_sltui || is_xorif;
+  wire is_cmp_imm = is_clti || is_cltui || is_ceqi;
+  wire is_cmp_rr  = is_clt || is_cltu || is_ceq;
 
   // Jump/branch
   wire is_branch   = is_bz || is_bnz;
@@ -441,10 +442,6 @@ module riscyv02_execute (
           alu_op      = ir[11:9];            // ADD=0, SUB=1, AND=2, OR=3, XOR=4
           alu_b       = r2[7:0];
           next_tmp_lo = alu_result;
-        end else if (is_slt_rrr) begin
-          alu_op     = 3'd1;                // SUB for comparison
-          alu_b      = r2[7:0];
-          // No write — just save borrow for E_EXEC_HI
         end else if (is_andi) begin
           alu_op      = 3'd2;
           alu_b       = ir[10:3];            // imm8 (zero-extended: hi byte = 0 in HI)
@@ -457,14 +454,22 @@ module riscyv02_execute (
           alu_op      = 3'd4;
           alu_b       = ir[10:3];
           next_tmp_lo = alu_result;
-        end else if (is_xorif) begin
+        end else if (is_ceqi) begin
           alu_op      = 3'd4;
           alu_b       = ir[10:3];
           next_tmp_lo = alu_result;
-        end else if (is_slti || is_sltui) begin
+        end else if (is_clti || is_cltui) begin
           alu_op     = 3'd1;                // SUB
           alu_b      = ir[10:3];            // imm8 low byte
           // No write — just save borrow for E_EXEC_HI
+        end else if (is_clt || is_cltu) begin
+          alu_op     = 3'd1;                // SUB
+          alu_b      = r2[7:0];
+          // No write — just save borrow for E_EXEC_HI
+        end else if (is_ceq) begin
+          alu_op      = 3'd4;               // XOR
+          alu_b       = r2[7:0];
+          next_tmp_lo = alu_result;
         end else if (is_shift) begin
           if (shamt[3]) begin
             // Cross-byte: fill byte for the vacated half
@@ -582,14 +587,6 @@ module riscyv02_execute (
             alu_op     = ir[11:9];
             alu_b      = r2[15:8];
             w_we       = 1'b1;
-          end else if (is_slt_rrr) begin
-            alu_a      = r1[15:8];
-            alu_op     = 3'd1;
-            alu_b      = r2[15:8];
-            if (is_sltu)
-              next_t_bit = ~alu_co;
-            else
-              next_t_bit = (r1[15] ^ r2[15]) ? r1[15] : alu_result[7];
           end else if (is_andi) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd2;
@@ -605,22 +602,35 @@ module riscyv02_execute (
             alu_op     = 3'd4;
             alu_b      = 8'h00;
             w_we       = 1'b1;
-          end else if (is_xorif) begin
+          end else if (is_ceqi) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd4;
-            alu_b      = 8'h00;
-            // T = (result != 0): any bit set in lo or hi
-            next_t_bit = (|tmp[7:0]) || (|alu_result);
-          end else if (is_slti) begin
+            alu_b      = {8{ir[10]}};           // sign-extend imm8 bit 7
+            // T = (result == 0): no bits set in lo or hi
+            next_t_bit = ~((|tmp[7:0]) || (|alu_result));
+          end else if (is_clti) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd1;
             alu_b      = {8{ir[10]}};           // sign-extend imm8 bit 7
             next_t_bit = (r1[15] ^ ir[10]) ? r1[15] : alu_result[7];
-          end else if (is_sltui) begin
+          end else if (is_cltui) begin
             alu_a      = r1[15:8];
             alu_op     = 3'd1;
             alu_b      = {8{ir[10]}};           // sign-extend for unsigned comparison
             next_t_bit = ~alu_co;
+          end else if (is_clt || is_cltu) begin
+            alu_a      = r1[15:8];
+            alu_op     = 3'd1;
+            alu_b      = r2[15:8];
+            if (is_cltu)
+              next_t_bit = ~alu_co;
+            else
+              next_t_bit = (r1[15] ^ r2[15]) ? r1[15] : alu_result[7];
+          end else if (is_ceq) begin
+            alu_a      = r1[15:8];
+            alu_op     = 3'd4;
+            alu_b      = r2[15:8];
+            next_t_bit = ~((|tmp[7:0]) || (|alu_result));
           end else if (is_shift) begin
             if (shamt[3]) begin
               if (is_right_shift) begin

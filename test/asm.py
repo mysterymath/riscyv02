@@ -73,19 +73,15 @@ def _encode_xori(rd, imm):
     assert 0 <= imm <= 255, f"imm out of range: {imm}"
     return _encode_r8(0b01011, imm, rd)
 
-def _encode_slti(rs, imm):
-    """CMPI: T = (rs < sext(imm)). Signed comparison, sets T flag."""
+def _encode_clti(rs, imm):
+    """CLTI: T = (rs < sext(imm)). Signed comparison, sets T flag."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b01100, imm, rs)
 
-_encode_cmpi = _encode_slti
-
-def _encode_sltui(rs, imm):
-    """CMPUI: T = (rs <u sext(imm)). Unsigned comparison, sets T flag."""
+def _encode_cltui(rs, imm):
+    """CLTUI: T = (rs <u sext(imm)). Unsigned comparison, sets T flag."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b01101, imm, rs)
-
-_encode_cmpui = _encode_sltui
 
 def _encode_bz(rs, imm):
     """BZ: if rs == 0, pc += sext(imm) << 1.
@@ -113,9 +109,9 @@ def _encode_bnz(rs, imm):
                  ((off >> 6) & 1))       # off[6] → bit 0
     return _encode_r8(0b01111, scrambled, rs)
 
-def _encode_xorif(rs, imm):
-    """XORIF: T = (rs ^ zext(imm)) != 0. Sets T flag."""
-    assert 0 <= imm <= 255, f"imm out of range: {imm}"
+def _encode_ceqi(rs, imm):
+    """CEQI: T = (rs == sext(imm)). Equality comparison, sets T flag."""
+    assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_r8(0b10000, imm, rs)
 
 def _encode_8(prefix8, off8):
@@ -198,8 +194,6 @@ def _encode_sub(rd, rs1, rs2):  return _encode_rrr(0b1110001, rd, rs2, rs1)
 def _encode_and_rr(rd, rs1, rs2): return _encode_rrr(0b1110010, rd, rs2, rs1)
 def _encode_or_rr(rd, rs1, rs2):  return _encode_rrr(0b1110011, rd, rs2, rs1)
 def _encode_xor_rr(rd, rs1, rs2): return _encode_rrr(0b1110100, rd, rs2, rs1)
-def _encode_slt(rd, rs1, rs2):  return _encode_rrr(0b1110101, rd, rs2, rs1)
-def _encode_sltu(rd, rs1, rs2): return _encode_rrr(0b1110110, rd, rs2, rs1)
 def _encode_sll(rd, rs1, rs2):  return _encode_rrr(0b1110111, rd, rs2, rs1)
 def _encode_srl(rd, rs1, rs2):  return _encode_rrr(0b1111000, rd, rs2, rs1)
 def _encode_sra(rd, rs1, rs2):  return _encode_rrr(0b1111001, rd, rs2, rs1)
@@ -223,6 +217,9 @@ def _encode_lb_rr(rd, rs):  return _encode_rr(0b1111010111, rd, rs)
 def _encode_lbu_rr(rd, rs): return _encode_rr(0b1111011000, rd, rs)
 def _encode_sw_rr(rd, rs):  return _encode_rr(0b1111011001, rd, rs)
 def _encode_sb_rr(rd, rs):  return _encode_rr(0b1111011010, rd, rs)
+def _encode_clt(rs1, rs2):  return _encode_rr(0b1111011011, rs2, rs1)
+def _encode_cltu(rs1, rs2): return _encode_rr(0b1111011100, rs2, rs1)
+def _encode_ceq(rs1, rs2):  return _encode_rr(0b1111011101, rs2, rs1)
 
 # System format: [1111100000:10 @ 15:6][sub:6 @ 5:0]
 def _encode_sys(sub):
@@ -308,9 +305,9 @@ class Asm:
     def andi(self, rd, imm):    self._emit(_encode_andi(rd, imm))
     def ori(self, rd, imm):     self._emit(_encode_ori(rd, imm))
     def xori(self, rd, imm):    self._emit(_encode_xori(rd, imm))
-    def slti(self, rs, imm):    self._emit(_encode_slti(rs, imm))
-    def sltui(self, rs, imm):   self._emit(_encode_sltui(rs, imm))
-    def xorif(self, rs, imm):   self._emit(_encode_xorif(rs, imm))
+    def clti(self, rs, imm):    self._emit(_encode_clti(rs, imm))
+    def cltui(self, rs, imm):   self._emit(_encode_cltui(rs, imm))
+    def ceqi(self, rs, imm):    self._emit(_encode_ceqi(rs, imm))
     # SP-relative
     def lw_s(self, rd, imm):    self._emit(_encode_lw_s(rd, imm))
     def lb_s(self, rd, imm):    self._emit(_encode_lb_s(rd, imm))
@@ -326,8 +323,6 @@ class Asm:
     def and_(self, rd, rs1, rs2):  self._emit(_encode_and_rr(rd, rs1, rs2))
     def or_(self, rd, rs1, rs2):   self._emit(_encode_or_rr(rd, rs1, rs2))
     def xor(self, rd, rs1, rs2):   self._emit(_encode_xor_rr(rd, rs1, rs2))
-    def slt(self, rd, rs1, rs2):   self._emit(_encode_slt(rd, rs1, rs2))
-    def sltu(self, rd, rs1, rs2):  self._emit(_encode_sltu(rd, rs1, rs2))
     def sll(self, rd, rs1, rs2):   self._emit(_encode_sll(rd, rs1, rs2))
     def srl(self, rd, rs1, rs2):   self._emit(_encode_srl(rd, rs1, rs2))
     def sra(self, rd, rs1, rs2):   self._emit(_encode_sra(rd, rs1, rs2))
@@ -341,6 +336,10 @@ class Asm:
     def lbu_rr(self, rd, rs):   self._emit(_encode_lbu_rr(rd, rs))
     def sw_rr(self, rd, rs):    self._emit(_encode_sw_rr(rd, rs))
     def sb_rr(self, rd, rs):    self._emit(_encode_sb_rr(rd, rs))
+    # R,R comparisons
+    def clt(self, rs1, rs2):    self._emit(_encode_clt(rs1, rs2))
+    def cltu(self, rs1, rs2):   self._emit(_encode_cltu(rs1, rs2))
+    def ceq(self, rs1, rs2):    self._emit(_encode_ceq(rs1, rs2))
     # System
     def sei(self):              self._emit(_encode_sei())
     def cli(self):              self._emit(_encode_cli())

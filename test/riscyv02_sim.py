@@ -359,11 +359,11 @@ class RISCYV02Sim:
                 self.regs[rs_idx] = self.regs[rs_idx] ^ imm8_raw
                 return []
 
-            if prefix5 == 0b01100:      # CMPI (signed, sets T)
+            if prefix5 == 0b01100:      # CLTI (signed, sets T)
                 self.t_bit = to_signed16(self.regs[rs_idx]) < sext8(imm8_raw)
                 return []
 
-            if prefix5 == 0b01101:      # CMPUI (unsigned, sets T)
+            if prefix5 == 0b01101:      # CLTUI (unsigned, sets T)
                 self.t_bit = self.regs[rs_idx] < (sext8(imm8_raw) & 0xFFFF)
                 return []
 
@@ -391,8 +391,8 @@ class RISCYV02Sim:
                     self._redirect = True
                 return []
 
-            if prefix5 == 0b10000:      # XORIF (zero-ext imm, sets T)
-                self.t_bit = (self.regs[rs_idx] ^ imm8_raw) != 0
+            if prefix5 == 0b10000:      # CEQI (sign-ext imm, equality, sets T)
+                self.t_bit = self.regs[rs_idx] == (sext8(imm8_raw) & 0xFFFF)
                 return []
 
             if prefix5 == 0b10001:      # LWS (word load, base=R7)
@@ -498,10 +498,6 @@ class RISCYV02Sim:
             elif prefix7 == 0b1110010:  self.regs[rd] = a & b                   # AND
             elif prefix7 == 0b1110011:  self.regs[rd] = a | b                   # OR
             elif prefix7 == 0b1110100:  self.regs[rd] = a ^ b                   # XOR
-            elif prefix7 == 0b1110101:                                          # SLT (sets T)
-                self.t_bit = to_signed16(a) < to_signed16(b)
-            elif prefix7 == 0b1110110:                                          # SLTU (sets T)
-                self.t_bit = a < b
             elif prefix7 == 0b1110111:  self.regs[rd] = (a << (b & 0xF)) & 0xFFFF  # SLL
             elif prefix7 == 0b1111000:  self.regs[rd] = a >> (b & 0xF)              # SRL
             elif prefix7 == 0b1111001:                                               # SRA
@@ -568,6 +564,24 @@ class RISCYV02Sim:
             rd = (ir >> 3) & 7
             addr = self.regs[ir & 7]
             return [(addr, False, self.regs[rd] & 0xFF)]
+
+        if prefix10 == 0b1111011011:    # CLT rs1, rs2
+            rs1 = ir & 7
+            rs2 = (ir >> 3) & 7
+            self.t_bit = to_signed16(self.regs[rs1]) < to_signed16(self.regs[rs2])
+            return []
+
+        if prefix10 == 0b1111011100:    # CLTU rs1, rs2
+            rs1 = ir & 7
+            rs2 = (ir >> 3) & 7
+            self.t_bit = self.regs[rs1] < self.regs[rs2]
+            return []
+
+        if prefix10 == 0b1111011101:    # CEQ rs1, rs2
+            rs1 = ir & 7
+            rs2 = (ir >> 3) & 7
+            self.t_bit = self.regs[rs1] == self.regs[rs2]
+            return []
 
         # =================================================================
         # System format (10-bit prefix + sub)
