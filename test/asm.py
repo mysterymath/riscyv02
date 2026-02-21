@@ -16,7 +16,7 @@
 #   B       [imm8:8|funct3:3|opcode:5]                         BT, BF
 #   J       [s:1|imm[6:0]:7|imm[8:7]:2|fn1:1|opcode:5]        J, JAL
 #   R       [fn2:2|rd:3|rs2:3|rs1:3|opcode:5]                  R,R,R + R,R
-#   SI      [fn2:2|dc:2|shamt:4|rs/rd:3|opcode:5]              SLLI,SRLI,SRAI
+#   SI      [fn2:2|fn4:2|shamt:4|rs/rd:3|opcode:5]             SLLI,SRLI,SRAI,SLLT,SRLT,RLT,RRT
 #   SYS     [sub:8|reg:3|opcode:5]                             11 system insns
 
 __all__ = ['Asm']
@@ -51,7 +51,7 @@ def _encode_r(opcode, funct2, rd, rs2, rs1):
          | ((rs1 & 0x7) << 5) | (opcode & 0x1F)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
-# SI-type: [fn2:2 @ 15:14][dc:2 @ 13:12][shamt:4 @ 11:8][rs/rd:3 @ 7:5][opcode:5 @ 4:0]
+# SI-type: [fn2:2 @ 15:14][fn4:2 @ 13:12][shamt:4 @ 11:8][rs/rd:3 @ 7:5][opcode:5 @ 4:0]
 def _encode_si(funct2, shamt, reg):
     insn = ((funct2 & 0x3) << 14) | ((shamt & 0xF) << 8) | ((reg & 0x7) << 5) | 30
     return (insn & 0xFF, (insn >> 8) & 0xFF)
@@ -250,6 +250,17 @@ def _encode_slli(rd, shamt): return _encode_si(0, shamt, rd)
 def _encode_srli(rd, shamt): return _encode_si(1, shamt, rd)
 def _encode_srai(rd, shamt): return _encode_si(2, shamt, rd)
 
+# SI-type shift/rotate through T (fn2=3, shamt=1 always)
+# fn4 at ir[13:12]: 00=SLLT, 01=SRLT, 10=RLT, 11=RRT
+def _encode_si_t(fn4, reg):
+    insn = (3 << 14) | ((fn4 & 0x3) << 12) | (1 << 8) | ((reg & 0x7) << 5) | 30
+    return (insn & 0xFF, (insn >> 8) & 0xFF)
+
+def _encode_sllt(rd):   return _encode_si_t(0, rd)
+def _encode_srlt(rd):   return _encode_si_t(1, rd)
+def _encode_rlt(rd):    return _encode_si_t(2, rd)
+def _encode_rrt(rd):    return _encode_si_t(3, rd)
+
 # ---------------------------------------------------------------------------
 # System (opcode 31)
 # ---------------------------------------------------------------------------
@@ -366,6 +377,11 @@ class Asm:
     def slli(self, rd, shamt):  self._emit(_encode_slli(rd, shamt))
     def srli(self, rd, shamt):  self._emit(_encode_srli(rd, shamt))
     def srai(self, rd, shamt):  self._emit(_encode_srai(rd, shamt))
+    # SI-type shift/rotate through T
+    def sllt(self, rd):         self._emit(_encode_sllt(rd))
+    def srlt(self, rd):         self._emit(_encode_srlt(rd))
+    def rlt(self, rd):          self._emit(_encode_rlt(rd))
+    def rrt(self, rd):          self._emit(_encode_rrt(rd))
     # R-type memory
     def lw_rr(self, rd, rs):    self._emit(_encode_lw_rr(rd, rs))
     def lb_rr(self, rd, rs):    self._emit(_encode_lb_rr(rd, rs))

@@ -597,6 +597,24 @@ class RISCYV02Sim:
             if funct2 == 2:             # SRAI
                 self.regs[rs_idx] = (to_signed16(self.regs[rs_idx]) >> shamt) & 0xFFFF
                 return []
+            if funct2 == 3:             # SLLT / SRLT / RLT / RRT
+                dc = (ir >> 12) & 3
+                val = self.regs[rs_idx]
+                is_right = dc & 1
+                is_rotate = dc & 2
+                old_t = int(self.t_bit)
+                if is_right:
+                    self.t_bit = bool(val & 1)
+                    result = val >> 1
+                    if is_rotate:
+                        result |= old_t << 15
+                else:
+                    self.t_bit = bool((val >> 15) & 1)
+                    result = (val << 1) & 0xFFFF
+                    if is_rotate:
+                        result |= old_t
+                self.regs[rs_idx] = result
+                return []
             return []
 
         # =================================================================

@@ -39,7 +39,7 @@
 //   B       [imm8:8|funct3:3|opcode:5]                       BT, BF
 //   J       [s:1|imm[6:0]:7|imm[8:7]:2|fn1:1|opcode:5]      J, JAL
 //   R       [fn2:2|rd:3|rs2:3|rs1:3|opcode:5]                R,R,R(8) + R,R(8)
-//   SI      [fn2:2|dc:2|shamt:4|rs/rd:3|opcode:5]            SLLI,SRLI,SRAI
+//   SI      [fn2:2|fn4:2|shamt:4|rs/rd:3|opcode:5]           SLLI,SRLI,SRAI,SLLT,SRLT,RLT,RRT
 //   SYS     [sub:8|reg:3|opcode:5]                           11 system insns
 //
 // ADDI has opcode 0 so that 0x0000 = ADDI R0, 0 = NOP.
@@ -152,6 +152,12 @@ module riscyv02_execute (
   wire is_srli = opcode == 5'd30 && fn2 == 2'd1;
   wire is_srai = opcode == 5'd30 && fn2 == 2'd2;
 
+  // SI-type shift/rotate through T (opcode 30, fn2=3)
+  // fn4 at ir[13:12]: 00=SLLT, 01=SRLT, 10=RLT, 11=RRT
+  wire is_si_t        = opcode == 5'd30 && fn2 == 2'd3;
+  wire is_si_t_right  = is_si_t && ir[12];
+  wire is_si_t_rotate = is_si_t && ir[13];
+
   // R-type shifts (opcode 27, fn2 1-3)
   wire is_sll = is_alu2 && fn2 == 2'd1;
   wire is_srl = is_alu2 && fn2 == 2'd2;
@@ -194,9 +200,9 @@ module riscyv02_execute (
   wire is_i_alu_wr = is_addi || is_andi || is_ori || is_xori || is_li || is_lui;
 
   // Shift groups
-  wire is_shift_imm   = is_slli || is_srli || is_srai;
+  wire is_shift_imm   = is_slli || is_srli || is_srai || is_si_t;
   wire is_shift       = is_shift_rr || is_shift_imm;
-  wire is_right_shift = is_srl || is_sra || is_srli || is_srai;
+  wire is_right_shift = is_srl || is_sra || is_srli || is_srai || is_si_t_right;
   wire is_arith_shift = is_sra || is_srai;
 
   // T-flag comparisons (set T, no register write)
@@ -367,7 +373,7 @@ module riscyv02_execute (
   // -------------------------------------------------------------------------
   // Barrel shifter
   // -------------------------------------------------------------------------
-  wire [3:0] shamt = is_shift_rr ? r2[3:0] : ir[11:8];
+  wire [3:0] shamt = is_shift_rr ? r2[3:0] : is_si_t ? 4'd1 : ir[11:8];
 
   reg  [14:0] shifter_din;
   wire [7:0]  shifter_result;
@@ -478,12 +484,18 @@ module riscyv02_execute (
             else
               next_tmp_lo = 8'h00;
           end else if (is_right_shift) begin
-            // Right shift hi byte: fill from sign/zero, input is {fill, r1[15:8]}
-            shifter_din = {is_arith_shift ? {7{r1[15]}} : 7'b0, r1[15:8]};
+            // Right shift hi byte: fill from sign/zero/T, input is {fill, r1[15:8]}
+            if (is_arith_shift)
+              shifter_din = {{7{r1[15]}}, r1[15:8]};
+            else if (is_si_t_rotate)
+              shifter_din = {6'b0, t_bit, r1[15:8]};
+            else
+              shifter_din = {7'b0, r1[15:8]};
             next_tmp_lo = shifter_result;
           end else begin
             // Left shift lo byte: reverse, right-shift, reverse
-            shifter_din = {7'b0, rev8(r1[7:0])};
+            // RLT: fill bit 0 with old T; others fill with 0
+            shifter_din = {6'b0, is_si_t_rotate ? t_bit : 1'b0, rev8(r1[7:0])};
             next_tmp_lo = rev8(shifter_result);
           end
         end else if (is_pc_rel) begin
@@ -564,6 +576,8 @@ module riscyv02_execute (
               w_data = {rev8(shifter_result), tmp[7:0]};
               w_we   = 1'b1;
             end
+            if (is_si_t)
+              next_t_bit = ir[12] ? r1[0] : r1[15];
           end else if (is_pc_rel) begin
             if ((is_branch && (!(|r1) ^ opcode[0]))
              || (is_t_branch && (t_bit ^ ir[5]))

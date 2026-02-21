@@ -136,7 +136,7 @@ All instructions are 16 bits. The encoding follows RISC-V principles: **fixed 5-
 
 ### Encoding Overview
 
-**57 instructions defined.**
+**61 instructions defined.**
 
 | Format | Layout (MSB→LSB) | Used |
 |---|---|---|
@@ -144,7 +144,7 @@ All instructions are 16 bits. The encoding follows RISC-V principles: **fixed 5-
 | B | `[imm8:8\|funct3:3\|opcode:5]` | 2 |
 | J | `[s:1\|imm[6:0]:7\|imm[8:7]:2\|fn1:1\|opcode:5]` | 2 |
 | R | `[fn2:2\|rd:3\|rs2:3\|rs1:3\|opcode:5]` | 16 |
-| SI | `[fn2:2\|dc:2\|shamt:4\|rs/rd:3\|opcode:5]` | 3 |
+| SI | `[fn2:2\|fn4:2\|shamt:4\|rs/rd:3\|opcode:5]` | 7 |
 | SYS | `[sub:8\|reg:3\|opcode:5]` | 10 |
 
 Fields are packed MSB-first: opcode at bottom, immediates at top. The sign bit is always ir[15] in every format, enabling sign extension in parallel with decode. The primary register field ir[7:5] is shared across I-type, SI-type, SYS, and R-type (as rs1), enabling speculative register file reads before format decode completes. In R-type, rs2 is at [10:8] and rd at [13:11].
@@ -196,6 +196,11 @@ Opcode 29 (R-MISC): 00=SBR, 01=CLT, 10=CLTU, 11=CEQ
 11110.00    SLLI    rd = rd << shamt
 11110.01    SRLI    rd = rd >>u shamt
 11110.10    SRAI    rd = rd >>s shamt
+11110.11    Shift/rotate through T (fn4 at [13:12]):
+  fn4=00    SLLT    T = rd[15]; rd <<= 1
+  fn4=01    SRLT    T = rd[0];  rd >>= 1
+  fn4=10    RLT     T = rd[15]; rd = {rd[14:0], old_T}
+  fn4=11    RRT     T = rd[0];  rd = {old_T, rd[15:1]}
 
 --- SYS-type (opcode 31, sub8 at [15:8]) ---
 sub8=0x01   SEI     I = 1
@@ -399,6 +404,34 @@ All shift immediate instructions are 2 cycles and operate in-place (rd = rd shif
 #### SRLI -- `rd = rd >>u shamt` (shamt 0-15)
 #### SRAI -- `rd = rd >>s shamt` (shamt 0-15)
 
+### SI-type -- Shift/Rotate Through T
+
+All shift/rotate-through-T instructions are 2 cycles, shift by exactly 1 bit, and capture the shifted-out bit into T. Designed for bit-at-a-time algorithms (CRC, long division, multiply). The shamt field is reserved and must be encoded as 1.
+
+#### SLLT -- Shift Left Logical through T
+
+`T = rd[15]; rd = {rd[14:0], 0}` -- 2 cycles
+
+Shifts rd left by 1. The old bit 15 (shifted out) is captured in T. Bit 0 is filled with 0. Replaces the `CLTI rd, 0` + `SLLI rd, 1` pattern for extracting the sign bit before a shift.
+
+#### SRLT -- Shift Right Logical through T
+
+`T = rd[0]; rd = {0, rd[15:1]}` -- 2 cycles
+
+Shifts rd right by 1. The old bit 0 (shifted out) is captured in T. Bit 15 is filled with 0.
+
+#### RLT -- Rotate Left through T
+
+`T = rd[15]; rd = {rd[14:0], old_T}` -- 2 cycles
+
+Shifts rd left by 1. The old bit 15 is captured in T. Bit 0 is filled with the previous T value. This creates a 17-bit rotate path (16-bit register + T), equivalent to the 6502's ROL instruction. Chaining RLT across two registers shifts a bit from one into the other.
+
+#### RRT -- Rotate Right through T
+
+`T = rd[0]; rd = {old_T, rd[15:1]}` -- 2 cycles
+
+Shifts rd right by 1. The old bit 0 is captured in T. Bit 15 is filled with the previous T value. This creates a 17-bit rotate path, equivalent to the 6502's ROR instruction.
+
 ### R-type -- Register Load/Store and Compare
 
 R-type loads and stores use explicit registers for both data and base, with no offset. For loads, rd at ir[13:11] is the destination and rs1 at ir[7:5] is the address. For stores, rs2 at ir[10:8] is the data and rs1 at ir[7:5] is the address.
@@ -503,7 +536,7 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
-| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/CLTI/CLTUI/CEQI/CLT/CLTU/CEQ/SLLI/SRLI/SRAI | 2 | 1 execute + 1 overlapped fetch |
+| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/CLTI/CLTUI/CEQI/CLT/CLTU/CEQ/SLLI/SRLI/SRAI/SLLT/SRLT/RLT/RRT | 2 | 1 execute + 1 overlapped fetch |
 | SEI/CLI/SRR/SRW | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ/BT/BF (not taken) | 2 | 1 execute + 1 overlapped fetch |
 | BZ/BNZ/BT/BF (taken, same page) | 3 | 1 execute + 2 fetch after redirect |
@@ -885,12 +918,8 @@ udiv16:
     LI   R4, 0          ;  2 cy   2 B    ; remainder = 0
     LI   R5, 16         ;  2 cy   2 B    ; counter
 loop:
-    CLTI R2, 0          ;  2 cy   2 B    ; T = bit 15 of dividend
-    SRR  R0             ;  2 cy   2 B    ; R0 = {I, T}
-    ANDI R0, 1          ;  2 cy   2 B    ; R0 = T (0 or 1)
-    SLLI R4, 1          ;  2 cy   2 B    ; remainder <<= 1
-    OR   R4, R4, R0     ;  2 cy   2 B    ; shift in high bit
-    SLLI R2, 1          ;  2 cy   2 B    ; dividend <<= 1
+    SLLT R2             ;  2 cy   2 B    ; dividend <<= 1, T = old bit 15
+    RLT  R4             ;  2 cy   2 B    ; remainder <<= 1, shift in T
     CLTU R4, R3         ;  2 cy   2 B    ; T = (rem < div)
     BT   no_sub         ;  2.5 cy 2 B    ; skip if can't subtract
     SUB  R4, R4, R3     ;  2 cy   2 B    ; remainder -= divisor
@@ -901,19 +930,19 @@ no_sub:
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Per iteration (no sub): **22 cy** — `CLTI`+`SRR`+`ANDI`+`SLLI`+`OR`+`SLLI`+`CLTU`+`BT`(taken)+`ADDI`+`BNZ`
+Per iteration (no sub): **16 cy** — `SLLT`+`RLT`+`CLTU`+`BT`(taken)+`ADDI`+`BNZ`
 
-Per iteration (sub): **25 cy** — adds `SUB`+`ORI`
+Per iteration (sub): **19 cy** — adds `SUB`+`ORI`
 
-Average: **23.5 cy/iter**. Total code: **30 bytes**
+Average: **17.5 cy/iter**. Total code: **22 bytes**
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
-| Per iteration (avg) | 49 cy | 23.5 cy |
-| 16 iterations | ~784 cy | ~376 cy |
-| Code size | 38 B | 30 B |
+| Per iteration (avg) | 49 cy | 17.5 cy |
+| 16 iterations | ~784 cy | ~280 cy |
+| Code size | 38 B | 22 B |
 
-The structure is identical — the same restoring division algorithm. The 2.1× speedup comes from the same sources as multiplication: 16-bit shifts are single instructions and the trial subtraction compresses from 6 instructions to 2 (`CLTU`+`SUB`). The T flag adds `SRR`+`ANDI` per iteration (4 cy) to extract the sign bit for the shift-in, since CLTI writes to T rather than a register. The comparison result is used directly via BT (branch if T set) without needing a register intermediate.
+The structure is identical — the same restoring division algorithm. The 2.8× speedup comes from three sources: 16-bit shifts are single instructions, the trial subtraction compresses from 6 instructions to 2 (`CLTU`+`SUB`), and `SLLT`+`RLT` chain the dividend's high bit directly into the remainder without needing `SRR`+`ANDI` to extract T into a register (saving 6 cy/iteration vs the pre-SLLT version).
 
 ### CRC-8 (SMBUS)
 
@@ -964,8 +993,7 @@ byte_loop:
     XOR  R4, R4, R5     ;  2 cy   2 B    crc ^= byte
     LI   R5, 8          ;  2 cy   2 B
 bit_loop:
-    CLTI R4, 0          ;  2 cy   2 B    T = bit 15 (= CRC bit 7)
-    SLLI R4, 1          ;  2 cy   2 B    crc <<= 1
+    SLLT R4             ;  2 cy   2 B    crc <<= 1, T = old bit 15
     BF   no_xor         ;  2.5 cy 2 B    skip if bit was 0
     XOR  R4, R4, R0     ;  2 cy   2 B    crc ^= poly
 no_xor:
@@ -978,19 +1006,19 @@ no_xor:
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Bit loop (no xor): **12 cy** — `CLTI`+`SLLI`+`BF`(taken)+`ADDI`+`BNZ`
+Bit loop (no xor): **10 cy** — `SLLT`+`BF`(taken)+`ADDI`+`BNZ`
 
-Bit loop (xor): **13 cy** — adds `XOR`
+Bit loop (xor): **11 cy** — adds `XOR`
 
-Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **116 cy**. Total code: **34 bytes**
+Average: **10.5 cy/bit**, 84 cy/byte bit processing. Per byte: **100 cy**. Total code: **32 bytes**
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
-| Bit loop (avg) | 10.5 cy | 12.5 cy |
-| Per byte | 101 cy | 116 cy |
-| Code size | 22 B | 34 B |
+| Bit loop (avg) | 10.5 cy | 10.5 cy |
+| Per byte | 101 cy | 100 cy |
+| Code size | 22 B | 32 B |
 
-The 65C02 wins CRC-8. The carry flag is the difference: `ASL` shifts the CRC and captures the overflow bit in one instruction; RISCY-V02 needs a separate `CLTI` to extract bit 15 before shifting. By keeping the CRC in the upper byte of a 16-bit register, `CLTI` (test sign bit) works naturally. The setup cost (shifting data into the upper byte, pre-loading the polynomial) adds per-byte overhead. With the CRC, byte overhead, and polynomial all fitting naturally in 8-bit operations, the 6502 plays to its strengths.
+Essentially a tie. The `SLLT` instruction shifts the CRC and captures the overflow bit into T in one instruction — matching the 65C02's `ASL` + carry pattern. The remaining per-byte overhead (setup, pointer/counter updates) is slightly more on RISCY-V02 due to the upper-byte CRC convention, but the bit loop is now identical in cycle count.
 
 ### CRC-16/CCITT
 
@@ -1051,8 +1079,7 @@ byte_loop:
     XOR  R4, R4, R5     ;  2 cy   2 B    crc ^= byte << 8
     LI   R5, 8          ;  2 cy   2 B
 bit_loop:
-    CLTI R4, 0          ;  2 cy   2 B    T = bit 15
-    SLLI R4, 1          ;  2 cy   2 B    crc <<= 1
+    SLLT R4             ;  2 cy   2 B    crc <<= 1, T = old bit 15
     BF   no_xor         ;  2.5 cy 2 B    skip if bit was 0
     XOR  R4, R4, R0     ;  2 cy   2 B    crc ^= 0x1021
 no_xor:
@@ -1064,19 +1091,19 @@ no_xor:
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Bit loop (no xor): **12 cy** — `CLTI`+`SLLI`+`BF`(taken)+`ADDI`+`BNZ`
+Bit loop (no xor): **10 cy** — `SLLT`+`BF`(taken)+`ADDI`+`BNZ`
 
-Bit loop (xor): **13 cy** — adds `XOR`
+Bit loop (xor): **11 cy** — adds `XOR`
 
-Average: **12.5 cy/bit**, 100 cy/byte bit processing. Per byte: **116 cy**. Total code: **36 bytes**
+Average: **10.5 cy/bit**, 84 cy/byte bit processing. Per byte: **100 cy**. Total code: **34 bytes**
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
-| Bit loop (avg) | 25.5 cy | 12.5 cy |
-| Per byte | 227 cy | 116 cy |
-| Code size | 43 B | 36 B |
+| Bit loop (avg) | 25.5 cy | 10.5 cy |
+| Per byte | 227 cy | 100 cy |
+| Code size | 43 B | 34 B |
 
-RISCY-V02 wins CRC-16 by ~2×. The bit loop is identical to CRC-8: `CLTI` extracts bit 15 and `BF` branches on the T flag result — same cost regardless of CRC width. The 6502's bit loop goes from 10.5 to 25.5 cy (2.4× slower) because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2. The polynomial XOR is especially painful: 1 instruction on RISCY-V02 vs 6 on the 6502.
+RISCY-V02 wins CRC-16 by >2×. The `SLLT` instruction shifts and captures the overflow bit into T in a single instruction, matching the 65C02's `ASL`+carry for free. The 6502's bit loop goes from 10.5 to 25.5 cy (2.4× slower) because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2. The polynomial XOR is especially painful: 1 instruction on RISCY-V02 vs 6 on the 6502.
 
 ### Raster Bar Interrupt Handler
 

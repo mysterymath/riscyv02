@@ -1376,3 +1376,173 @@ async def test_auipc_large_imm7(dut):
     await ClockCycles(dut.clk, 200)
     val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
     assert val == 0x3F02, f"Expected 0x3F02, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_sllt(dut):
+    """SLLT: shift left by 1, capture old bit 15 into T."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    a = Asm()
+    # R1 = 0x8001: bit 15 set, bit 0 set
+    a.li(1, 1)
+    a.lui(2, 0x80)
+    a.or_(1, 1, 2)        # R1 = 0x8001
+    a.sllt(1)            # R1 = 0x0002, T = 1 (old bit 15)
+    a.sw(1, 0x40)
+    a.read_t(3)
+    a.sw(3, 0x42)
+    # Now test with bit 15 clear
+    a.li(1, 0x55)          # R1 = 0x0055
+    a.sllt(1)            # R1 = 0x00AA, T = 0
+    a.sw(1, 0x44)
+    a.read_t(3)
+    a.sw(3, 0x46)
+    a.spin()
+
+    _load_program(dut, a.assemble())
+    await _reset(dut)
+    await ClockCycles(dut.clk, 400)
+
+    v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    t1 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
+    v2 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
+    t2 = _read_ram(dut, 0x0046) | (_read_ram(dut, 0x0047) << 8)
+    assert v1 == 0x0002, f"SLLT 0x8001: expected 0x0002, got {v1:#06x}"
+    assert t1 == 1, f"SLLT T: expected 1, got {t1}"
+    assert v2 == 0x00AA, f"SLLT 0x0055: expected 0x00AA, got {v2:#06x}"
+    assert t2 == 0, f"SLLT T: expected 0, got {t2}"
+
+
+@cocotb.test()
+async def test_srlt(dut):
+    """SRLT: shift right by 1, capture old bit 0 into T."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    a = Asm()
+    # R1 = 0x8001: bit 0 set
+    a.li(1, 1)
+    a.lui(2, 0x80)
+    a.or_(1, 1, 2)        # R1 = 0x8001
+    a.srlt(1)            # R1 = 0x4000, T = 1 (old bit 0)
+    a.sw(1, 0x40)
+    a.read_t(3)
+    a.sw(3, 0x42)
+    # Now test with bit 0 clear
+    a.li(1, 0x44)          # R1 = 0x0044
+    a.srlt(1)            # R1 = 0x0022, T = 0
+    a.sw(1, 0x44)
+    a.read_t(3)
+    a.sw(3, 0x46)
+    a.spin()
+
+    _load_program(dut, a.assemble())
+    await _reset(dut)
+    await ClockCycles(dut.clk, 400)
+
+    v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    t1 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
+    v2 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
+    t2 = _read_ram(dut, 0x0046) | (_read_ram(dut, 0x0047) << 8)
+    assert v1 == 0x4000, f"SRLT 0x8001: expected 0x4000, got {v1:#06x}"
+    assert t1 == 1, f"SRLT T: expected 1, got {t1}"
+    assert v2 == 0x0022, f"SRLT 0x0044: expected 0x0022, got {v2:#06x}"
+    assert t2 == 0, f"SRLT T: expected 0, got {t2}"
+
+
+@cocotb.test()
+async def test_rlt(dut):
+    """RLT: rotate left through T (old T → bit 0, old bit 15 → T)."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    a = Asm()
+    # Set T=1 via comparison, then rotate
+    a.li(1, 1)
+    a.clti(1, 2)           # T = 1 (1 < 2)
+    a.li(1, 0x55)          # R1 = 0x0055
+    a.rlt(1)               # R1 = 0x00AB (<<1, old T=1 into bit 0), T = 0
+    a.sw(1, 0x40)
+    a.read_t(3)
+    a.sw(3, 0x42)
+    # Chain: rotate again with T=0
+    a.li(1, 0x55)          # R1 = 0x0055, T=0 from above
+    a.rlt(1)               # R1 = 0x00AA (<<1, old T=0 into bit 0), T = 0
+    a.sw(1, 0x44)
+    a.read_t(3)
+    a.sw(3, 0x46)
+    # Test with bit 15 set
+    a.li(1, 1)
+    a.lui(2, 0x80)
+    a.or_(1, 1, 2)         # R1 = 0x8001, T=0
+    a.rlt(1)               # R1 = 0x0002, T = 1 (old bit 15)
+    a.sw(1, 0x48)
+    a.read_t(3)
+    a.sw(3, 0x4A)
+    a.spin()
+
+    _load_program(dut, a.assemble())
+    await _reset(dut)
+    await ClockCycles(dut.clk, 500)
+
+    v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    t1 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
+    v2 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
+    t2 = _read_ram(dut, 0x0046) | (_read_ram(dut, 0x0047) << 8)
+    v3 = _read_ram(dut, 0x0048) | (_read_ram(dut, 0x0049) << 8)
+    t3 = _read_ram(dut, 0x004A) | (_read_ram(dut, 0x004B) << 8)
+    assert v1 == 0x00AB, f"RLT 0x0055 T=1: expected 0x00AB, got {v1:#06x}"
+    assert t1 == 0, f"RLT T: expected 0, got {t1}"
+    assert v2 == 0x00AA, f"RLT 0x0055 T=0: expected 0x00AA, got {v2:#06x}"
+    assert t2 == 0, f"RLT T: expected 0, got {t2}"
+    assert v3 == 0x0002, f"RLT 0x8001 T=0: expected 0x0002, got {v3:#06x}"
+    assert t3 == 1, f"RLT T: expected 1, got {t3}"
+
+
+@cocotb.test()
+async def test_rrt(dut):
+    """RRT: rotate right through T (old T → bit 15, old bit 0 → T)."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    a = Asm()
+    # Set T=1, then rotate right
+    a.li(1, 1)
+    a.clti(1, 2)           # T = 1
+    a.li(1, 0x44)          # R1 = 0x0044
+    a.rrt(1)               # R1 = 0x8022 (>>1, T=1 into bit 15), T = 0
+    a.sw(1, 0x40)
+    a.read_t(3)
+    a.sw(3, 0x42)
+    # Chain: rotate again with T=0
+    a.li(1, 0x44)          # R1 = 0x0044, T=0
+    a.rrt(1)               # R1 = 0x0022, T = 0
+    a.sw(1, 0x44)
+    a.read_t(3)
+    a.sw(3, 0x46)
+    # Test with bit 0 set
+    a.li(1, 0x55)          # R1 = 0x0055, T=0
+    a.rrt(1)               # R1 = 0x002A, T = 1 (old bit 0)
+    a.sw(1, 0x48)
+    a.read_t(3)
+    a.sw(3, 0x4A)
+    a.spin()
+
+    _load_program(dut, a.assemble())
+    await _reset(dut)
+    await ClockCycles(dut.clk, 500)
+
+    v1 = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    t1 = _read_ram(dut, 0x0042) | (_read_ram(dut, 0x0043) << 8)
+    v2 = _read_ram(dut, 0x0044) | (_read_ram(dut, 0x0045) << 8)
+    t2 = _read_ram(dut, 0x0046) | (_read_ram(dut, 0x0047) << 8)
+    v3 = _read_ram(dut, 0x0048) | (_read_ram(dut, 0x0049) << 8)
+    t3 = _read_ram(dut, 0x004A) | (_read_ram(dut, 0x004B) << 8)
+    assert v1 == 0x8022, f"RRT 0x0044 T=1: expected 0x8022, got {v1:#06x}"
+    assert t1 == 0, f"RRT T: expected 0, got {t1}"
+    assert v2 == 0x0022, f"RRT 0x0044 T=0: expected 0x0022, got {v2:#06x}"
+    assert t2 == 0, f"RRT T: expected 0, got {t2}"
+    assert v3 == 0x002A, f"RRT 0x0055 T=0: expected 0x002A, got {v3:#06x}"
+    assert t3 == 1, f"RRT T: expected 1, got {t3}"
