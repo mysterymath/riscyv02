@@ -969,3 +969,206 @@ done:
 For ADD/SUB, the 16-bit ALU collapses 4 byte additions to 2 word additions plus a lightweight carry/borrow chain (CLTU+BF). For bitwise ops, the advantage is stark: 2 instructions vs 12. For shifts, the barrel shifter makes the operation O(1) — the 6502 must loop N times with no escape, while RISCY-V02 handles any shift amount in a fixed 17–19 cycles. This is the clearest architectural win: the barrel shifter transforms shifts from the 6502's weakest operation into a constant-time operation that's 10–13× faster.
 
 The 6502 wins on shift code size (15–18 B vs 26 B) — its compact 1-byte implied instructions pack the loop tightly. RISCY-V02 trades 11 bytes of code for a 10× speedup. For code-size-sensitive contexts, a compact loop alternative using SLLT/RLT (10 B, 9N cy) is available.
+
+## Packed BCD Arithmetic
+
+The 6502's hardware decimal mode (`SED`) makes BCD arithmetic trivial — `ADC` and `SBC` automatically apply nibble correction. RISCY-V02 has no BCD support, so it must perform the correction in software using the Jones algorithm: pre-inject 6 into each nibble, add, detect which nibbles carried (the 6 was needed), and subtract 6 from those that didn't.
+
+### 8-bit Packed BCD Addition
+
+```c
+// a, b: 2-digit packed BCD (0x00–0x99)
+// Returns packed BCD sum, carry in C/T
+uint8_t bcd_add8(uint8_t a, uint8_t b);
+```
+
+**65C02** — a in A, b in memory, result in A
+
+```
+    SED                 ;  2 cy   1 B    decimal mode
+    CLC                 ;  2 cy   1 B
+    ADC b               ;  3 cy   2 B    BCD add
+    CLD                 ;  2 cy   1 B    back to binary
+```
+
+4 instructions, **5 bytes, 9 cycles.** The hardware does all nibble correction and carry propagation automatically. BCD carry out is in C.
+
+**RISCY-V02** — a in R0, b in R1, result in R0, R2–R4 scratch
+
+```
+    LI   R2, 0x66       ;  2 cy   2 B    correction constant
+    ADD  R3, R0, R2      ;  2 cy   2 B    t1 = a + 0x66
+    ADD  R0, R3, R1      ;  2 cy   2 B    t2 = t1 + b
+    XOR  R3, R3, R1      ;  2 cy   2 B    t3 = t1 ^ b
+    XOR  R3, R0, R3      ;  2 cy   2 B    t4 = t2 ^ t3 (carry bits)
+    LUI  R4, 0x01        ;  2 cy   2 B    \
+    ADDI R4, 0x10        ;  2 cy   2 B    / R4 = 0x0110 (nibble mask)
+    AND  R3, R3, R4      ;  2 cy   2 B    keep only nibble carry bits
+    XOR  R3, R3, R4      ;  2 cy   2 B    invert: 1 = no carry (needs -6)
+    OR   R4, R3, R3      ;  2 cy   2 B    R4 = copy of R3
+    SRLI R4, 2           ;  2 cy   2 B    R4 = R3 >> 2
+    SRLI R3, 3           ;  2 cy   2 B    R3 >>= 3
+    OR   R3, R3, R4      ;  2 cy   2 B    correction = 6 per nibble
+    SUB  R0, R0, R3      ;  2 cy   2 B    subtract excess 6
+    ANDI R0, 0xFF        ;  2 cy   2 B    mask to 8 bits
+```
+
+15 instructions, **30 bytes, 30 cycles.** BCD carry is in bit 8 of the pre-masked result (test before the final ANDI if needed). The Jones algorithm is branchless but requires 5 steps: inject, add, detect carries, build correction, subtract.
+
+| | 65C02 | RISCY-V02 |
+|---|---|---|
+| Code size | 5 B | 30 B |
+| Cycles | 9 cy | 30 cy |
+| Speedup | 3.3× | 1.0× |
+
+### 16-bit Packed BCD Addition
+
+```c
+// a, b: 4-digit packed BCD (0x0000–0x9999)
+// Returns packed BCD sum, carry in C/T
+uint16_t bcd_add16(uint16_t a, uint16_t b);
+```
+
+**65C02** — val at ($00–$01), addend at ($02–$03), result in-place
+
+```
+    SED                 ;  2 cy   1 B    decimal mode
+    CLC                 ;  2 cy   1 B
+    LDA val+0           ;  3 cy   2 B
+    ADC addend+0        ;  3 cy   2 B    low byte BCD add
+    STA val+0           ;  3 cy   2 B
+    LDA val+1           ;  3 cy   2 B
+    ADC addend+1        ;  3 cy   2 B    high byte + carry
+    STA val+1           ;  3 cy   2 B
+    CLD                 ;  2 cy   1 B
+```
+
+9 instructions, **15 bytes, 24 cycles.** Just chain two 8-bit BCD adds through carry, exactly like binary multi-byte addition.
+
+**RISCY-V02** — a in R0, b in R1, result in R0, R2–R4 scratch
+
+```
+    LUI  R2, 0x66        ;  2 cy   2 B    \
+    ADDI R2, 0x66         ;  2 cy   2 B    / R2 = 0x6666
+    ADD  R3, R0, R2       ;  2 cy   2 B    t1 = a + 0x6666
+    ADD  R0, R3, R1       ;  2 cy   2 B    t2 = t1 + b
+    XOR  R3, R3, R1       ;  2 cy   2 B    t3 = t1 ^ b
+    XOR  R3, R0, R3       ;  2 cy   2 B    t4 = t2 ^ t3
+    LUI  R4, 0x11         ;  2 cy   2 B    \
+    ADDI R4, 0x10         ;  2 cy   2 B    / R4 = 0x1110
+    AND  R3, R3, R4       ;  2 cy   2 B    keep nibble carry bits
+    XOR  R3, R3, R4       ;  2 cy   2 B    invert: 1 = needs -6
+    OR   R4, R3, R3       ;  2 cy   2 B    R4 = copy of R3
+    SRLI R4, 2            ;  2 cy   2 B    R4 = R3 >> 2
+    SRLI R3, 3            ;  2 cy   2 B    R3 >>= 3
+    OR   R3, R3, R4       ;  2 cy   2 B    correction = 6 per nibble
+    SUB  R0, R0, R3       ;  2 cy   2 B    subtract excess 6
+```
+
+15 instructions, **30 bytes, 30 cycles.** Identical structure to the 8-bit version — the wider register handles all 4 digits in parallel. No ANDI mask needed since the full 16 bits are the result. BCD carry out is detectable by comparing the pre-correction sum against 0x10000 (lost in 16-bit, would need CLTU before the final SUB).
+
+| | 65C02 | RISCY-V02 |
+|---|---|---|
+| Code size | 15 B | 30 B |
+| Cycles | 24 cy | 30 cy |
+| Speedup | 1.0× | 0.8× |
+
+At 4 digits, the 6502's byte-serial approach starts to cost it: two separate load-add-store sequences, each with 5-cycle zero-page access. RISCY-V02's parallel nibble correction across a 16-bit register nearly closes the gap.
+
+### 32-bit Packed BCD Addition
+
+```c
+// a, b: 8-digit packed BCD (0x00000000–0x99999999)
+// Returns packed BCD sum, carry in C/T
+uint32_t bcd_add32(uint32_t a, uint32_t b);
+```
+
+**65C02** — val at ($00–$03), addend at ($04–$07), result in-place
+
+```
+    SED                 ;  2 cy   1 B    decimal mode
+    CLC                 ;  2 cy   1 B
+    LDA val+0           ;  3 cy   2 B
+    ADC addend+0        ;  3 cy   2 B    byte 0
+    STA val+0           ;  3 cy   2 B
+    LDA val+1           ;  3 cy   2 B
+    ADC addend+1        ;  3 cy   2 B    byte 1 + carry
+    STA val+1           ;  3 cy   2 B
+    LDA val+2           ;  3 cy   2 B
+    ADC addend+2        ;  3 cy   2 B    byte 2 + carry
+    STA val+2           ;  3 cy   2 B
+    LDA val+3           ;  3 cy   2 B
+    ADC addend+3        ;  3 cy   2 B    byte 3 + carry
+    STA val+3           ;  3 cy   2 B
+    CLD                 ;  2 cy   1 B
+```
+
+15 instructions, **25 bytes, 42 cycles.** Each additional byte costs LDA+ADC+STA (9 cy, 6 B).
+
+**RISCY-V02** — {R1, R0} + {R3, R2}, result in {R1, R0}, R4–R6 scratch
+
+Two Jones corrections chained by a BCD carry. The carry is detected by checking for unsigned overflow in the injected addition (`t2 < b_lo` means bit 16 carried out). The carry is folded into `a_hi` before running Jones on the high half.
+
+```
+    ; --- low half: BCD(R0 + R2) ---
+    LUI  R4, 0x66        ;  2 cy   2 B    \
+    ADDI R4, 0x66         ;  2 cy   2 B    / R4 = 0x6666
+    ADD  R5, R0, R4       ;  2 cy   2 B    t1 = a_lo + 0x6666
+    ADD  R0, R5, R2       ;  2 cy   2 B    t2 = t1 + b_lo
+    CLTU R0, R2           ;  2 cy   2 B    T = BCD carry (t2 < b_lo → overflow)
+    XOR  R5, R5, R2       ;  2 cy   2 B    t3 = t1 ^ b_lo
+    XOR  R5, R0, R5       ;  2 cy   2 B    t4 = t2 ^ t3
+    LUI  R6, 0x11         ;  2 cy   2 B    \
+    ADDI R6, 0x10         ;  2 cy   2 B    / R6 = 0x1110
+    AND  R5, R5, R6       ;  2 cy   2 B    nibble carry bits
+    XOR  R5, R5, R6       ;  2 cy   2 B    invert: 1 = needs -6
+    OR   R6, R5, R5       ;  2 cy   2 B    copy
+    SRLI R6, 2            ;  2 cy   2 B    R6 = R5 >> 2
+    SRLI R5, 3            ;  2 cy   2 B    R5 >>= 3
+    OR   R5, R5, R6       ;  2 cy   2 B    correction
+    SUB  R0, R0, R5       ;  2 cy   2 B    corrected low result
+    ; --- high half: BCD(R1 + R3 + carry) ---
+    SRR  R5               ;  2 cy   2 B    \
+    ANDI R5, 1            ;  2 cy   2 B    / R5 = carry (0 or 1)
+    ADD  R1, R1, R5       ;  2 cy   2 B    a_hi' = a_hi + carry
+    LUI  R4, 0x66         ;  2 cy   2 B    \
+    ADDI R4, 0x66         ;  2 cy   2 B    / R4 = 0x6666
+    ADD  R5, R1, R4       ;  2 cy   2 B    t1 = a_hi' + 0x6666
+    ADD  R1, R5, R3       ;  2 cy   2 B    t2 = t1 + b_hi
+    XOR  R5, R5, R3       ;  2 cy   2 B    t3 = t1 ^ b_hi
+    XOR  R5, R1, R5       ;  2 cy   2 B    t4 = t2 ^ t3
+    LUI  R6, 0x11         ;  2 cy   2 B    \
+    ADDI R6, 0x10         ;  2 cy   2 B    / R6 = 0x1110
+    AND  R5, R5, R6       ;  2 cy   2 B    nibble carry bits
+    XOR  R5, R5, R6       ;  2 cy   2 B    invert
+    OR   R6, R5, R5       ;  2 cy   2 B    copy
+    SRLI R6, 2            ;  2 cy   2 B    R6 = R5 >> 2
+    SRLI R5, 3            ;  2 cy   2 B    R5 >>= 3
+    OR   R5, R5, R6       ;  2 cy   2 B    correction
+    SUB  R1, R1, R5       ;  2 cy   2 B    corrected high result
+```
+
+34 instructions, **68 bytes, 68 cycles.** The high half is a near-copy of the low half, with 3 extra instructions to extract and add the BCD carry (SRR+ANDI+ADD). In a loop or subroutine, the constant loads (0x6666, 0x1110) could be hoisted, saving 8 instructions per call.
+
+| | 65C02 | RISCY-V02 |
+|---|---|---|
+| Code size | 25 B | 68 B |
+| Cycles | 42 cy | 68 cy |
+| Speedup | 1.0× | 0.6× |
+
+The 6502's advantage continues to erode. Its cost grows by 9 cycles per byte (LDA+ADC+STA), while RISCY-V02's second Jones pass adds 18 instructions (carry extraction + the fixed Jones sequence). The wider the operand, the less the per-digit overhead of the Jones algorithm matters.
+
+### BCD Summary
+
+| Operation | 65C02 | | RISCY-V02 | | Speedup |
+|---|---|---|---|---|---|
+| | Bytes | Cycles | Bytes | Cycles | |
+| 8-bit add (2 digits) | 5 | 9 | 30 | 30 | 0.3× |
+| 16-bit add (4 digits) | 15 | 24 | 30 | 30 | 0.8× |
+| 32-bit add (8 digits) | 25 | 42 | 68 | 68 | 0.6× |
+
+Hardware BCD is the 6502's clearest architectural advantage. For 2-digit addition, `SED; CLC; ADC; CLD` is unbeatable — 4 instructions, 5 bytes, 9 cycles. The RISCY-V02 needs 15 instructions of bit manipulation to do what the 6502 does in microcode.
+
+But the gap narrows with wider operands. The 6502 scales linearly — each additional byte costs LDA+ADC+STA (9 cy, 6 B) — while RISCY-V02's Jones algorithm handles all 4 nibbles in a 16-bit register in parallel. The cost per additional 16-bit word is one carry extraction (3 insns) plus a repeat of the fixed Jones sequence (16 insns). At 4 digits the cycle counts are nearly tied; at 8 digits the 6502 leads by only 1.7×.
+
+The real question is whether BCD matters enough to justify the ~400 transistors the 6502 spends on decimal mode. In the 1970s home computer context, BCD was used for score displays, clock readouts, and financial calculations — common but not performance-critical. A subroutine call to a BCD add routine costs RISCY-V02 about 30 cycles vs the 6502's 9 — noticeable but not crippling, and the transistor budget is better spent on features that accelerate the hot loops (barrel shifter, wider ALU).
