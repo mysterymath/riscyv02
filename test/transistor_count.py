@@ -137,7 +137,7 @@ def main():
     # sub-module in stat.json — extracted from the same synthesis run as the
     # total, eliminating cross-run non-determinism.
     REGFILE_MODULE = "riscyv02_regfile"
-    REGFILE_SRAM_TX = 1740   # 8T SRAM design (144x8T + 460T peripherals + 128T write staging, 16-bit ports)
+    REGFILE_SRAM_TX = 1500   # 8T SRAM design (128x8T + 378T peripherals, 16-bit ports)
     ARLET_6502_TX   = 13176  # comparison baseline (original decode + bus_keep)
 
     regfile_key = f"\\{REGFILE_MODULE}"

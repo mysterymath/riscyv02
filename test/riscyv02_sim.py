@@ -224,20 +224,47 @@ class RISCYV02Sim:
         self.pc = (self.pc + 2) & 0xFFFF
         self._commit_pending_stores()
 
-        # INT detection: opcode 31 + ir[15:14]=11
+        # Dispatch: decode and handle instantaneous instructions (INT, RETI),
+        # then fall through to normal execute for everything else.
         opcode = ir & 0x1F
-        is_int = opcode == 31 and ((ir >> 14) & 3) == 3
-        if is_int:
-            self._saved_i_bit = self.i_bit  # Stash for EPC save in execute
-            self.i_bit = True
-
-        # Execute: applies architectural effects, returns memory bus entries.
-        # Dispatch owns the fetch; execute only produces mem-phase entries.
         next_pc = self.pc
+        regs_before = list(self.regs)
+
+        # INT (opcode 31, ir[15:14]=11): instantaneous redirect
+        if opcode == 31 and ((ir >> 14) & 3) == 3:
+            vector_idx = (ir >> 6) & 3
+            self.esr = (int(self.i_bit) << 1) | int(self.t_bit)
+            self.epc = self.pc
+            self.i_bit = True
+            self.pc = ((vector_idx + 1) & 3) << 1
+            self._bus_seq = self._fetch_seq(self.pc)
+            self._interrupt_point = 0  # E_IDLE: interruptible every cycle
+            self.current_sync = True
+            self.last_dispatch = (
+                f"INSN @0x{fetch_pc:04X} ir=0x{ir:04X} INT"
+                f" regs={['%04X' % r for r in regs_before]}"
+                f" -> pc=0x{self.pc:04X} epc=0x{self.epc:04X}"
+            )
+            return
+
+        # RETI (opcode 31, sub8=0x03): instantaneous redirect
+        if opcode == 31 and ((ir >> 8) & 0xFF) == 0x03:
+            self.i_bit = bool(self.esr & 2)
+            self.t_bit = bool(self.esr & 1)
+            self.pc = self.epc & 0xFFFE
+            self._bus_seq = self._fetch_seq(self.pc)
+            self._interrupt_point = 0  # E_IDLE: interruptible every cycle
+            self.current_sync = True
+            self.last_dispatch = (
+                f"INSN @0x{fetch_pc:04X} ir=0x{ir:04X} RETI"
+                f" regs={['%04X' % r for r in regs_before]}"
+                f" -> pc=0x{self.pc:04X}"
+            )
+            return
+
+        # Normal execute path
         self._redirect = False
         self._fast_redirect = False
-        self._delayed_redirect = False  # INT/RETI: no insn_completing in RTL
-        regs_before = list(self.regs)
         mem_entries = self._execute(ir)
         # Same-page redirect: 1 wasted fetch entry (3-cycle), else 2 (4-cycle)
         if self._fast_redirect:
@@ -245,18 +272,11 @@ class RISCYV02Sim:
         else:
             exec_entries = self._fetch_seq(next_pc) + mem_entries
 
-        # If a redirect occurred, append target fetch from new PC.
         if self._redirect:
             self._bus_seq = exec_entries + self._fetch_seq(self.pc)
         else:
             self._bus_seq = exec_entries
-        # INT/RETI don't set insn_completing in RTL, so take_nmi can't fire
-        # until E_IDLE (one cycle later). The +1 skips past the first target
-        # fetch entry before becoming interruptible.
-        if self._delayed_redirect:
-            self._interrupt_point = len(exec_entries) + 1
-        else:
-            self._interrupt_point = len(exec_entries)
+        self._interrupt_point = len(exec_entries)
         self.current_sync = True
 
         self.last_dispatch = (
@@ -267,9 +287,13 @@ class RISCYV02Sim:
         )
 
     def _take_interrupt(self, take_nmi):
-        """Enter interrupt: save SR to ESR, save PC to EPC, jump to vector."""
-        stale_pc = self.pc              # Always even (15-bit PC, bit 0 = 0)
+        """Enter interrupt: save SR to ESR, save PC to EPC, jump to vector.
+
+        Instantaneous: EPC/ESR saved in same cycle as dispatch, redirect to
+        vector with just a 2-cycle target fetch (no execute phase).
+        """
         self.esr = (int(self.i_bit) << 1) | int(self.t_bit)
+        self.epc = self.pc
         self.i_bit = True
 
         if take_nmi:
@@ -279,14 +303,12 @@ class RISCYV02Sim:
         else:
             vector = 0x0006
 
-        self.epc = stale_pc             # Clean 16-bit return address
         self.pc = vector
-        exec_entries = self._fetch_seq(stale_pc)  # Clean even address
-        self._bus_seq = exec_entries + self._fetch_seq(vector)
-        self._interrupt_point = len(exec_entries)
+        self._bus_seq = self._fetch_seq(vector)
+        self._interrupt_point = 0  # E_IDLE: interruptible every cycle
         self.last_dispatch = (
             f"{'NMI' if take_nmi else 'IRQ'}"
-            f" epc=0x{stale_pc:04X} vec=0x{vector:04X}"
+            f" epc=0x{self.epc:04X} vec=0x{vector:04X}"
         )
 
     # ------------------------------------------------------------------
@@ -593,13 +615,7 @@ class RISCYV02Sim:
                 self.i_bit = False
                 return []
 
-            if sub8 == 0x03:            # RETI
-                self.i_bit = bool(self.esr & 2)
-                self.t_bit = bool(self.esr & 1)
-                self.pc = self.epc & 0xFFFE
-                self._redirect = True
-                self._delayed_redirect = True
-                return []
+            # RETI (sub8==0x03) handled at dispatch — never reaches _execute
 
             if sub8 == 0x05:            # WAI
                 self.waiting = True
@@ -627,14 +643,7 @@ class RISCYV02Sim:
                 self.t_bit = bool(val & 1)
                 return []
 
-            if (sub8 >> 6) == 3:        # INT (sub8[7:6]=11)
-                vector_idx = (ir >> 6) & 3  # ir[7:6]
-                self.esr = (int(self._saved_i_bit) << 1) | int(self.t_bit)
-                self.epc = self.pc          # Clean return address
-                self.pc = ((vector_idx + 1) & 3) << 1
-                self._redirect = True
-                self._delayed_redirect = True
-                return []
+            # INT (sub8[7:6]=11) handled at dispatch — never reaches _execute
 
         # Unknown instruction — treat as 2-cycle NOP
         return []

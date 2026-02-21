@@ -1,6 +1,6 @@
 # Register File SRAM Analysis
 
-RISCY-V02's register file is a 9-word x 16-bit regular array with 2 read ports and 1 write port (2R1W). Eight words are general-purpose registers (R0–R7), and the 9th word is the Exception PC (EPC) register. EPC is accessible via 4-bit select lines on port 1 and the write port; port 2 remains 3-bit (GP registers only). All ports are 16 bits wide — both bytes of a register are read/written simultaneously. Standard cell synthesis implements it using latches and mux trees, but a real chip would use SRAM — the array is perfectly regular and far too large for individual register cells.
+RISCY-V02's register file is an 8-word x 16-bit regular array of general-purpose registers (R0–R7) with 2 read ports and 1 write port (2R1W). All ports are 16 bits wide and use 3-bit select lines. Both bytes of a register are read/written simultaneously. Standard cell synthesis implements it using latches and mux trees, but a real chip would use SRAM — the array is perfectly regular and far too large for individual register cells.
 
 This document designs an equivalent 8T SRAM register file from first principles, counts every transistor, and computes the SRAM-adjusted transistor count for fair comparison with the Arlet 6502.
 
@@ -19,15 +19,15 @@ The Arlet 6502 has no regular arrays — its registers (A, X, Y, SP) are asymmet
 
 The register file is a single Verilog module (`riscyv02_regfile`) marked `(* keep_hierarchy *)`. This prevents the synthesizer from flattening it into the parent module, so its cell counts appear as a sub-module in `stat.json` — extracted from the same synthesis run as the total, eliminating cross-run non-determinism.
 
-It contains leader latches (21, transparent-high: 16 data + 4 sel + 1 we), follower latches (144, gated by ~clk & decoded wen), and read mux trees. Write inputs are combinational from execute; the leader-follower pair acts as a negedge-triggered write.
+It contains leader latches (20, transparent-high: 16 data + 3 sel + 1 we), follower latches (128, gated by ~clk & decoded wen), and read mux trees. Write inputs are combinational from execute; the leader-follower pair acts as a negedge-triggered write.
 
-The exact cell counts vary slightly between synthesis runs (Yosys ABC optimization is non-deterministic), but the 165 latches are always present. The `transistor_count.py` script reads the actual count from each build's `stat.json`.
+The exact cell counts vary slightly between synthesis runs (Yosys ABC optimization is non-deterministic), but the 148 latches are always present. The `transistor_count.py` script reads the actual count from each build's `stat.json`.
 
 ### Functional Breakdown
 
-- **21 leader latches** (16 w_data + 4 w_sel + 1 w_we): write port staging, transparent during clk=1
-- **144 follower latches** (8 regs × 16 bits + 1 EPC × 16 bits): pure storage array, perfectly regular
-- **Combinational cells**: write decode (3-to-8 + sel[3] gating) and 2 read mux trees (9:1 × 16 bits on port 1, 8:1 × 16 bits on port 2)
+- **20 leader latches** (16 w_data + 3 w_sel + 1 w_we): write port staging, transparent during clk=1
+- **128 follower latches** (8 regs × 16 bits): pure storage array, perfectly regular
+- **Combinational cells**: write decode (3-to-8) and 2 read mux trees (8:1 × 16 bits each)
 
 Tx/cell counts are from the PDK's CDL SPICE netlist (one M-line = one MOSFET), the same source used for all transistor count estimates in this project.
 
@@ -57,34 +57,30 @@ The read-only port connects N6's gate to QB (complement of stored value), so the
 
 ### Storage Array
 
-9 rows x 16 columns = 144 cells x 8T = **1,152T**
+8 rows x 16 columns = 128 cells x 8T = **1,024T**
 
 ### Write Path
 
 Writes occur during clk=0 through the RW port. Both bytes are written simultaneously (16-bit write port), requiring row decode, write enable, and data drivers.
 
-#### Row Decoder (w_sel -> 9 one-hot lines)
+#### Row Decoder (w_sel -> 8 one-hot lines)
 
-A 3-to-8 decoder for GP rows using `w_sel[2:0]`, with `w_sel[3]` gating all 8 GP rows (only GP when sel[3]=0) and directly enabling the EPC row (when sel[3]=1):
+A 3-to-8 decoder for all 8 rows using `w_sel[2:0]`:
 
 | Component | Count | Tx/each | Transistors |
 |---|---|---|---|
 | INV (complement w_sel[2:0]) | 3 | 2 | 6 |
-| AND3 (NAND3 + INV, one per GP row) | 8 | 8 | 64 |
-| INV (~w_sel[3]) | 1 | 2 | 2 |
-| AND2 (gp_row[i] = row[i] AND ~sel[3]) | 8 | 6 | 48 |
-| **Subtotal** | | | **120** |
-
-EPC row enable comes directly from `w_sel[3]` — no additional gate needed.
+| AND3 (NAND3 + INV, one per row) | 8 | 8 | 64 |
+| **Subtotal** | | | **70** |
 
 #### Word Line Gating
 
-Each decoded row line (8 GP + 1 EPC) is ANDed with w_we to produce the write word line. Both byte halves share one word line (no byte select):
+Each decoded row line is ANDed with w_we to produce the write word line. Both byte halves share one word line (no byte select):
 
 | Component | Purpose | Count | Tx/each | Transistors |
 |---|---|---|---|---|
-| AND2 | WL[i] = row[i] AND w_we | 9 | 6 | 54 |
-| **Subtotal** | | | | **54** |
+| AND2 | WL[i] = row[i] AND w_we | 8 | 6 | 48 |
+| **Subtotal** | | | | **48** |
 
 #### Write Drivers
 
@@ -95,7 +91,7 @@ Generate complementary data for the bit lines. 16 data/complement pairs drive al
 | INV | ~w_data[i] (complement) | 16 | 2 | 32 |
 | **Subtotal** | | | | **32** |
 
-**Write decode + drivers total: 206T**
+**Write decode + drivers total: 150T**
 
 #### Write Staging
 
@@ -104,32 +100,30 @@ Both the standard cell regfile and the SRAM equivalent need write staging. The s
 | Component | Count | Tx/each | Transistors |
 |---|---|---|---|
 | Data latch (TG + inverter loop) | 16 | 6 | 96 |
-| Address latch | 4 | 6 | 24 |
+| Address latch | 3 | 6 | 18 |
 | Enable latch (with reset) | 1 | 8 | 8 |
-| **Subtotal** | | | **128** |
+| **Subtotal** | | | **122** |
 
-**Write path total: 206 + 128 = 334T**
+**Write path total: 150 + 122 = 272T**
 
 ### Read Path 1 (RW Port, Differential)
 
-During clk=1, the RW port reads r1_sel. This is a 4-bit address: r1_sel[2:0] decodes the GP row, r1_sel[3] selects EPC instead. Differential bit lines (BL/BLB) give correct polarity directly. Full 16-bit output (no byte select).
+During clk=1, the RW port reads r1_sel. This is a 3-bit address selecting one of 8 GP rows. Differential bit lines (BL/BLB) give correct polarity directly. Full 16-bit output (no byte select).
 
 | Component | Purpose | Count | Tx/each | Transistors |
 |---|---|---|---|---|
 | INV | complement r1_sel[2:0] | 3 | 2 | 6 |
-| AND3 | GP row decode (one per row) | 8 | 8 | 64 |
-| INV | ~r1_sel[3] | 1 | 2 | 2 |
-| AND2 | gp_row[i] = row[i] AND ~sel[3] | 8 | 6 | 48 |
+| AND3 | row decode (one per row) | 8 | 8 | 64 |
 | PMOS | precharge BL[0..15] | 16 | 1 | 16 |
 | PMOS | precharge BLB[0..15] | 16 | 1 | 16 |
 | PMOS | equalize BL=BLB | 16 | 1 | 16 |
-| **Subtotal** | | | | **168** |
+| **Subtotal** | | | | **118** |
 
-EPC read word line comes directly from `r1_sel[3]` — no additional gate. For a 9-deep array the bit-line swing is large and fast — no sense amplifiers are needed.
+For an 8-deep array the bit-line swing is large and fast — no sense amplifiers are needed.
 
 ### Read Path 2 (R-Only Port, Single-Ended)
 
-The 8T cell's dedicated read port: N5 (access, gated by read word line) in series with N6 (driver, gated by QB). Read bit line (RBL) is pulled high by a keeper; selected cell conditionally discharges it. Port 2 uses a 3-bit address and accesses only GP registers (no EPC). Full 16-bit output (no byte select).
+The 8T cell's dedicated read port: N5 (access, gated by read word line) in series with N6 (driver, gated by QB). Read bit line (RBL) is pulled high by a keeper; selected cell conditionally discharges it. Port 2 uses a 3-bit address. Full 16-bit output (no byte select).
 
 | Component | Purpose | Count | Tx/each | Transistors |
 |---|---|---|---|---|
@@ -138,17 +132,15 @@ The 8T cell's dedicated read port: N5 (access, gated by read word line) in serie
 | PMOS | pull-up keeper RBL[0..15] | 16 | 1 | 16 |
 | **Subtotal** | | | | **86** |
 
-Only 8 GP rows are accessed — the EPC row's read-only port word line is tied low. No banking or sel[3] gating needed.
-
 ### Grand Total
 
 | Component | Transistors | % |
 |---|---|---|
-| Storage array (144 x 8T) | 1,152 | 66.2% |
-| Write path (decode + drivers + staging) | 334 | 19.2% |
-| Read path 1 (RW, differential) | 168 | 9.7% |
-| Read path 2 (R, single-ended) | 86 | 4.9% |
-| **Total** | **1,740** | **100%** |
+| Storage array (128 x 8T) | 1,024 | 68.3% |
+| Write path (decode + drivers + staging) | 272 | 18.1% |
+| Read path 1 (RW, differential) | 118 | 7.9% |
+| Read path 2 (R, single-ended) | 86 | 5.7% |
+| **Total** | **1,500** | **100%** |
 
 ### Gate Transistor Counts Used
 
@@ -168,10 +160,10 @@ All counts use standard CMOS complementary logic:
 
 | | Standard Cell | 8T SRAM |
 |---|---|---|
-| Write staging | 21 leader latches × 20T = 420 | 21 latches × 6T = 128 (TG-based) |
-| Storage | 144 follower latches × 20T = 2,880 | 144 cells × 8T = 1,152 |
-| Peripherals | decode + read mux trees | Decode + drivers = 460 |
-| **Total** | **(from synthesis)** | **1,740** |
+| Write staging | 20 leader latches × 20T = 400 | 20 latches × 6T = 122 (TG-based) |
+| Storage | 128 follower latches × 20T = 2,560 | 128 cells × 8T = 1,024 |
+| Peripherals | decode + read mux trees | Decode + drivers = 354 |
+| **Total** | **(from synthesis)** | **1,500** |
 
 Standard cell counts vary slightly between synthesis runs. The exact count for each build is extracted automatically from `stat.json`.
 
@@ -183,7 +175,7 @@ These figures are computed automatically by `transistor_count.py` from each buil
 
 | Metric | Value |
 |---|---|
-| Register file (8T SRAM equivalent) | 1,740 |
+| Register file (8T SRAM equivalent) | 1,500 |
 | Other values | (computed by `transistor_count.py`) |
 
 ## Methodology Notes
