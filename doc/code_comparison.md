@@ -783,7 +783,7 @@ All three bitwise operations are identical in structure — no carry, no interac
 uint32_t sll32(uint32_t a, unsigned shamt);  // shamt 0–31
 ```
 
-Both architectures loop one bit per iteration. The 6502 chains ASL+ROL across four bytes; RISCY-V02 chains SLLT+RLT across two words, with T carrying the overflow bit between them.
+The 6502 has no barrel shifter — it must loop one bit per iteration, chaining ASL+ROL across four bytes. RISCY-V02's barrel shifter (SLL/SRL shift 0–15 bits in one instruction) enables an O(1) approach: split on whether N >= 16, then shift both halves and merge the cross-word bits.
 
 **65C02** — val ($00–$03, modified in-place), shift count in X
 
@@ -800,30 +800,41 @@ loop:
 done:
 ```
 
-8 instructions, **15 bytes.** Per iteration: **25 cycles.**
+8 instructions, **15 bytes.** Per iteration: **25 cycles.** An 8-bit shift costs 205 cycles.
 
-**RISCY-V02** — {R1, R0} shifted in-place, count in R2 (consumed)
+**RISCY-V02** — {R1, R0} shifted in-place, count in R2 (consumed), R3 scratch
 
 ```
     BZ   R2, done       ;  2 cy   2 B
-loop:
-    SLLT R0             ;  2 cy   2 B    Rl <<= 1, T = old bit 15
-    RLT  R1             ;  2 cy   2 B    Rh <<= 1, bit 0 = T
-    ADDI R2, -1         ;  2 cy   2 B
-    BNZ  R2, loop       ;  3 cy   2 B
+    LI   R3, 16         ;  2 cy   2 B
+    CLTU R2, R3         ;  2 cy   2 B    T = (N < 16)
+    BT   small          ;  3 cy   2 B
+    ; N >= 16: Rh = Rl << (N-16), Rl = 0
+    SUB  R2, R2, R3     ;  2 cy   2 B
+    SLL  R1, R0, R2     ;  2 cy   2 B
+    LI   R0, 0          ;  2 cy   2 B
+    J    done           ;  3 cy   2 B
+small:
+    ; N = 1..15: shift both halves, merge cross-word bits
+    SUB  R3, R3, R2     ;  2 cy   2 B    R3 = 16-N
+    SRL  R3, R0, R3     ;  2 cy   2 B    R3 = Rl >> (16-N)
+    SLL  R1, R1, R2     ;  2 cy   2 B    Rh <<= N
+    OR   R1, R1, R3     ;  2 cy   2 B    Rh |= cross bits
+    SLL  R0, R0, R2     ;  2 cy   2 B    Rl <<= N
 done:
 ```
 
-5 instructions, **10 bytes.** Per iteration: **9 cycles.**
+13 instructions, **26 bytes, 17–19 cycles** (constant, regardless of shift amount). For compact code at the cost of O(N) time, a loop alternative using SLLT+RLT is 5 insns / 10 B / 9N cy.
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
-| Code size | 15 B | 10 B |
-| Per iteration | 25 cy | 9 cy |
-| 8-bit shift | 205 cy | 74 cy |
-| Speedup | 1.0× | 2.8× |
+| Code size | 15 B | 26 B |
+| 1-bit shift | 30 cy | 19 cy |
+| 8-bit shift | 205 cy | 19 cy |
+| 16-bit shift | 405 cy | 17 cy |
+| Speedup (N=8) | 1.0× | 10.8× |
 
-SLLT+RLT is the 16-bit analogue of ASL+ROL — one instruction per word instead of one per byte. The 6502's 1-byte DEX saves 1 byte vs ADDI, but four RMW instructions at 5 cycles each can't compete.
+The 6502 is more compact (1-byte DEX, ASL, ROL) but O(N). RISCY-V02's barrel shifter makes the shift itself free — the overhead is all in the cross-word merge logic. For typical shift amounts (4–12), the barrel version is 5–10× faster.
 
 ### 32-bit SRL (Shift Right Logical)
 
@@ -831,7 +842,7 @@ SLLT+RLT is the 16-bit analogue of ASL+ROL — one instruction per word instead 
 uint32_t srl32(uint32_t a, unsigned shamt);  // shamt 0–31
 ```
 
-Mirror of SLL: shift right from the MSB down, chaining the LSB of each unit into the MSB of the next.
+Mirror of SLL. The 6502 chains LSR+ROR from the MSB down; RISCY-V02 uses the barrel shifter with the halves reversed.
 
 **65C02** — val ($00–$03, modified in-place), shift count in X
 
@@ -850,26 +861,37 @@ done:
 
 8 instructions, **15 bytes.** Per iteration: **25 cycles.**
 
-**RISCY-V02** — {R1, R0} shifted in-place, count in R2 (consumed)
+**RISCY-V02** — {R1, R0} shifted in-place, count in R2 (consumed), R3 scratch
 
 ```
     BZ   R2, done       ;  2 cy   2 B
-loop:
-    SRLT R1             ;  2 cy   2 B    Rh >>= 1, T = old bit 0
-    RRT  R0             ;  2 cy   2 B    Rl >>= 1, bit 15 = T
-    ADDI R2, -1         ;  2 cy   2 B
-    BNZ  R2, loop       ;  3 cy   2 B
+    LI   R3, 16         ;  2 cy   2 B
+    CLTU R2, R3         ;  2 cy   2 B    T = (N < 16)
+    BT   small          ;  3 cy   2 B
+    ; N >= 16: Rl = Rh >> (N-16), Rh = 0
+    SUB  R2, R2, R3     ;  2 cy   2 B
+    SRL  R0, R1, R2     ;  2 cy   2 B
+    LI   R1, 0          ;  2 cy   2 B
+    J    done           ;  3 cy   2 B
+small:
+    ; N = 1..15: shift both halves, merge cross-word bits
+    SUB  R3, R3, R2     ;  2 cy   2 B    R3 = 16-N
+    SLL  R3, R1, R3     ;  2 cy   2 B    R3 = Rh << (16-N)
+    SRL  R0, R0, R2     ;  2 cy   2 B    Rl >>= N
+    OR   R0, R0, R3     ;  2 cy   2 B    Rl |= cross bits
+    SRL  R1, R1, R2     ;  2 cy   2 B    Rh >>= N
 done:
 ```
 
-5 instructions, **10 bytes.** Per iteration: **9 cycles.**
+13 instructions, **26 bytes, 17–19 cycles** (constant). Loop alternative: SRLT+RRT, 5 insns / 10 B / 9N cy.
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
-| Code size | 15 B | 10 B |
-| Per iteration | 25 cy | 9 cy |
-| 8-bit shift | 205 cy | 74 cy |
-| Speedup | 1.0× | 2.8× |
+| Code size | 15 B | 26 B |
+| 1-bit shift | 30 cy | 19 cy |
+| 8-bit shift | 205 cy | 19 cy |
+| 16-bit shift | 405 cy | 17 cy |
+| Speedup (N=8) | 1.0× | 10.8× |
 
 ### 32-bit SRA (Shift Right Arithmetic)
 
@@ -877,7 +899,7 @@ done:
 int32_t sra32(int32_t a, unsigned shamt);  // shamt 0–31
 ```
 
-Arithmetic right shift preserves the sign bit. The 6502 has a clever trick: `LDA; ASL A` copies the sign bit into carry, then `ROR` propagates it from the MSB down. RISCY-V02 lacks a single-instruction equivalent (SRLT fills bit 15 with 0, not the sign), so it uses SRAI for the high word and manually chains the cross-word bit.
+Arithmetic right shift preserves the sign bit. The 6502 uses a clever trick: `LDA; ASL A` copies the sign bit into carry, then `ROR` propagates it from the MSB down — but must loop. RISCY-V02's barrel shifter handles it in O(1): the large-shift case uses SRA for the low half and `SRAI R1, 15` to sign-fill the high half.
 
 **65C02** — val ($00–$03, modified in-place), shift count in X
 
@@ -898,32 +920,37 @@ done:
 
 10 instructions, **18 bytes.** Per iteration: **30 cycles.** The LDA+ASL A trick (5 cy, 3 B) is the price of not having a dedicated ASR instruction.
 
-**RISCY-V02** — {R1, R0} shifted in-place, count in R2 (consumed), R3/R4 scratch
+**RISCY-V02** — {R1, R0} shifted in-place, count in R2 (consumed), R3 scratch
 
 ```
-    LI   R3, 1          ;  2 cy   2 B    mask for bit 0
     BZ   R2, done       ;  2 cy   2 B
-loop:
-    AND  R4, R1, R3     ;  2 cy   2 B    R4 = Rh bit 0
-    SRAI R1, 1          ;  2 cy   2 B    Rh >>= 1 (arithmetic)
-    SRLI R0, 1          ;  2 cy   2 B    Rl >>= 1 (logical)
-    SLLI R4, 15         ;  2 cy   2 B    move bit 0 → bit 15
-    OR   R0, R0, R4     ;  2 cy   2 B    Rl[15] = old Rh[0]
-    ADDI R2, -1         ;  2 cy   2 B
-    BNZ  R2, loop       ;  3 cy   2 B
+    LI   R3, 16         ;  2 cy   2 B
+    CLTU R2, R3         ;  2 cy   2 B    T = (N < 16)
+    BT   small          ;  3 cy   2 B
+    ; N >= 16: Rl = Rh >>s (N-16), Rh = sign-fill
+    SUB  R2, R2, R3     ;  2 cy   2 B
+    SRA  R0, R1, R2     ;  2 cy   2 B    Rl = Rh >>s (N-16)
+    SRAI R1, 15         ;  2 cy   2 B    Rh = 0x0000 or 0xFFFF
+    J    done           ;  3 cy   2 B
+small:
+    ; N = 1..15: shift both halves, merge cross-word bits
+    SUB  R3, R3, R2     ;  2 cy   2 B    R3 = 16-N
+    SLL  R3, R1, R3     ;  2 cy   2 B    R3 = Rh << (16-N)
+    SRL  R0, R0, R2     ;  2 cy   2 B    Rl >>= N (logical)
+    OR   R0, R0, R3     ;  2 cy   2 B    Rl |= cross bits
+    SRA  R1, R1, R2     ;  2 cy   2 B    Rh >>= N (arithmetic)
 done:
 ```
 
-9 instructions, **18 bytes.** Per iteration: **15 cycles.** The cross-word bit must be extracted, shifted, and merged explicitly — three extra instructions per iteration compared to SLL/SRL where SLLT/RLT handle it automatically.
+13 instructions, **26 bytes, 17–19 cycles** (constant). `SRAI R1, 15` sign-fills the high word cleanly: it shifts in 15 copies of the sign bit, producing 0x0000 or 0xFFFF.
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
-| Code size | 18 B | 18 B |
-| Per iteration | 30 cy | 15 cy |
-| 8-bit shift | 245 cy | 124 cy |
-| Speedup | 1.0× | 2.0× |
-
-Code size is tied — the 6502's LDA+ASL A trick is compact (3 B) but adds 2 instructions, while RISCY-V02's 3 extra instructions (AND, SLLI, OR) are 6 B but replace the 4-byte ASL+ROR pair with 2-byte SRAI. The 2× speed advantage comes from the same source as the other shifts: each RISCY-V02 iteration processes 2 bytes of data vs 1 byte for the 6502.
+| Code size | 18 B | 26 B |
+| 1-bit shift | 35 cy | 19 cy |
+| 8-bit shift | 245 cy | 19 cy |
+| 16-bit shift | 485 cy | 17 cy |
+| Speedup (N=8) | 1.0× | 12.9× |
 
 ### 32-bit Summary
 
@@ -935,10 +962,10 @@ Code size is tied — the 6502's LDA+ASL A trick is compact (3 B) but adds 2 ins
 | AND | 24 | 36 | 4 | 4 | 9.0× |
 | OR | 24 | 36 | 4 | 4 | 9.0× |
 | XOR | 24 | 36 | 4 | 4 | 9.0× |
-| SLL (N=8) | 15 | 205 | 10 | 74 | 2.8× |
-| SRL (N=8) | 15 | 205 | 10 | 74 | 2.8× |
-| SRA (N=8) | 18 | 245 | 18 | 124 | 2.0× |
+| SLL (N=8) | 15 | 205 | 26 | 19 | 10.8× |
+| SRL (N=8) | 15 | 205 | 26 | 19 | 10.8× |
+| SRA (N=8) | 18 | 245 | 26 | 19 | 12.9× |
 
-The pattern is clear: every 32-bit operation that the 6502 serializes byte-by-byte, RISCY-V02 handles in half the steps. For ADD/SUB, the 16-bit ALU collapses 4 byte additions to 2 word additions plus a lightweight carry/borrow chain (CLTU+BF). For bitwise ops, the advantage is even starker: 2 instructions vs 12. For shifts, SLLT/RLT chain through T just as ASL/ROL chain through carry, but at 2× the granularity.
+For ADD/SUB, the 16-bit ALU collapses 4 byte additions to 2 word additions plus a lightweight carry/borrow chain (CLTU+BF). For bitwise ops, the advantage is stark: 2 instructions vs 12. For shifts, the barrel shifter makes the operation O(1) — the 6502 must loop N times with no escape, while RISCY-V02 handles any shift amount in a fixed 17–19 cycles. This is the clearest architectural win: the barrel shifter transforms shifts from the 6502's weakest operation into a constant-time operation that's 10–13× faster.
 
-The code density advantage ranges from 1.5× (SLL/SRL) to 6× (AND/OR/XOR). The 6502's 1-byte implied-operand instructions (CLC, DEX) and compact zero-page addressing help, but can't compensate for needing 4× as many operations.
+The 6502 wins on shift code size (15–18 B vs 26 B) — its compact 1-byte implied instructions pack the loop tightly. RISCY-V02 trades 11 bytes of code for a 10× speedup. For code-size-sensitive contexts, a compact loop alternative using SLLT/RLT (10 B, 9N cy) is available.
