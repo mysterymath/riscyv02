@@ -714,7 +714,7 @@ Total code: **28 bytes**
 | Tail | 18 cy/byte | 6 cy (1 byte) |
 | Code size | 28 B | 28 B |
 
-The 65C02's `(indirect),Y` is powerful — pointer dereference plus index in one instruction. But the 8-bit index register forces page-boundary handling that complicates the code. RISCY-V02's 16-bit pointers eliminate page handling, and 16-bit word loads/stores copy two bytes per bus transaction, nearly halving throughput cost. The structure is analogous: bulk transfer (pages vs words) with a tail for the remainder (partial page vs odd byte).
+The 65C02's `(indirect),Y` is powerful — pointer dereference plus index in one instruction. But the 8-bit index register forces page-boundary handling that complicates the code. RISCY-V02's 16-bit pointers eliminate page handling, and 16-bit word loads/stores copy two bytes per bus transaction, nearly halving throughput cost. The structure is analogous: bulk transfer (pages vs words) with a tail for the remainder (partial page vs odd byte). Code size is identical at 28 bytes — the 65C02's compact 1-byte instructions (INY, DEX) compensate for the page-crossing overhead, while RISCY-V02's uniform 2-byte encoding trades density for simplicity.
 
 ### strcpy
 
@@ -768,7 +768,7 @@ Total code: **12 bytes**
 | Page overhead | 13 cy / 256 chars | none |
 | Code size | 18 B | 12 B |
 
-Both versions store the byte before testing for the null terminator — the 65C02 via `BEQ` after `STA`, RISCY-V02 via `BNZ` after `SBR`. The 65C02 needs an extra `BEQ` branch (2 cycles, not taken) on every character to check for termination, plus page-crossing logic. RISCY-V02 folds the termination check into the loop's back-edge branch.
+Both versions store the byte before testing for the null terminator — the 65C02 via `BEQ` after `STA`, RISCY-V02 via `BNZ` after `SBR`. The 65C02 needs an extra `BEQ` branch (2 cycles, not taken) on every character to check for termination, plus page-crossing logic. RISCY-V02 folds the termination check into the loop's back-edge branch. At 12 bytes vs 18, RISCY-V02 is also more compact — the 65C02's page-crossing code (6 bytes) adds density overhead that RISCY-V02 simply doesn't need.
 
 Word-copy variant (RISCY-V02 only, R7 = 0x00FF preloaded):
 
@@ -865,7 +865,7 @@ Average: **14.5 cy/iter**. Total code: **20 bytes**
 | 16 iterations (avg) | ~704 cy | ~232 cy |
 | Code size | 36 B | 20 B |
 
-The 3× per-iteration speedup comes from three sources: 16-bit addition is one instruction (`ADD`) vs seven (`CLC`+3×`LDA`/`ADC`/`STA`); 16-bit shifts are one instruction (`SLLI`/`SRLI`) vs two (`ASL`+`ROL`); and testing a 16-bit value for zero is one instruction (`BZ`) vs three (`LDA`+`ORA`+`BEQ`). Every 16-bit operation that the 6502 must serialize byte-by-byte collapses to a single instruction on RISCY-V02.
+The 3× per-iteration speedup comes from three sources: 16-bit addition is one instruction (`ADD`) vs seven (`CLC`+3×`LDA`/`ADC`/`STA`); 16-bit shifts are one instruction (`SLLI`/`SRLI`) vs two (`ASL`+`ROL`); and testing a 16-bit value for zero is one instruction (`BZ`) vs three (`LDA`+`ORA`+`BEQ`). Every 16-bit operation that the 6502 must serialize byte-by-byte collapses to a single instruction on RISCY-V02. Code density follows the same pattern: 20 bytes vs 36, a 44% reduction. The 65C02's 1-byte `CLC` and implied-operand instructions can't compensate for the sheer number of extra instructions needed to work in 8-bit halves.
 
 ### 16 ÷ 16 Unsigned Division
 
@@ -942,7 +942,7 @@ Average: **17.5 cy/iter**. Total code: **22 bytes**
 | 16 iterations | ~784 cy | ~280 cy |
 | Code size | 38 B | 22 B |
 
-The structure is identical — the same restoring division algorithm. The 2.8× speedup comes from three sources: 16-bit shifts are single instructions, the trial subtraction compresses from 6 instructions to 2 (`CLTU`+`SUB`), and `SLLT`+`RLT` chain the dividend's high bit directly into the remainder without needing `SRR`+`ANDI` to extract T into a register (saving 6 cy/iteration vs the pre-SLLT version).
+The structure is identical — the same restoring division algorithm. The 2.8× speedup comes from three sources: 16-bit shifts are single instructions, the trial subtraction compresses from 6 instructions to 2 (`CLTU`+`SUB`), and `SLLT`+`RLT` chain the dividend's high bit directly into the remainder without needing `SRR`+`ANDI` to extract T into a register (saving 6 cy/iteration vs the pre-SLLT version). At 22 bytes vs 38, RISCY-V02 is 42% more compact — the 65C02's `SEC`+`TAY` bookkeeping and byte-by-byte shift chains add up fast.
 
 ### CRC-8 (SMBUS)
 
@@ -1018,7 +1018,7 @@ Average: **10.5 cy/bit**, 84 cy/byte bit processing. Per byte: **100 cy**. Total
 | Per byte | 101 cy | 100 cy |
 | Code size | 22 B | 32 B |
 
-Essentially a tie. The `SLLT` instruction shifts the CRC and captures the overflow bit into T in one instruction — matching the 65C02's `ASL` + carry pattern. The remaining per-byte overhead (setup, pointer/counter updates) is slightly more on RISCY-V02 due to the upper-byte CRC convention, but the bit loop is now identical in cycle count.
+Essentially a tie on speed. The `SLLT` instruction shifts the CRC and captures the overflow bit into T in one instruction — matching the 65C02's `ASL` + carry pattern. The remaining per-byte overhead (setup, pointer/counter updates) is slightly more on RISCY-V02 due to the upper-byte CRC convention, but the bit loop is now identical in cycle count. The 65C02 wins on density (22 B vs 32 B) — its 1-byte `ASL A`, `DEX`, `INY`, and `RTS` pack the inner loop tightly, while RISCY-V02's uniform 2-byte encoding and explicit counter management cost 10 extra bytes. This is where 8-bit code density shines: the algorithm is inherently 8-bit, so the 65C02's implied-operand instructions are at their most effective.
 
 ### CRC-16/CCITT
 
@@ -1103,7 +1103,7 @@ Average: **10.5 cy/bit**, 84 cy/byte bit processing. Per byte: **100 cy**. Total
 | Per byte | 227 cy | 100 cy |
 | Code size | 43 B | 34 B |
 
-RISCY-V02 wins CRC-16 by >2×. The `SLLT` instruction shifts and captures the overflow bit into T in a single instruction, matching the 65C02's `ASL`+carry for free. The 6502's bit loop goes from 10.5 to 25.5 cy (2.4× slower) because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2. The polynomial XOR is especially painful: 1 instruction on RISCY-V02 vs 6 on the 6502.
+RISCY-V02 wins CRC-16 by >2× on speed and is also more compact (34 B vs 43 B). The `SLLT` instruction shifts and captures the overflow bit into T in a single instruction, matching the 65C02's `ASL`+carry for free. The 6502's bit loop goes from 10.5 to 25.5 cy (2.4× slower) because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2. The polynomial XOR is especially painful: 1 instruction on RISCY-V02 vs 6 on the 6502. The density advantage reverses from CRC-8 because the 65C02's byte-serialization overhead (6 extra instructions for XOR alone) outweighs its 1-byte instruction advantage.
 
 ### Raster Bar Interrupt Handler
 
@@ -1188,7 +1188,7 @@ Total code: **24 bytes**
 | **Total** | **~39.5 cy** | **~39 cy** |
 | Code size | 15 B | 24 B |
 
-Essentially a tie. The 65C02's architectural advantage — each instruction carries its own address (zero page or absolute), so the handler mixes `INC $02` (zero page) with `STA $D021` (absolute) without base register setup — is offset by RISCY-V02's instantaneous interrupt dispatch (2-cycle entry/exit vs 7+6=13 for the 6502). RISCY-V02 must reload R0 when switching memory regions and save/restore two registers (16 cy vs 7 cy), but the 9-cycle entry/exit savings almost exactly compensate.
+Essentially a tie on speed. The 65C02's architectural advantage — each instruction carries its own address (zero page or absolute), so the handler mixes `INC $02` (zero page) with `STA $D021` (absolute) without base register setup — is offset by RISCY-V02's instantaneous interrupt dispatch (2-cycle entry/exit vs 7+6=13 for the 6502). RISCY-V02 must reload R0 when switching memory regions and save/restore two registers (16 cy vs 7 cy), but the 9-cycle entry/exit savings almost exactly compensate. The 65C02 is significantly more compact (15 B vs 24 B) — its 1-byte `PHA`/`PLA`/`RTI` and embedded-address instructions (`INC $02`, `STA $D021`) pack tightly, while RISCY-V02 pays for explicit register save/restore and base register setup.
 
 For handlers with more useful work, RISCY-V02's save/restore is fixed while its body instructions are generally faster, so the crossover comes quickly.
 
@@ -1261,7 +1261,7 @@ rc4_byte:
 | Code size | 34 B | 32 B |
 | Speedup | 1.0× | 1.6× |
 
-RISCY-V02 wins decisively. The mod-256 masking requires a preloaded mask register (R7 = 0x00FF) since ANDI is sign-extended, but the per-call cost is identical. Two factors overwhelm the mod-256 and address-computation tax:
+RISCY-V02 wins decisively on speed (1.6×) and is slightly more compact (32 B vs 34 B). The mod-256 masking requires a preloaded mask register (R7 = 0x00FF) since ANDI is sign-extended, but the per-call cost is identical. Two factors overwhelm the mod-256 and address-computation tax:
 
 1. **Registers eliminate state traffic.** The 6502 stores i and j in zero page — every call does INC+LDX+ADC+STA (14 cy) just to read, update, and write back two index variables. RISCY-V02 keeps i, j, and the S base in registers: state overhead is a single `ADDI` (2 cy).
 
