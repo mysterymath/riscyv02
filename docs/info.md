@@ -153,32 +153,24 @@ INT encoding format, software can also trigger IRQ/NMI vectors directly.
 
 ### Register Naming Convention
 
-| Register | Name | Suggested Purpose |
+Two registers have architectural roles: R0 is the implicit base for I-type loads and stores (`R0 + sext(imm8)`), making it the natural accumulator/pointer, and R7 is the stack pointer for SP-relative memory instructions. The remaining six are truly general-purpose. Comparisons write to the T flag rather than a destination register, so all eight GPRs are available as operands.
+
+| Register | Name | Purpose |
 |---|---|---|
-| R0 | a0 | Accumulator / implicit base address (I-type loads/stores) |
+| R0 | a0 | Accumulator / implicit base (I-type memory) |
 | R1 | a1 | Argument / scratch |
-| R2 | t0 | Temporary 0 |
-| R3 | t1 | Temporary 1 |
-| R4 | s0 | Saved register 0 |
-| R5 | s1 | Saved register 1 |
-| R6 | ra | Return address (link register) |
+| R2 | t0 | Temporary |
+| R3 | t1 | Temporary |
+| R4 | s0 | Callee-saved |
+| R5 | s1 | Callee-saved |
+| R6 | ra | Return address (JAL/JALR write PC+2 here; return via `JR R6, 0`) |
 | R7 | sp | Stack pointer |
 
-R0 is the implicit base address register for I-type loads and stores: the effective address is `R0 + sext(imm8)`, and `ir[7:5]` selects the data register. This is the same convention as R7-based SP-relative instructions, but using R0 as the base. Comparisons (CLTI, CLTUI, CEQI, CLT, CLTU, CEQ) write to the T flag rather than a destination register, preserving all GPRs. R-type loads and stores allow explicit register selection for both data and base, with no offset.
-
-### Link Register (R6)
-
-R6 serves as the link register. JAL and JALR write the return address (PC+2) to R6. Subroutine return is `JR R6, 0`. Since R6 is a regular GPR, it can be saved/restored with normal load/store instructions. R6 is callee-saved: any function that makes calls must save R6 on entry and restore it before returning.
-
-R6 is a normal register in all contexts, including interrupt handlers. The interrupt return address is stored in the EPC register (see Interrupts section), not in R6. Interrupt handlers that need to use R6 (or any other register) must save and restore it manually.
+R6 is a normal GPR — callee-saved, and interrupt handlers that use it must save and restore it manually. The interrupt return address lives in EPC, not R6. R-type loads and stores bypass the R0 convention, allowing explicit selection of both data register and base with no offset.
 
 ## Instruction Encoding
 
-All instructions are 16 bits. The encoding follows RISC-V principles: **fixed 5-bit opcode at [4:0]**, register at [7:5], sign bit always at [15], immediates at the top. The word `0x0000` is ADDI R0, 0 = NOP. All immediates are sign-extended (including ANDI/ORI/XORI), same as RISC-V.
-
-### Encoding Overview
-
-**61 instructions defined.**
+All 61 instructions are fixed 16-bit. Three properties drive the encoding: the sign bit is always ir[15], so sign extension runs in parallel with decode; the primary register field ir[7:5] is shared across I/SI/SYS/R-type formats, enabling a speculative register read before the opcode is fully decoded; and `0x0000` encodes ADDI R0, 0 (NOP). All immediates are sign-extended, same as RISC-V.
 
 | Format | Layout (MSB→LSB) | Used |
 |---|---|---|
@@ -189,7 +181,7 @@ All instructions are 16 bits. The encoding follows RISC-V principles: **fixed 5-
 | SI | `[fn2:2\|fn4:2\|shamt:4\|rs/rd:3\|opcode:5]` | 7 |
 | SYS | `[sub:8\|reg:3\|opcode:5]` | 10 |
 
-Fields are packed MSB-first: opcode at bottom, immediates at top. The sign bit is always ir[15] in every format, enabling sign extension in parallel with decode. The primary register field ir[7:5] is shared across I-type, SI-type, SYS, and R-type (as rs1), enabling speculative register file reads before format decode completes. In R-type, rs2 is at [10:8] and rd at [13:11].
+In R-type, rs2 is at [10:8] and rd at [13:11].
 
 ### Opcode Table
 
@@ -267,120 +259,96 @@ All other encodings execute as NOP (2-cycle no-op).
 
 `rd = rd + sext(imm8)` -- 2 cycles
 
-Adds a sign-extended 8-bit immediate (-128 to +127) to the destination register. `ADDI R0, 0` (encoding `0x0000`) is the canonical NOP. Useful for stack pointer adjustments and small constant additions. Pairs with LUI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`.
+Adds a sign-extended 8-bit immediate (-128 to +127) to the destination register. `ADDI R0, 0` (encoding `0x0000`) is the canonical NOP. Pairs with LUI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`.
 
 #### LI -- Load Immediate
 
 `rd = sext(imm8)` -- 2 cycles
 
-Loads a sign-extended 8-bit immediate (-128 to +127) into a register. No memory access or register read needed.
+Loads a sign-extended 8-bit immediate (-128 to +127) into a register.
 
-#### LW -- Load Word
+#### LW, LB, LBU -- Load (R0-relative)
 
-`rd = MEM16[R0 + sext(imm8)]` -- 4 cycles
+All I-type loads use R0 as the implicit base with a signed byte offset (-128 to +127). Word loads transfer low byte first.
 
-Loads a 16-bit word from memory into the register at ir[7:5]. R0 is the implicit base address; the 8-bit signed offset is a byte offset (not scaled), giving a range of -128 to +127 bytes from R0. The low byte is read first, then the high byte.
+- `LW rd, imm8` -- `rd = MEM16[R0 + sext(imm8)]` -- 4 cycles
+- `LB rd, imm8` -- `rd = sext(MEM[R0 + sext(imm8)])` -- 3 cycles
+- `LBU rd, imm8` -- `rd = zext(MEM[R0 + sext(imm8)])` -- 3 cycles
 
-#### LB -- Load Byte (Sign-Extend)
+#### SW, SB -- Store (R0-relative)
 
-`rd = sext(MEM[R0 + sext(imm8)])` -- 3 cycles
-
-Loads a single byte and sign-extends it to 16 bits into the register at ir[7:5]. R0 is the implicit base. If bit 7 is set, the high byte is filled with 0xFF; otherwise 0x00.
-
-#### LBU -- Load Byte (Zero-Extend)
-
-`rd = zext(MEM[R0 + sext(imm8)])` -- 3 cycles
-
-Loads a single byte and zero-extends it to 16 bits into the register at ir[7:5]. R0 is the implicit base. The high byte is always 0x00.
-
-#### SW -- Store Word
-
-`MEM16[R0 + sext(imm8)] = rs` -- 4 cycles
-
-Stores the register at ir[7:5] as a 16-bit word to memory. R0 is the implicit base address. The low byte is written first, then the high byte.
-
-#### SB -- Store Byte
-
-`MEM[R0 + sext(imm8)] = rs[7:0]` -- 3 cycles
-
-Stores the low byte of the register at ir[7:5] to memory. R0 is the implicit base address.
+- `SW rs, imm8` -- `MEM16[R0 + sext(imm8)] = rs` -- 4 cycles (low byte first)
+- `SB rs, imm8` -- `MEM[R0 + sext(imm8)] = rs[7:0]` -- 3 cycles
 
 #### JR -- Jump Register
 
 `PC = rs + sext(imm8)` -- 3-4 cycles
 
-Unconditional jump to a register plus a signed byte offset. The 8-bit offset gives a range of -128 to +127 bytes from the register value.
+Unconditional jump to a register plus a signed byte offset (-128 to +127).
 
 #### JALR -- Jump and Link Register
 
 `rs = PC+2; PC = rs + sext(imm8)` -- 4 cycles
 
-Register-indirect jump that saves the return address in the source register. In I-type, the single register field serves as both jump base and link destination. The conventional call sequence uses R6: `JALR R6, offset` reads the jump target from R6, then writes the return address back to R6. Pairs with AUIPC for full 16-bit PC-relative function calls: `AUIPC t0, upper; JALR t0, lower`.
-
+Register-indirect call. The single register field is both jump base and link destination: `JALR R6, offset` reads the target from R6, then writes the return address back. Pairs with AUIPC for full 16-bit PC-relative calls: `AUIPC t0, upper; JALR t0, lower`.
 
 #### ANDI -- And Immediate
 
 `rd = rd & sext(imm8)` -- 2 cycles
 
-Bitwise AND with a sign-extended 8-bit immediate (-128 to +127). With a positive immediate (0-127), masks the low 7 bits and clears the high byte. With a negative immediate, masks the low byte and preserves the high byte. Note: `ANDI rd, 0xFF` is a no-op (sign-extends to 0xFFFF); use `LBU` to extract a low byte instead.
+Positive immediate masks low 7 bits and clears the high byte; negative immediate masks the low byte and preserves the high byte. Note: `ANDI rd, 0xFF` is a no-op (sign-extends to 0xFFFF); use `LBU` to extract a low byte.
 
 #### ORI -- Or Immediate
 
 `rd = rd | sext(imm8)` -- 2 cycles
 
-Bitwise OR with a sign-extended 8-bit immediate. With a positive immediate, sets bits in the low byte without affecting the high byte. With a negative immediate, sets all high-byte bits.
-
 #### XORI -- Xor Immediate
 
 `rd = rd ^ sext(imm8)` -- 2 cycles
 
-Bitwise XOR with a sign-extended 8-bit immediate. With a positive immediate, toggles bits in the low byte without affecting the high byte. With a negative immediate (`XORI rd, -1`), inverts all 16 bits (bitwise NOT).
+`XORI rd, -1` inverts all 16 bits (bitwise NOT).
 
 #### CLTI -- Compare Less Than Immediate (Signed)
 
 `T = (rs < sext(imm8))` -- 2 cycles
 
-Compares the source register against a sign-extended 8-bit immediate (-128 to +127) as signed integers. Sets T=1 if less, T=0 otherwise. No register is modified. Pattern: `CLTI rs, val; BT target` (branch if rs < val).
+Sets T=1 if less, T=0 otherwise. No register modified. Pattern: `CLTI rs, val; BT target`.
 
 #### CLTUI -- Compare Less Than Immediate (Unsigned)
 
 `T = (rs <u sext(imm8))` -- 2 cycles
 
-Compares the source register against a sign-extended 8-bit immediate as unsigned integers. The immediate is sign-extended then treated as unsigned. Sets T=1 if less, T=0 otherwise.
+The immediate is sign-extended then compared as unsigned.
 
 #### BZ -- Branch if Zero
 
 `if rs == 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
 
-Branches to a PC-relative target if the source register is zero. The 8-bit signed offset is shifted left by 1, giving a range of -256 to +254 bytes from the next instruction address. Tests the full 16-bit register value. Useful for loop counters and null-pointer checks.
+The offset is shifted left by 1, giving -256 to +254 bytes range. Tests the full 16-bit register value.
 
 #### BNZ -- Branch if Non-Zero
 
 `if rs != 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
 
-Branches to a PC-relative target if the source register is non-zero. Useful for loop counters: `ADDI rd, -1; BNZ rd, loop`.
+Pattern: `ADDI rd, -1; BNZ rd, loop`.
 
 #### CEQI -- Compare Equal Immediate
 
 `T = (rs == sext(imm8))` -- 2 cycles
 
-Compares the source register against a sign-extended 8-bit immediate (-128 to +127) for equality. Sets T=1 if equal, T=0 otherwise. No register is modified. Pattern: `CEQI rs, val; BT equal_label` (branch if rs == val).
-
 ### B-type -- T-Flag Branches
 
-BT and BF use opcode 24 with funct3 at ir[7:5]. They branch based on the T flag set by comparison instructions.
+Branch based on the T flag set by comparison instructions. Same-page taken: 3 cycles; page-crossing: 4 cycles.
 
 #### BT -- Branch if T Set
 
 `if T == 1: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
 
-Branches if T=1. Same-page taken: 3 cycles; page-crossing: 4 cycles. Pattern: `CLTI rs, val; BT target` (branch if rs < val). `CLT rs1, rs2; BT target` (branch if rs1 < rs2). `CEQI rs, val; BT target` (branch if rs == val).
-
 #### BF -- Branch if T Clear
 
 `if T == 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
 
-Branches if T=0. Pattern: `CLTU rs1, rs2; BF target` (branch if rs1 >= rs2). `CLTI rs, val; BF target` (branch if rs >= val).
+Pattern: `CLTI rs, val; BF target` (branch if rs >= val).
 
 ### I-type -- Upper Immediate
 
@@ -388,13 +356,13 @@ Branches if T=0. Pattern: `CLTU rs1, rs2; BF target` (branch if rs1 >= rs2). `CL
 
 `rd = imm8 << 8` -- 2 cycles
 
-Loads an 8-bit immediate into the upper byte of a register, clearing the low byte. The immediate range covers the full 16-bit address space (any upper byte). Pairs with ADDI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`. When the low byte is negative (bit 7 set), compensate the upper byte by adding 1, same as RISC-V's LUI+ADDI convention.
+Loads an 8-bit immediate into the upper byte, clearing the low byte. Pairs with ADDI for full 16-bit constants: `LUI rd, hi; ADDI rd, lo`. When the low byte has bit 7 set, compensate the upper byte by +1 (same as RISC-V).
 
 #### AUIPC -- Add Upper Immediate to PC
 
 `rd = (PC+2) + (imm8 << 8)` -- 2 cycles
 
-Adds an 8-bit immediate, placed in the upper byte, to the address of the next instruction (PC+2). Pairs with LW/SW/JR's offset for PC-relative addressing: AUIPC provides the upper bits and the subsequent load/store/jump provides the lower bits.
+Pairs with LW/SW/JR's offset for PC-relative addressing: AUIPC provides the upper bits, the subsequent instruction provides the lower bits.
 
 ### J-type -- PC-Relative Jumps
 
@@ -402,13 +370,13 @@ Adds an 8-bit immediate, placed in the upper byte, to the address of the next in
 
 `PC += sext(imm10) << 1` -- 3-4 cycles
 
-Unconditional PC-relative jump. The 10-bit signed offset is shifted left by 1, giving a range of -1024 to +1022 bytes from the next instruction address.
+Range: -1024 to +1022 bytes.
 
 #### JAL -- Jump and Link
 
 `R6 = PC+2; PC += sext(imm10) << 1` -- 4 cycles
 
-Unconditional PC-relative jump that saves the return address in R6. Used for subroutine calls; return with `JR R6, 0`.
+Subroutine call; return with `JR R6, 0`.
 
 ### R-type -- Register ALU
 
@@ -419,24 +387,9 @@ All R-type ALU instructions are 2 cycles. rd at ir[13:11], rs2 at ir[10:8], rs1 
 #### AND -- `rd = rs1 & rs2`
 #### OR -- `rd = rs1 | rs2`
 #### XOR -- `rd = rs1 ^ rs2`
-
-#### SLL -- Shift Left Logical
-
-`rd = rs1 << rs2[3:0]`
-
-Shifts rs1 left by the amount in rs2 (low 4 bits, range 0-15). Vacated bits are filled with zeros.
-
-#### SRL -- Shift Right Logical
-
-`rd = rs1 >>u rs2[3:0]`
-
-Shifts rs1 right by the amount in rs2 (low 4 bits). Vacated bits are filled with zeros.
-
-#### SRA -- Shift Right Arithmetic
-
-`rd = rs1 >>s rs2[3:0]`
-
-Shifts rs1 right by the amount in rs2 (low 4 bits). Vacated bits are filled with copies of the sign bit (rs1[15]).
+#### SLL -- `rd = rs1 << rs2[3:0]` (shift left logical, 0-15)
+#### SRL -- `rd = rs1 >>u rs2[3:0]` (shift right logical, 0-15)
+#### SRA -- `rd = rs1 >>s rs2[3:0]` (shift right arithmetic, 0-15)
 
 ### SI-type -- Shift Immediate
 
@@ -448,35 +401,22 @@ All shift immediate instructions are 2 cycles and operate in-place (rd = rd shif
 
 ### SI-type -- Shift/Rotate Through T
 
-All shift/rotate-through-T instructions are 2 cycles, shift by exactly 1 bit, and capture the shifted-out bit into T. Designed for bit-at-a-time algorithms (CRC, long division, multiply). The shamt field is reserved and must be encoded as 1.
+All 2 cycles, shift by exactly 1 bit, capture the shifted-out bit into T. Designed for bit-at-a-time algorithms (CRC, long division, multiply) and multi-word shifts.
 
-#### SLLT -- Shift Left Logical through T
-
-`T = rd[15]; rd = {rd[14:0], 0}` -- 2 cycles
-
-Shifts rd left by 1. The old bit 15 (shifted out) is captured in T. Bit 0 is filled with 0. Extracts the sign bit and shifts in a single instruction, useful for sign-based algorithms and multi-word shifts.
-
-#### SRLT -- Shift Right Logical through T
-
-`T = rd[0]; rd = {0, rd[15:1]}` -- 2 cycles
-
-Shifts rd right by 1. The old bit 0 (shifted out) is captured in T. Bit 15 is filled with 0.
+#### SLLT -- `T = rd[15]; rd = {rd[14:0], 0}`
+#### SRLT -- `T = rd[0]; rd = {0, rd[15:1]}`
 
 #### RLT -- Rotate Left through T
 
-`T = rd[15]; rd = {rd[14:0], old_T}` -- 2 cycles
-
-Shifts rd left by 1. The old bit 15 is captured in T. Bit 0 is filled with the previous T value. This creates a 17-bit rotate path (16-bit register + T), equivalent to the 6502's ROL instruction. Chaining RLT across two registers shifts a bit from one into the other.
+`T = rd[15]; rd = {rd[14:0], old_T}` -- 17-bit rotate path (equivalent to 6502 ROL). Chaining RLT across two registers shifts a bit from one into the other.
 
 #### RRT -- Rotate Right through T
 
-`T = rd[0]; rd = {old_T, rd[15:1]}` -- 2 cycles
-
-Shifts rd right by 1. The old bit 0 is captured in T. Bit 15 is filled with the previous T value. This creates a 17-bit rotate path, equivalent to the 6502's ROR instruction.
+`T = rd[0]; rd = {old_T, rd[15:1]}` -- equivalent to 6502 ROR.
 
 ### R-type -- Register Load/Store and Compare
 
-R-type loads and stores use explicit registers for both data and base, with no offset. For loads, rd at ir[13:11] is the destination and rs1 at ir[7:5] is the address. For stores, rs2 at ir[10:8] is the data and rs1 at ir[7:5] is the address.
+Explicit registers for both data and base, no offset. Loads: rd at ir[13:11], address at rs1 ir[7:5]. Stores: data at rs2 ir[10:8], address at rs1 ir[7:5].
 
 #### LWR -- `rd = MEM16[rs1]` -- 4 cycles
 #### LBR -- `rd = sext(MEM[rs1])` -- 3 cycles
@@ -484,97 +424,51 @@ R-type loads and stores use explicit registers for both data and base, with no o
 #### SWR -- `MEM16[rs1] = rs2` -- 4 cycles
 #### SBR -- `MEM[rs1] = rs2[7:0]` -- 3 cycles
 
-#### CLT -- Compare Less Than (Signed)
+#### CLT -- `T = (rs1 < rs2)` -- 2 cycles (signed)
+#### CLTU -- `T = (rs1 <u rs2)` -- 2 cycles (unsigned)
+#### CEQ -- `T = (rs1 == rs2)` -- 2 cycles
 
-`T = (rs1 < rs2)` -- 2 cycles
-
-Compares rs1 and rs2 as signed 16-bit integers. Sets T=1 if rs1 < rs2, T=0 otherwise. No register is modified. Pattern: `CLT a, b; BT target` (branch if a < b signed).
-
-#### CLTU -- Compare Less Than (Unsigned)
-
-`T = (rs1 <u rs2)` -- 2 cycles
-
-Compares rs1 and rs2 as unsigned 16-bit integers. Sets T=1 if rs1 < rs2, T=0 otherwise. No register is modified. Use `SRR rd; ANDI rd, 1` to capture the result in a register if needed.
-
-#### CEQ -- Compare Equal
-
-`T = (rs1 == rs2)` -- 2 cycles
-
-Compares rs1 and rs2 for equality. Sets T=1 if equal, T=0 otherwise. No register is modified. Pattern: `CEQ a, b; BT target` (branch if a == b).
+No register modified. Use `SRR rd; ANDI rd, 1` to capture T into a register.
 
 ### System Format
 
-#### SEI -- Set Interrupt Disable
-
-`I = 1` -- 2 cycles
-
-Disables interrupts.
-
-#### CLI -- Clear Interrupt Disable
-
-`I = 0` -- 2 cycles
-
-Enables interrupts. A pending IRQ (IRQB=0) will be taken at the next instruction boundary.
+#### SEI -- `I = 1` -- 2 cycles (disable interrupts)
+#### CLI -- `I = 0` -- 2 cycles (enable interrupts; pending IRQ taken at next boundary)
 
 #### RETI -- Return from Interrupt
 
 `{I, T} = ESR; PC = EPC` -- 2 cycles
 
-Restores both I and T flags from the ESR register and returns to the interrupted code. EPC is a clean 16-bit address (no flag packing). The I-bit effect is forwarded: if ESR restores I=0 and IRQB is asserted, the IRQ fires immediately at the next instruction boundary.
+Restores flags from ESR and returns. If ESR restores I=0 and IRQB is asserted, the IRQ fires immediately.
 
-#### EPCR -- Read Exception PC
+#### EPCR -- `rd = EPC` -- 2 cycles
+#### EPCW -- `EPC = rs` -- 2 cycles
+#### SRR -- `rd = {14'b0, I, T}` -- 2 cycles
+#### SRW -- `{I, T} = rs[1:0]` -- 2 cycles (both flags forwarded immediately)
 
-`rd = EPC` -- 2 cycles
-
-Copies the Exception PC register to a general-purpose register. EPC is a clean 16-bit return address. Register is at ir[7:5].
-
-#### EPCW -- Write Exception PC
-
-`EPC = rs` -- 2 cycles
-
-Copies a general-purpose register to the Exception PC register. Register is at ir[7:5]. Modifies only the return address; the saved {I, T} flags are in ESR, not EPC.
-
-#### SRR -- Read Status Register
-
-`rd = {14'b0, I, T}` -- 2 cycles
-
-Reads the current status register into a GP register. Bit 1 = I (interrupt disable), bit 0 = T (condition flag). Bits 15:2 are cleared. Register is at ir[7:5]. Pair with SRW to save/restore interrupt context.
-
-#### SRW -- Write Status Register
-
-`{I, T} = rs[1:0]` -- 2 cycles
-
-Writes the I and T flags from bits 1 and 0 of the source register. Both flags take effect immediately (forwarded to the next instruction boundary). Register is at ir[7:5]. Pair with SRR: `SRR rd` to save, `SRW rs` to restore.
+Pair SRR/SRW to save/restore interrupt context. EPCR/EPCW access the return address only; the saved {I, T} flags are in ESR.
 
 #### INT -- Software Interrupt
 
 `ESR = {I, T}; EPC = PC+2; I = 1; PC = (vector[1:0] + 1) * 2` -- 2 cycles
 
-Triggers a software interrupt. Saves {I, T} to ESR and the return address to EPC, disables interrupts, and vectors to the handler. BRK is the conventional name for INT with vector 1 (handler at $0004). INT is unconditional -- it fires regardless of the I bit.
+Unconditional — fires regardless of the I bit. BRK is INT with vector 1 (handler at $0004).
 
 #### WAI -- Wait for Interrupt
 
-Halts execution until an interrupt signal arrives. The PC is advanced past WAI before halting, so the return address always points to the next instruction.
-
-- **NMI:** Taken immediately (vectors to $0002). RETI returns past WAI.
-- **IRQ with I=0:** Taken (vectors to $0006). RETI returns past WAI.
-- **IRQ with I=1:** WAI wakes and resumes at the next instruction without entering a handler (65C02-style hint behavior).
-
-**Cycle count:** 2 (1 execute + 1 overlapped fetch, if interrupt already pending); otherwise halted until wake.
+Halts until an interrupt arrives. PC is advanced past WAI before halting, so RETI returns to the next instruction. With I=1, an IRQ wakes execution without entering a handler (65C02-style hint). 2 cycles if interrupt already pending; otherwise halted until wake.
 
 #### STP -- Stop
 
-Halts the processor permanently. No interrupt can wake it. Only a hardware reset recovers. Both WAI and STP halt via internal clock gating, reducing dynamic power to zero.
-
-**Cycle count:** 1 (1 execute then halt)
+Halts permanently (reset only). Both WAI and STP halt via internal clock gating. 1 cycle.
 
 ## Pipeline and Timing
 
-The processor uses a 2-stage pipeline (Fetch and Execute) that overlap where possible. Most instructions take **2 cycles**. Loads and stores add cycles for bus access.
+The 2-stage pipeline (Fetch and Execute) overlaps fetch of the next instruction with execution of the current one. For sequential code and not-taken branches, the execute cost is completely hidden — throughput is limited by the 2-cycle fetch. Only taken branches and jumps pay execute cost directly, because the redirect flushes the speculative fetch.
 
 ### Cycle Counts (Throughput)
 
-Throughput is measured from one instruction boundary (SYNC) to the next:
+Throughput measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
@@ -599,15 +493,9 @@ Throughput is measured from one instruction boundary (SYNC) to the next:
 | IRQ entry | 2 | Instantaneous dispatch + 2 fetch |
 | NMI entry | 2 | Instantaneous dispatch + 2 fetch |
 
-Instructions that redirect (JR, JALR, J, JAL, RETI, branches taken) flush the speculative fetch and must wait for new instruction bytes. Non-redirecting instructions benefit from fetch/execute overlap.
-
 ### Self-Modifying Code
 
-Because the fetch of the next instruction is pipelined ahead of the current instruction's memory operations, **a store is never visible to the immediately following instruction fetch**. The next instruction's bytes were already read from memory before the store was committed.
-
-The instruction *after* that — two instructions past the store — sees the stored value, because its fetch happens during the intervening instruction's execution, by which time the store has completed.
-
-To fence, insert any instruction (even a NOP) between the store and the modified code:
+Because the next instruction's fetch overlaps with the current instruction's execution, **a store is never visible to the immediately following instruction fetch**. The instruction two past the store sees the new value. To fence, insert any instruction between the store and the modified code:
 
 ```
 SB [target]     ; store writes to 'target' address
@@ -615,67 +503,33 @@ NOP             ; fence — target's fetch happens during NOP's execution
 target:         ; this instruction sees the stored value
 ```
 
-Without the fence, `target` would execute the *old* instruction encoding that was fetched in parallel with the store.
-
-This also applies to word stores (SW/SWR): both bytes are written before the instruction two past the store is fetched. A single fence instruction is always sufficient.
+A single fence instruction is always sufficient, including for word stores.
 
 ## RDY and SYNC Signals
 
-RISCY-V02 provides W65C02S-compatible RDY and SYNC signals for wait-state insertion, DMA, and single-step debugging.
+These provide W65C02S-compatible hooks for wait-state insertion, DMA, and single-step debugging — any system that needs to stall the CPU or observe instruction boundaries can use the same techniques as existing 65C02 designs.
 
 ### RDY (Ready Input)
 
-`ui_in[2]` is the active-high ready signal. When RDY is low, the processor halts:
-
-- All CPU state freezes atomically (PC, registers, pipeline state, ALU carry)
-- Bus outputs remain stable (address and data held constant)
-- Bus protocol timing continues (mux_sel keeps toggling)
-- Processor resumes on the next clock edge after RDY returns high
-
-RDY halts the processor on both read and write cycles, matching W65C02S behavior.
+When `ui_in[2]` is low, the processor halts atomically: all CPU state freezes (PC, registers, pipeline, ALU carry), bus outputs remain stable, and the bus protocol mux continues toggling. The processor resumes on the next edge after RDY returns high. RDY halts on both reads and writes, matching W65C02S behavior.
 
 ### SYNC (Instruction Boundary Output)
 
-`uo_out[1]` during the data phase indicates an instruction boundary:
+`uo_out[1]` during the data phase is high for one cycle when a new instruction begins execution.
 
-- SYNC = 1 one cycle after execute accepts a new instruction
-- SYNC = 0 during multi-cycle operations or when no instruction was accepted
+### Single-Step and Wait-State Protocols
 
-When SYNC goes high, the previous instruction has retired and a new instruction has started execution.
+To **single-step**, monitor SYNC during data phases and pull RDY low when it goes high. The CPU halts at the instruction boundary. Pulse RDY high for one clock cycle to advance one instruction, then pull it low again when SYNC reasserts.
 
-### Single-Step Protocol
-
-To single-step at instruction boundaries:
-
-1. CPU runs normally with RDY high
-2. Monitor SYNC during data phases -- when SYNC = 1, an instruction boundary is reached
-3. Pull RDY low to halt at that boundary
-4. Examine bus state while halted (address shows current fetch address)
-5. Pulse RDY high for one clock cycle -- CPU advances one instruction
-6. SYNC goes high again at the next boundary; pull RDY low to halt
-7. Repeat from step 4
-
-### Wait-State Protocol
-
-For slow memory or DMA:
-
-1. External logic decodes address during address phase (mux_sel = 0)
-2. If access requires wait states, pull RDY low before the clock edge
-3. Memory completes access and drives data
-4. Pull RDY high -- processor continues on next clock edge
+For **wait states**, external logic decodes the address during the address phase and pulls RDY low before the data-phase clock edge if the access needs more time. When the memory is ready, RDY goes high and the CPU continues.
 
 ## Input Timing
 
-All inputs (`ui_in`, `uio_in` during reads) have a 4ns setup requirement before the capturing clock edge. This applies to:
-
-- **RDY** (`ui_in[2]`): must be stable 4ns before posedge clk
-- **Data bus** (`uio_in`): must be stable 4ns before negedge clk (data phase capture)
-
-Outputs are valid 4ns after their launching clock edge, providing 4ns of margin for external combinational logic in feedback paths.
+All inputs have a 4ns setup requirement before the capturing edge: RDY before posedge clk, data bus before negedge clk. Outputs are valid 4ns after their launching edge.
 
 ## Code Comparison: RISCY-V02 vs 6502
 
-Side-by-side assembly for common routines, showing how the two ISAs compare on real code. All cycle counts assume same-page branches (the common case for tight loops). The 6502 uses zero-page pointers; RISCY-V02 uses register arguments.
+Side-by-side assembly for common routines. All cycle counts assume same-page branches. The 6502 uses zero-page pointers; RISCY-V02 uses register arguments.
 
 ### memcpy
 
@@ -756,7 +610,7 @@ Total code: **28 bytes**
 | Tail | 18 cy/byte | 6 cy (1 byte) |
 | Code size | 28 B | 28 B |
 
-The 6502's `(indirect),Y` is powerful — pointer dereference plus index in one instruction. But the 8-bit index register forces page-boundary handling that complicates the code. RISCY-V02's 16-bit pointers eliminate page handling, and 16-bit word loads/stores copy two bytes per bus transaction, nearly halving throughput cost. The structure is analogous: bulk transfer (pages vs words) with a tail for the remainder (partial page vs odd byte). Code size is identical at 28 bytes — the 6502's compact 1-byte instructions (INY, DEX) compensate for the page-crossing overhead, while RISCY-V02's uniform 2-byte encoding trades density for simplicity.
+The 6502's `(indirect),Y` is powerful — pointer dereference plus index in one instruction — but the 8-bit index forces page-boundary handling. RISCY-V02's 16-bit pointers eliminate page handling, and word loads/stores copy two bytes per transaction, nearly halving throughput cost. Code size is identical: the 6502's compact 1-byte instructions (INY, DEX) compensate for page-crossing overhead.
 
 ### strcpy
 
@@ -810,7 +664,7 @@ Total code: **12 bytes**
 | Page overhead | 13 cy / 256 chars | none |
 | Code size | 18 B | 12 B |
 
-Both versions store the byte before testing for the null terminator — the 6502 via `BEQ` after `STA`, RISCY-V02 via `BNZ` after `SBR`. The 6502 needs an extra `BEQ` branch (2 cycles, not taken) on every character to check for termination, plus page-crossing logic. RISCY-V02 folds the termination check into the loop's back-edge branch. At 12 bytes vs 18, RISCY-V02 is also more compact — the 6502's page-crossing code (6 bytes) adds density overhead that RISCY-V02 simply doesn't need.
+Both versions store-then-test for the null terminator. The 6502 needs a separate `BEQ` (2 cycles) every character plus page-crossing logic; RISCY-V02 folds termination into the back-edge branch. The 6502's page-crossing code (6 bytes) wipes out its density advantage.
 
 Word-copy variant (RISCY-V02 only, R7 = 0x00FF preloaded):
 
@@ -831,7 +685,7 @@ hi: SWR  R5, R2         ;  4 cy   2 B    ; store char + null
     JR   R6, 0          ;  3 cy   2 B
 ```
 
-Word loop: 23 cy / 2 chars = **11.5 cy/char**, 26 B. The null-byte detection (`AND` + `BZ` + `SUB` + `BZ` = 8 cy) eats the word-load savings, so the speedup over the byte version is modest (~12%). Unlike memcpy, where word copies nearly halve throughput, strcpy's per-element null check limits the benefit.
+Word loop: 23 cy / 2 chars = **11.5 cy/char**, 26 B. The null-byte detection (8 cy) eats most of the word-load savings — unlike memcpy, strcpy's per-element null check limits the benefit.
 
 ### 16×16 → 16 Multiply
 
@@ -907,7 +761,7 @@ Average: **14.5 cy/iter**. Total code: **20 bytes**
 | 16 iterations (avg) | ~704 cy | ~232 cy |
 | Code size | 36 B | 20 B |
 
-The 3× per-iteration speedup comes from three sources: 16-bit addition is one instruction (`ADD`) vs seven (`CLC`+3×`LDA`/`ADC`/`STA`); 16-bit shifts are one instruction (`SLLI`/`SRLI`) vs two (`ASL`+`ROL`); and testing a 16-bit value for zero is one instruction (`BZ`) vs three (`LDA`+`ORA`+`BEQ`). Every 16-bit operation that the 6502 must serialize byte-by-byte collapses to a single instruction on RISCY-V02. Code density follows the same pattern: 20 bytes vs 36, a 44% reduction. The 6502's 1-byte `CLC` and implied-operand instructions can't compensate for the sheer number of extra instructions needed to work in 8-bit halves.
+The 3× speedup: 16-bit addition is one instruction vs seven, shifts are one vs two, and zero-test is one vs three. Every 16-bit operation the 6502 serializes byte-by-byte collapses to a single instruction. The 6502's 1-byte implied-operand instructions can't compensate for the sheer number of extra instructions needed to work in 8-bit halves.
 
 ### 16 ÷ 16 Unsigned Division
 
@@ -984,7 +838,7 @@ Average: **17.5 cy/iter**. Total code: **22 bytes**
 | 16 iterations | ~784 cy | ~280 cy |
 | Code size | 38 B | 22 B |
 
-The structure is identical — the same restoring division algorithm. The 2.8× speedup comes from three sources: 16-bit shifts are single instructions, the trial subtraction compresses from 6 instructions to 2 (`CLTU`+`SUB`), and `SLLT`+`RLT` chain the dividend's high bit directly into the remainder without needing `SRR`+`ANDI` to extract T into a register (saving 6 cy/iteration vs the pre-SLLT version). At 22 bytes vs 38, RISCY-V02 is 42% more compact — the 6502's `SEC`+`TAY` bookkeeping and byte-by-byte shift chains add up fast.
+Same restoring division algorithm. The 2.8× speedup: 16-bit shifts are single instructions, trial subtraction compresses from 6 instructions to 2, and `SLLT`+`RLT` chain the dividend's high bit directly into the remainder without extracting T into a register. The 6502's `SEC`+`TAY` bookkeeping and byte-by-byte shift chains add up fast.
 
 ### CRC-8 (SMBUS)
 
@@ -1060,7 +914,7 @@ Average: **10.5 cy/bit**, 84 cy/byte bit processing. Per byte: **100 cy**. Total
 | Per byte | 101 cy | 100 cy |
 | Code size | 22 B | 32 B |
 
-Essentially a tie on speed. The `SLLT` instruction shifts the CRC and captures the overflow bit into T in one instruction — matching the 6502's `ASL` + carry pattern. The remaining per-byte overhead (setup, pointer/counter updates) is slightly more on RISCY-V02 due to the upper-byte CRC convention, but the bit loop is now identical in cycle count. The 6502 wins on density (22 B vs 32 B) — its 1-byte `ASL A`, `DEX`, `INY`, and `RTS` pack the inner loop tightly, while RISCY-V02's uniform 2-byte encoding and explicit counter management cost 10 extra bytes. This is where 8-bit code density shines: the algorithm is inherently 8-bit, so the 6502's implied-operand instructions are at their most effective.
+Essentially a tie. `SLLT` matches the 6502's `ASL` + carry pattern — the bit loops are identical in cycle count. The 6502 wins on density (22 B vs 32 B) because its 1-byte implied-operand instructions pack tightly in an inherently 8-bit algorithm.
 
 ### CRC-16/CCITT
 
@@ -1145,7 +999,7 @@ Average: **10.5 cy/bit**, 84 cy/byte bit processing. Per byte: **100 cy**. Total
 | Per byte | 227 cy | 100 cy |
 | Code size | 43 B | 34 B |
 
-RISCY-V02 wins CRC-16 by >2× on speed and is also more compact (34 B vs 43 B). The `SLLT` instruction shifts and captures the overflow bit into T in a single instruction, matching the 6502's `ASL`+carry for free. The 6502's bit loop goes from 10.5 to 25.5 cy (2.4× slower) because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2. The polynomial XOR is especially painful: 1 instruction on RISCY-V02 vs 6 on the 6502. The density advantage reverses from CRC-8 because the 6502's byte-serialization overhead (6 extra instructions for XOR alone) outweighs its 1-byte instruction advantage.
+RISCY-V02 wins CRC-16 by >2× and is more compact. The 6502's bit loop balloons from 10.5 to 25.5 cy because every shift becomes `ASL`+`ROL` and every XOR becomes `LDA`+`EOR`+`STA` × 2 — the polynomial XOR alone is 1 instruction vs 6. The density advantage reverses from CRC-8 because byte-serialization overhead outweighs the 1-byte instruction advantage.
 
 ### Raster Bar Interrupt Handler
 
@@ -1230,9 +1084,7 @@ Total code: **24 bytes**
 | **Total** | **~39.5 cy** | **~39 cy** |
 | Code size | 15 B | 24 B |
 
-Essentially a tie on speed. The 6502's architectural advantage — each instruction carries its own address (zero page or absolute), so the handler mixes `INC $02` (zero page) with `STA $D021` (absolute) without base register setup — is offset by RISCY-V02's instantaneous interrupt dispatch (2-cycle entry/exit vs 7+6=13 for the 6502). RISCY-V02 must reload R0 when switching memory regions and save/restore two registers (16 cy vs 7 cy), but the 9-cycle entry/exit savings almost exactly compensate. The 6502 is significantly more compact (15 B vs 24 B) — its 1-byte `PHA`/`PLA`/`RTI` and embedded-address instructions (`INC $02`, `STA $D021`) pack tightly, while RISCY-V02 pays for explicit register save/restore and base register setup.
-
-For handlers with more useful work, RISCY-V02's save/restore is fixed while its body instructions are generally faster, so the crossover comes quickly.
+Essentially a tie. The 6502's advantage — each instruction carries its own address, so the handler mixes zero-page and absolute accesses without base register setup — is offset by RISCY-V02's 2-cycle entry/exit vs 13. RISCY-V02 must reload R0 when switching memory regions and save/restore two registers (16 cy vs 7 cy), but the entry/exit savings compensate. For handlers with more useful work, the save/restore cost is fixed while body instructions are generally faster.
 
 ### RC4 Keystream (PRGA)
 
@@ -1303,20 +1155,11 @@ rc4_byte:
 | Code size | 34 B | 32 B |
 | Speedup | 1.0× | 1.6× |
 
-RISCY-V02 wins decisively on speed (1.6×) and is slightly more compact (32 B vs 34 B). The mod-256 masking requires a preloaded mask register (R7 = 0x00FF) since ANDI is sign-extended, but the per-call cost is identical. Two factors overwhelm the mod-256 and address-computation tax:
-
-1. **Registers eliminate state traffic.** The 6502 stores i and j in zero page — every call does INC+LDX+ADC+STA (14 cy) just to read, update, and write back two index variables. RISCY-V02 keeps i, j, and the S base in registers: state overhead is a single `ADDI` (2 cy).
-
-2. **Multiple live values avoid spills and re-reads.** The swap requires S[i] and S[j] simultaneously, but the 6502's single accumulator forces a stack spill (`PHA`/`PLA`, 7 cy). RISCY-V02 holds both values in R4 and R5, computes the final sum as `ADD R3, R4, R5`, and never touches memory for temporaries.
+RISCY-V02 wins 1.6× on speed and is slightly more compact despite needing explicit mod-256 masking (ANDI is sign-extended, so a preloaded mask register is needed). Two factors overwhelm the masking/address tax: registers eliminate state traffic (the 6502 spends 14 cy per call reading and writing i/j in zero page; RISCY-V02 keeps them in registers), and multiple live values avoid spills (the swap needs S[i] and S[j] simultaneously, forcing the 6502 into a `PHA`/`PLA` spill that RISCY-V02 avoids entirely).
 
 ### 32-bit Arithmetic
 
-32-bit operations reveal the cost of each architecture's word width. The 6502's 8-bit ALU requires four byte-at-a-time steps for each 32-bit operation; RISCY-V02's 16-bit ALU cuts this to two. This section covers every R-type (register-register-register) ALU operation: ADD, SUB, AND, OR, XOR, SLL, SRL, SRA.
-
-**Register conventions:**
-
-- **6502:** 32-bit values in four consecutive zero-page bytes (little-endian): a ($00–$03), b ($04–$07), r ($08–$0B). Shift count in X.
-- **RISCY-V02:** 32-bit values in register pairs {high, low}: A = {R1, R0}, B = {R3, R2}, result = {R5, R4}. Shifts are in-place on {R1, R0} with count in R2.
+32-bit operations expose the word-width cost directly: the 6502's 8-bit ALU requires four byte-at-a-time steps; RISCY-V02's 16-bit ALU cuts this to two. Convention: **6502** uses four zero-page bytes (a $00–$03, b $04–$07, r $08–$0B); **RISCY-V02** uses register pairs {high, low} (A = {R1, R0}, B = {R3, R2}, result = {R5, R4}).
 
 #### 32-bit ADD
 
@@ -1342,7 +1185,7 @@ uint32_t add32(uint32_t a, uint32_t b);
     STA r+3         ;  3 cy   2 B
 ```
 
-13 instructions, **25 bytes, 38 cycles.** The carry flag chains automatically through all four ADC operations.
+13 instructions, **25 bytes, 38 cycles.** Carry chains automatically through all four ADC operations.
 
 **RISCY-V02** — A = {R1, R0}, B = {R3, R2}, result = {R5, R4}
 
@@ -1355,7 +1198,7 @@ uint32_t add32(uint32_t a, uint32_t b);
 done:
 ```
 
-5 instructions, **10 bytes, 9–10 cycles.** `CLTU` detects unsigned overflow (result < input ⟹ carry), then a conditional `ADDI` propagates it. No carry flag needed — the T-bit comparison substitutes cleanly. For constant-time code (crypto), replace the branch with `SRR R0; ANDI R0, 1; ADD R5, R5, R0` (6 insns, 12 B, 12 cy).
+5 instructions, **10 bytes, 9–10 cycles.** `CLTU` detects unsigned overflow (result < input), then a conditional `ADDI` propagates the carry. Constant-time variant: `SRR R0; ANDI R0, 1; ADD R5, R5, R0` (6 insns, 12 B, 12 cy).
 
 | | 6502 | RISCY-V02 |
 |---|---|---|
@@ -1387,7 +1230,7 @@ uint32_t sub32(uint32_t a, uint32_t b);
     STA r+3         ;  3 cy   2 B
 ```
 
-13 instructions, **25 bytes, 38 cycles.** Mirror of ADD: SEC initializes the inverted borrow, and SBC chains carry through all four bytes.
+13 instructions, **25 bytes, 38 cycles.** Mirror of ADD with SEC/SBC.
 
 **RISCY-V02** — A = {R1, R0}, B = {R3, R2}, result = {R5, R4}
 
@@ -1400,7 +1243,7 @@ uint32_t sub32(uint32_t a, uint32_t b);
 done:
 ```
 
-5 instructions, **10 bytes, 9–10 cycles.** `CLTU` must precede `SUB` so the comparison uses the original Al (in case R4 aliases R0). SUB does not modify T, so the borrow survives to the branch. Constant-time variant: `SRR R0; ANDI R0, 1; SUB R5, R5, R0` (6 insns, 12 B, 12 cy).
+5 instructions, **10 bytes, 9–10 cycles.** `CLTU` must precede `SUB` to compare the original Al. Constant-time variant: `SRR R0; ANDI R0, 1; SUB R5, R5, R0` (6 insns, 12 B, 12 cy).
 
 | | 6502 | RISCY-V02 |
 |---|---|---|
@@ -1416,7 +1259,7 @@ uint32_t or32(uint32_t a, uint32_t b);
 uint32_t xor32(uint32_t a, uint32_t b);
 ```
 
-All three bitwise operations are identical in structure — no carry, no interaction between bytes/words.
+Identical structure for all three — no carry, no interaction between bytes/words.
 
 **6502** (shown for AND; substitute ORA/EOR for OR/XOR)
 
@@ -1458,7 +1301,7 @@ All three bitwise operations are identical in structure — no carry, no interac
 uint32_t sll32(uint32_t a, unsigned shamt);  // shamt 0–31
 ```
 
-The 6502 has no barrel shifter — it must loop one bit per iteration, chaining ASL+ROL across four bytes. RISCY-V02's barrel shifter (SLL/SRL shift 0–15 bits in one instruction) enables an O(1) approach: split on whether N >= 16, then shift both halves and merge the cross-word bits.
+The 6502 must loop one bit per iteration, chaining ASL+ROL across four bytes. RISCY-V02's barrel shifter enables an O(1) approach: split on N >= 16, shift both halves, merge the cross-word bits.
 
 **6502** — val ($00–$03, modified in-place), shift count in X
 
@@ -1509,15 +1352,11 @@ done:
 | 16-bit shift | 404 cy | 17 cy |
 | Speedup (N=8) | 1.0× | 10.7× |
 
-The 6502 is more compact (1-byte DEX, ASL, ROL) but O(N). RISCY-V02's barrel shifter makes the shift itself free — the overhead is all in the cross-word merge logic. For typical shift amounts (4–12), the barrel version is 5–10× faster.
+The 6502 is more compact but O(N). For typical shift amounts (4–12), the barrel version is 5–10× faster.
 
 #### 32-bit SRL (Shift Right Logical)
 
-```c
-uint32_t srl32(uint32_t a, unsigned shamt);  // shamt 0–31
-```
-
-Mirror of SLL. The 6502 chains LSR+ROR from the MSB down; RISCY-V02 uses the barrel shifter with the halves reversed.
+Mirror of SLL. The 6502 chains LSR+ROR from the MSB down; RISCY-V02 reverses the halves.
 
 **6502** — val ($00–$03, modified in-place), shift count in X
 
@@ -1570,11 +1409,7 @@ done:
 
 #### 32-bit SRA (Shift Right Arithmetic)
 
-```c
-int32_t sra32(int32_t a, unsigned shamt);  // shamt 0–31
-```
-
-Arithmetic right shift preserves the sign bit. The 6502 uses a clever trick: `LDA; ASL A` copies the sign bit into carry, then `ROR` propagates it from the MSB down — but must loop. RISCY-V02's barrel shifter handles it in O(1): the large-shift case uses SRA for the low half and `SRAI R1, 15` to sign-fill the high half.
+Arithmetic right shift preserves the sign bit. The 6502 uses `LDA; ASL A` to copy the sign into carry, then chains `ROR` — but must loop. RISCY-V02 handles it in O(1), with `SRAI R1, 15` to sign-fill the high word in the large-shift case.
 
 **6502** — val ($00–$03, modified in-place), shift count in X
 
@@ -1617,7 +1452,7 @@ small:
 done:
 ```
 
-13 instructions, **26 bytes, 17–19 cycles** (constant). `SRAI R1, 15` sign-fills the high word cleanly: it shifts in 15 copies of the sign bit, producing 0x0000 or 0xFFFF.
+13 instructions, **26 bytes, 17–19 cycles** (constant).
 
 | | 6502 | RISCY-V02 |
 |---|---|---|
@@ -1641,13 +1476,11 @@ done:
 | SRL (N=8) | 15 | 204 | 26 | 19 | 10.7× |
 | SRA (N=8) | 18 | 244 | 26 | 19 | 12.8× |
 
-For ADD/SUB, the 16-bit ALU collapses 4 byte additions to 2 word additions plus a lightweight carry/borrow chain (CLTU+BF). For bitwise ops, the advantage is stark: 2 instructions vs 12. For shifts, the barrel shifter makes the operation O(1) — the 6502 must loop N times with no escape, while RISCY-V02 handles any shift amount in a fixed 17–19 cycles. This is the clearest architectural win: the barrel shifter transforms shifts from the 6502's weakest operation into a constant-time operation that's 10–13× faster.
-
-The 6502 wins on shift code size (15–18 B vs 26 B) — its compact 1-byte implied instructions pack the loop tightly. RISCY-V02 trades 11 bytes of code for a 10× speedup. For code-size-sensitive contexts, a compact loop alternative using SLLT/RLT (10 B, 9N cy) is available.
+ADD/SUB collapse from 4 byte additions to 2 word additions plus a lightweight carry chain. Bitwise ops: 2 instructions vs 12. Shifts are the clearest architectural win — the barrel shifter transforms the 6502's weakest operation (O(N) loops) into constant-time 17–19 cycles, a 10–13× speedup. The 6502 wins on shift code size (15–18 B vs 26 B); for code-size-sensitive contexts, a compact loop using SLLT/RLT (10 B, 9N cy) is available.
 
 ### Packed BCD Arithmetic
 
-The 6502's hardware decimal mode (`SED`) makes BCD arithmetic trivial — `ADC` and `SBC` automatically apply nibble correction. RISCY-V02 has no BCD support, so it must perform the correction in software using the Jones algorithm: pre-inject 6 into each nibble, add, detect which nibbles carried (the 6 was needed), and subtract 6 from those that didn't.
+The 6502's hardware decimal mode (`SED`) makes BCD trivial — `ADC`/`SBC` apply nibble correction automatically. RISCY-V02 must do it in software via the Jones algorithm: pre-inject 6 into each nibble, add, detect which nibbles carried, subtract 6 from those that didn't.
 
 #### 8-bit Packed BCD Addition
 
@@ -1666,7 +1499,7 @@ uint8_t bcd_add8(uint8_t a, uint8_t b);
     CLD                 ;  2 cy   1 B    back to binary
 ```
 
-4 instructions, **5 bytes, 9 cycles.** The hardware does all nibble correction and carry propagation automatically. BCD carry out is in C.
+4 instructions, **5 bytes, 9 cycles.**
 
 **RISCY-V02** — a in R0, b in R1, result in R0, R2–R4 scratch
 
@@ -1687,7 +1520,7 @@ uint8_t bcd_add8(uint8_t a, uint8_t b);
     SUB  R0, R0, R3      ;  2 cy   2 B    subtract excess 6
 ```
 
-14 instructions, **28 bytes, 28 cycles.** BCD carry is in bit 8 of the result (paralleling the 6502's C flag). The Jones algorithm is branchless but requires 5 steps: inject, add, detect carries, build correction, subtract.
+14 instructions, **28 bytes, 28 cycles.** Branchless; BCD carry in bit 8.
 
 | | 6502 | RISCY-V02 |
 |---|---|---|
@@ -1717,7 +1550,7 @@ uint16_t bcd_add16(uint16_t a, uint16_t b);
     CLD                 ;  2 cy   1 B
 ```
 
-9 instructions, **15 bytes, 24 cycles.** Just chain two 8-bit BCD adds through carry, exactly like binary multi-byte addition.
+9 instructions, **15 bytes, 24 cycles.** Two 8-bit BCD adds chained through carry.
 
 **RISCY-V02** — a in R0, b in R1, result in R0, R2–R4 scratch
 
@@ -1739,7 +1572,7 @@ uint16_t bcd_add16(uint16_t a, uint16_t b);
     SUB  R0, R0, R3       ;  2 cy   2 B    subtract excess 6
 ```
 
-15 instructions, **30 bytes, 30 cycles.** Identical structure to the 8-bit version — the wider register handles all 4 digits in parallel. No ANDI mask needed since the full 16 bits are the result. BCD carry out is detectable by comparing the pre-correction sum against 0x10000 (lost in 16-bit, would need CLTU before the final SUB).
+15 instructions, **30 bytes, 30 cycles.** Same structure as 8-bit — the wider register handles all 4 digits in parallel.
 
 | | 6502 | RISCY-V02 |
 |---|---|---|
@@ -1747,7 +1580,7 @@ uint16_t bcd_add16(uint16_t a, uint16_t b);
 | Cycles | 24 cy | 30 cy |
 | Speedup | 1.0× | 0.8× |
 
-At 4 digits, the 6502's byte-serial approach starts to cost it: two separate load-add-store sequences, each with 5-cycle zero-page access. RISCY-V02's parallel nibble correction across a 16-bit register nearly closes the gap.
+At 4 digits, the 6502's byte-serial approach starts to cost it. RISCY-V02's parallel nibble correction nearly closes the gap.
 
 #### 32-bit Packed BCD Addition
 
@@ -1777,11 +1610,11 @@ uint32_t bcd_add32(uint32_t a, uint32_t b);
     CLD                 ;  2 cy   1 B
 ```
 
-15 instructions, **25 bytes, 42 cycles.** Each additional byte costs LDA+ADC+STA (9 cy, 6 B).
+15 instructions, **25 bytes, 42 cycles.**
 
 **RISCY-V02** — {R1, R0} + {R3, R2}, result in {R1, R0}, R4–R6 scratch
 
-Two Jones corrections chained by a BCD carry. The carry is detected by checking for unsigned overflow in the injected addition (`t2 < b_lo` means bit 16 carried out). The carry is folded into `a_hi` before running Jones on the high half.
+Two Jones corrections chained by a BCD carry detected via `CLTU` (unsigned overflow).
 
 ```
     ; --- low half: BCD(R0 + R2) ---
@@ -1822,7 +1655,7 @@ Two Jones corrections chained by a BCD carry. The carry is detected by checking 
     SUB  R1, R1, R5       ;  2 cy   2 B    corrected high result
 ```
 
-34 instructions, **68 bytes, 68 cycles.** The high half is a near-copy of the low half, with 3 extra instructions to extract and add the BCD carry (SRR+ANDI+ADD). In a loop or subroutine, the constant loads (0x6666, 0x1110) could be hoisted, saving 8 instructions per call.
+34 instructions, **68 bytes, 68 cycles.** In a subroutine, the constant loads (0x6666, 0x1110) could be hoisted, saving 8 instructions per call.
 
 | | 6502 | RISCY-V02 |
 |---|---|---|
@@ -1830,7 +1663,7 @@ Two Jones corrections chained by a BCD carry. The carry is detected by checking 
 | Cycles | 42 cy | 68 cy |
 | Speedup | 1.0× | 0.6× |
 
-The 6502's advantage continues to erode. Its cost grows by 9 cycles per byte (LDA+ADC+STA), while RISCY-V02's second Jones pass adds 18 instructions (carry extraction + the fixed Jones sequence). The wider the operand, the less the per-digit overhead of the Jones algorithm matters.
+The 6502's advantage continues to erode: it scales at 9 cy per byte, while RISCY-V02's Jones algorithm handles 4 nibbles in parallel per 16-bit word.
 
 #### BCD Summary
 
@@ -1841,45 +1674,22 @@ The 6502's advantage continues to erode. Its cost grows by 9 cycles per byte (LD
 | 16-bit add (4 digits) | 15 | 24 | 30 | 30 | 0.8× |
 | 32-bit add (8 digits) | 25 | 42 | 68 | 68 | 0.6× |
 
-Hardware BCD is the 6502's clearest architectural advantage. For 2-digit addition, `SED; CLC; ADC; CLD` is unbeatable — 4 instructions, 5 bytes, 9 cycles. The RISCY-V02 needs 14 instructions of bit manipulation to do what the 6502 does in microcode.
+Hardware BCD is the 6502's clearest architectural advantage. For 2-digit addition, `SED; CLC; ADC; CLD` is unbeatable. But the gap narrows with wider operands — the 6502 scales at 9 cy/byte while RISCY-V02's Jones algorithm handles 4 nibbles in parallel per word. At 4 digits the counts nearly converge.
 
-But the gap narrows with wider operands. The 6502 scales linearly — each additional byte costs LDA+ADC+STA (9 cy, 6 B) — while RISCY-V02's Jones algorithm handles all 4 nibbles in a 16-bit register in parallel. The cost per additional 16-bit word is one carry extraction (3 insns) plus a repeat of the fixed Jones sequence (15 insns). At 4 digits the cycle counts nearly converge; at 8 digits the 6502 leads by only 1.6×.
-
-The real question is whether BCD matters enough to justify the ~400 transistors the 6502 spends on decimal mode. In the 1970s home computer context, BCD was used for score displays, clock readouts, and financial calculations — common but not performance-critical. A subroutine call to a BCD add routine costs RISCY-V02 about 28 cycles vs the 6502's 9 — noticeable but not crippling, and the transistor budget is better spent on features that accelerate the hot loops (barrel shifter, wider ALU).
+The real question is whether BCD justifies the ~400 transistors the 6502 spends on decimal mode. In the 1970s context, BCD was used for scores, clocks, and financial calculations — common but not performance-critical. The transistor budget is better spent on features that accelerate hot loops (barrel shifter, wider ALU).
 
 
 ## Register File SRAM Analysis
 
-RISCY-V02's register file is an 8-word x 16-bit regular array of general-purpose registers (R0–R7) with 2 read ports and 1 write port (2R1W). All ports are 16 bits wide and use 3-bit select lines. Both bytes of a register are read/written simultaneously. Standard cell synthesis implements it using latches and mux trees, but a real chip would use SRAM — the array is perfectly regular and far too large for individual register cells.
-
-This section designs an equivalent 8T SRAM register file from first principles, counts every transistor, and computes the SRAM-adjusted transistor count for fair comparison with the 6502 baseline.
+Standard cell synthesis implements the register file with latches (~20T each) and mux trees, but a real chip would use SRAM cells (~8T each) — the 8×16-bit 2R1W array is perfectly regular. This over-counting inflates the RISCY-V02 transistor count by ~2,000T and makes the comparison with the 6502 misleading. This section designs an equivalent 8T SRAM register file from first principles, counts every transistor, and computes the adjusted figures.
 
 ### Why This Discount Is Fair
 
-The discount applies only to **regular storage arrays** — structures where identical bit cells are arranged in a grid with shared decode/sense logic. The methodology is:
-
-1. Identify separately-synthesizable modules that are pure regular arrays
-2. Count their standard cell transistors exactly (from standalone synthesis)
-3. Design an equivalent SRAM from first principles, counting every transistor
-4. Apply the same methodology to the comparison target (the 6502)
-
-The 6502 has no regular arrays — its registers (A, X, Y, SP) are asymmetric, each wired to different parts of the datapath. The same methodology applied to the 6502 yields zero discount.
+The discount applies only to **regular storage arrays** — identical bit cells in a grid with shared decode/sense logic. The same methodology applied to the 6502 yields zero discount: its registers (A, X, Y, SP) are asymmetric, each wired to different datapath elements, and would not use SRAM in any implementation.
 
 ### Standard Cell Register File (Synthesized)
 
-The register file is a single Verilog module (`riscyv02_regfile`) marked `(* keep_hierarchy *)`. This prevents the synthesizer from flattening it into the parent module, so its cell counts appear as a sub-module in `stat.json` — extracted from the same synthesis run as the total, eliminating cross-run non-determinism.
-
-It contains leader latches (20, transparent-high: 16 data + 3 sel + 1 we), follower latches (128, gated by ~clk & decoded wen), and read mux trees. Write inputs are combinational from execute; the leader-follower pair acts as a negedge-triggered write.
-
-The exact cell counts vary slightly between synthesis runs (Yosys ABC optimization is non-deterministic), but the 148 latches are always present. The `transistor_count.py` script reads the actual count from each build's `stat.json`.
-
-#### Functional Breakdown
-
-- **20 leader latches** (16 w_data + 3 w_sel + 1 w_we): write port staging, transparent during clk=1
-- **128 follower latches** (8 regs × 16 bits): pure storage array, perfectly regular
-- **Combinational cells**: write decode (3-to-8) and 2 read mux trees (8:1 × 16 bits each)
-
-Tx/cell counts are from the PDK's CDL SPICE netlist (one M-line = one MOSFET), the same source used for all transistor count estimates in this project.
+The register file is a single Verilog module (`riscyv02_regfile`) marked `(* keep_hierarchy *)` so its cell counts appear as a sub-module in `stat.json`. It contains 20 leader latches (write staging), 128 follower latches (8 regs × 16 bits, the pure storage array), and combinational decode/mux trees. The `transistor_count.py` script reads the actual count from each build's `stat.json`.
 
 ### 8T SRAM Register File Design
 
@@ -2015,13 +1825,11 @@ All counts use standard CMOS complementary logic:
 | Peripherals | decode + read mux trees | Decode + drivers = 354 |
 | **Total** | **(from synthesis)** | **1,500** |
 
-Standard cell counts vary slightly between synthesis runs. The exact count for each build is extracted automatically from `stat.json`.
-
-The SRAM saves on both storage (8T vs 20T per bit) and peripherals (word-line decode replaces explicit mux trees — asserting one word line selects all 16 bits of one register, eliminating the 8:1 mux per bit that standard cells require). Write staging is present in both: leader latches in standard cells, input latches in SRAM.
+The SRAM saves on both storage (8T vs 20T per bit) and peripherals (word-line decode replaces 8:1 mux trees). Write staging is present in both implementations.
 
 ### SRAM-Adjusted Figures
 
-These figures are computed automatically by `transistor_count.py` from each build's `stat.json`. The regfile standard cell count is extracted from the `riscyv02_regfile` sub-module (preserved by `keep_hierarchy`), ensuring consistency with the total.
+Computed by `transistor_count.py` from each build's `stat.json`.
 
 | Metric | Value |
 |---|---|
@@ -2030,36 +1838,11 @@ These figures are computed automatically by `transistor_count.py` from each buil
 
 ### Methodology Notes
 
-1. **Transistor counts are exact**, not estimates. Standard cell counts come from the PDK's CDL SPICE netlist (one M-line = one MOSFET). SRAM counts come from the circuit design above, using textbook CMOS gate structures.
-
-2. **The 8T cell transistor count is definitional.** An 8T SRAM cell has 8 transistors by definition — that's what "8T" means. This is not a process-specific or PDK-specific number.
-
-3. **The same methodology applies to both designs.** The 6502's registers (A, X, Y, SP) are asymmetric special-purpose registers wired to different datapath elements. They are not a regular array and would not use SRAM in any implementation. Applying this methodology to the 6502 yields zero discount.
-
-4. **No SRAM macro exists** at this size for IHP sg13g2. The smallest available macro (64x32, 2048 bits) stores 16x more than needed and is physically larger than the entire RISCY-V02 design. The SRAM analysis here is a paper design representing what a custom chip would use.
+Transistor counts are exact: standard cell counts from the PDK's CDL SPICE netlist (one M-line = one MOSFET), SRAM counts from the circuit design above using textbook CMOS. The 8T cell count is definitional. No SRAM macro exists at this size for IHP sg13g2 — the smallest available (64×32, 2048 bits) is 16× larger than needed. This is a paper design representing what a custom chip would use.
 
 ## SRAM PCB Interface Design
-### Overview
 
-Connect the RISCY-V02 CPU (on a TT IHP board) to an IS61C256AL-10 32Kx8
-asynchronous SRAM. The CPU uses a 6502-style muxed bus protocol where address
-and data share the `uio[7:0]` pins across two clock phases.
-
-### Bus Protocol Recap
-
-```
-              ┌───────┐       ┌───────┐
-  clk     ───┘       └───────┘       └───────
-          addr phase   data phase   addr phase
-          (mux_sel=0)  (mux_sel=1)  (mux_sel=0)
-
-  uo_out:  AB[7:0]     {..,SYNC,RWB}  AB[7:0]
-  uio:     AB[15:8]    D[7:0]         AB[15:8]
-           (output)    (bidir)        (output)
-```
-
-- **clk LOW** = address phase: `uo_out` = AB[7:0], `uio_out` = AB[15:8]
-- **clk HIGH** = data phase: `uo_out[0]` = RWB, `uio` = data bus (direction per RWB)
+TT IHP has no usable SRAM IP at this scale, so program/data memory needs an external SRAM chip. This section describes a complete PCB interface connecting the RISCY-V02 CPU to an IS61C256AL-10 32Kx8 asynchronous SRAM using the muxed bus protocol described in [Bus Protocol](#bus-protocol) above (address on clk LOW, data on clk HIGH).
 
 ### Components
 
@@ -2072,18 +1855,11 @@ and data share the `uio[7:0]` pins across two clock phases.
 | U5 | IS61C256AL-10TL | 1 | 32Kx8 SRAM |
 | | 100nF caps | 5 | Decoupling, one per IC |
 
-**74HCT** series (5V, TTL-input thresholds VIH=2.0V) for address latches:
-accepts 3.3V TT outputs as valid HIGH.
-
-**74LVC245** (3.3V, 5V-tolerant inputs) for data bus: translates 5V SRAM
-outputs down to 3.3V for TT inputs, and 3.3V TT outputs are valid HIGH for
-5V SRAM inputs (VIH=2.2V).
+74HCT (5V, VIH=2.0V) accepts 3.3V TT outputs as valid HIGH. 74LVC245 (3.3V, 5V-tolerant) bridges the voltage domains on the data bus.
 
 ### Glue Logic (U4: 74HCT00, quad NAND)
 
-All active control signals derived from `clk` and `uo_out[0]` (which is
-AB[0] during address phase, RWB during data phase — but glue logic only
-uses it meaningfully during data phase, when clk is HIGH).
+All control signals derived from `clk` and `uo_out[0]` (RWB during data phase):
 
 ```
 Gate A:  !clk        = NAND(clk, clk)           → address latch LE
@@ -2092,17 +1868,11 @@ Gate C:  !uo_out[0]  = NAND(uo_out[0], uo_out[0])  (inverter)
 Gate D:  WE (SRAM)   = NAND(clk, !uo_out[0])    → SRAM WE
 ```
 
-Truth table for SRAM control during each phase:
-
 | Phase | clk | uo_out[0] | OE | WE | SRAM state |
 |-------|-----|-----------|----|----|------------|
-| Addr  | 0   | AB[0]     | 1  | 1  | Deselected output (I/O = High-Z) |
+| Addr  | 0   | AB[0]     | 1  | 1  | High-Z (NAND(0,x)=1 always) |
 | Read  | 1   | RWB=1     | 0  | 1  | Read (drives I/O) |
 | Write | 1   | RWB=0     | 1  | 0  | Write (accepts I/O) |
-
-During address phase, both OE and WE are HIGH regardless of AB[0]:
-`NAND(0, x) = 1` always. So the SRAM outputs are in high-Z, preventing
-bus contention with the address latch outputs on the shared uio pins.
 
 ### Connections
 
@@ -2134,15 +1904,7 @@ U3 (74LVC245, powered at 3.3V):
   VCC     ← 3.3V
 ```
 
-DIR controls direction: when OE (SRAM) = LOW (read cycle), DIR=LOW → A-to-B
-(SRAM drives, TT receives). When OE (SRAM) = HIGH (write cycle), DIR=HIGH →
-B-to-A (TT drives, SRAM receives). The 74LVC245 active-low OE disables the
-buffer during address phase, preventing contention when uio carries address.
-
-Note: DIR = Gate B output = NAND(clk, uo_out[0]). During data phase reads:
-NAND(1,1) = 0 → A-to-B. During data phase writes: NAND(1,0) = 1 → B-to-A.
-During address phase: NAND(0,x) = 1, but OE is HIGH (disabled) so DIR is
-don't-care.
+DIR = Gate B output: reads → A-to-B (SRAM drives), writes → B-to-A (TT drives). The active-low OE disables the buffer during address phase, preventing contention.
 
 #### SRAM (U5: IS61C256AL-10TL)
 
@@ -2157,9 +1919,7 @@ don't-care.
   GND     ← GND
 ```
 
-CE is tied LOW so the SRAM is always selected. This lets tAA (address access
-time) start counting as soon as the address latch updates, maximizing the
-time available for the SRAM to produce valid output data.
+CE tied LOW: tAA starts as soon as the address latch updates, maximizing read margin.
 
 ### Timing Analysis
 
@@ -2182,14 +1942,7 @@ time available for the SRAM to produce valid output data.
        │                │  CPU samples   │
 ```
 
-The address becomes valid partway through the address phase (after TT output
-delay + latch propagation). tAA (10ns) starts counting from that point. If
-the half-period is long enough, tAA is satisfied before the data phase even
-starts. The secondary constraint tDOE (6ns from OE going LOW at posedge)
-determines the earliest data-valid point within the data phase.
-
-**Minimum half-period for read** (ignoring TT mux delays):
-`max(tAA - addr_setup_time, tDOE) + tsu_cpu ≈ 6-10ns + margin`
+tAA (10ns) starts when the address latches update during the address phase. If the half-period is long enough, tAA is satisfied before data phase starts. The secondary constraint tDOE (6ns from OE LOW) determines earliest data-valid within the data phase.
 
 #### Write Cycle
 
@@ -2209,35 +1962,11 @@ determines the earliest data-valid point within the data phase.
        │                │            tHD=0│
 ```
 
-Write terminates at negedge clk (WE goes HIGH). The SRAM needs:
-- tAW = 9ns: address valid before WE rises (satisfied: address was latched
-  at start of data phase, stable throughout)
-- tSD = 7ns: data valid before WE rises
-- tPWE = 8ns: WE pulse width (= data phase duration = half-period)
-- tHD = 0ns, tHA = 0ns: zero hold after WE rises
-
-**Minimum half-period for write** (ignoring TT mux delays):
-`max(tPWE, tAW, tSD + data_setup_time) ≈ 9ns + margin`
+Write terminates at negedge clk (WE rises). Key constraints: tAW=9ns (address setup, satisfied by latch), tSD=7ns (data setup), tPWE=8ns (WE pulse = half-period), tHD/tHA=0ns (no hold).
 
 #### Practical Clock Speed
 
-The TT IHP mux/demux infrastructure adds significant delay to both the
-clock-to-output and input-to-register paths. For sky130, round-trip latency
-was measured at ~20ns; IHP numbers are not yet available.
-
-Assuming ~10ns output delay and ~10ns input delay:
-
-- **Read**: need address valid to data sampled = tAA + TT_output + TT_input
-  = 10 + 10 + 10 = 30ns. Half-period must exceed this, so full period > 60ns
-  (~16 MHz). Conservatively, **5-10 MHz** for comfortable margin.
-
-- **Write**: need WE pulse > tPWE (8ns) and data setup > tSD (7ns). The data
-  arrives after TT output delay, so half-period > TT_output_delay + tSD =
-  10 + 7 = 17ns, full period > 34ns (~29 MHz). Less constrained than reads.
-
-**Recommended starting clock: 4 MHz** (250ns period, 125ns per phase).
-Provides ~10x margin over SRAM timing and comfortable margin for TT delays.
-Tune up from there empirically.
+The TT IHP mux/demux adds ~10ns to each of the output and input paths (sky130 measured ~20ns round-trip; IHP not yet available). Read is the bottleneck: tAA + TT_output + TT_input ≈ 30ns, so full period > 60ns (~16 MHz). **Recommended starting clock: 4 MHz** (~10× margin). Tune up empirically.
 
 ### Voltage Level Summary
 
@@ -2254,11 +1983,7 @@ Tune up from there empirically.
 | !clk (LE) | 74HCT00 (5V) | 5V | 74HCT573 (5V) | VIH=3.15V | Yes |
 | !clk (buffer OE) | 74HCT00 (5V) | 5V | 74LVC245 OE | 5V-tolerant | Yes |
 
-The 74LVC245 is the key part: powered at 3.3V with 5V-tolerant inputs, it
-safely bridges the two voltage domains on the data bus. All other 5V→5V and
-3.3V→5V paths work because 3.3V exceeds the HCT input threshold of 2.0V.
-
-No signal path puts 5V into a 3.3V-only input.
+No signal path puts 5V into a 3.3V-only input. The 74LVC245 bridges the voltage domains; all other 3.3V→5V paths work because 3.3V exceeds the HCT threshold of 2.0V.
 
 ### Schematic (text)
 
@@ -2290,12 +2015,4 @@ No signal path puts 5V into a 3.3V-only input.
 
 ### SRAM Hold Time Requirements
 
-All zero:
-- **tHA = 0ns**: address hold from write end
-- **tHD = 0ns**: data hold from write end
-- **tOHA = 2ns**: output hold from address change (SRAM's guarantee to us,
-  irrelevant — we sample data before address changes)
-
-No hold violations are possible against this asynchronous SRAM.
-All timing requirements are setup-like (minimum pulse widths and setup times
-before write-terminating edges), solvable by slowing the clock.
+All hold times are zero (tHA=0, tHD=0). No hold violations are possible; all timing constraints are setup-like, solvable by slowing the clock.
