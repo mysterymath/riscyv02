@@ -18,6 +18,8 @@ In comparison to the 6502, it provides:
 | 3-5 cycle calls, 3 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
+| 16,682 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,298 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design speace
@@ -32,7 +34,36 @@ registers! This design does exactly that.
 
 ## How it works
 
-RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacement for the WDC 65C02. It uses the same 8-bit multiplexed bus protocol, same control signals, and fits in the same Tiny Tapeout 1x2 tile. Different ISA, same socket. See [Architecture](#architecture) and [Instruction Set](#instruction-set) below.
+### Bus Protocol
+
+Like the 65C02, but unlike the 6502, the RISCY-V02 operates as a modern
+edge-triggered design on a single clock. Unfortunately, TT doesn't provide
+enough pins to implement the 6502's pinout. However, the 65c02 is negedge
+triggered, and it produces its non-write output at some point after the
+negedge, and its write output at some point after the following posedge. Both
+are largely expected to be latched at the following negedge.
+
+Accordingly, we adjust the timing so that the pins are exposed in two phases:
+address in data. At negedge, the address pins are exposed for the system to
+latch on the following posedge. Then, the pins are muxed over to expose the
+control outputs and the data (read or write), to be latched on the following
+negedge. Control inputs stay consistent between the two phases.
+
+**Address Phase**
+- `uo_out[7:0]` = AB[7:0]
+- `uio_out[7:0]` = AB[15:8] (all output)
+
+**Data Phase**
+- `uo_out[0]` = RWB (1 = read, 0 = write)
+- `uo_out[1]` = SYNC (1 = at instruction boundary)
+- `uo_out[7:2]` = 0
+- `uio[7:0]` = D[7:0] (bidirectional; output during writes, input during reads)
+
+**Control inputs**
+- `ui_in[0]` = IRQB (active-low interrupt request, level-sensitive)
+- `ui_in[1]` = NMIB (active-low non-maskable interrupt, edge-triggered)
+- `ui_in[2]` = RDY (active-high ready signal)
+
 
 ## How to test
 
@@ -41,39 +72,6 @@ Connect to an external SRAM via the TT mux/demux bus protocol (active clock edge
 ## External hardware
 
 A 32Kx8 asynchronous SRAM (e.g. IS61C256AL-10), two 74HCT573 address latches, a 74LVC245 data bus transceiver, and a 74HCT00 quad NAND for glue logic. See [SRAM PCB Interface Design](#sram-pcb-interface-design) below for the full schematic and timing analysis.
-
-## Comparison with 6502
-
-The comparison baseline is a 6502 implementation based on [Arlet Ottens' open-source 6502 core](https://github.com/Arlet/verilog-6502), wrapped for the same TT mux/demux bus protocol and synthesized on the same IHP sg13g2 130nm process and 1x2 Tiny Tapeout tile. The clock speed is pinned to match the 6502's maximum (~71 MHz), simulating 1970s DRAM constraints where raw clock speed improvements don't matter. The comparison focuses on IPC and transistor efficiency.
-
-| Metric | RISCY-V02 | 6502 |
-|---|---|---|
-| Clock period | 14 ns | 14 ns |
-| fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 62.9% | 48.5% |
-| Transistor count (synth) | 16,682 | 13,176 |
-| SRAM-adjusted | 13,298 | 13,176 |
-
-The SRAM-adjusted total is within 1% of the 6502, with significantly more capability per transistor: 16-bit registers, 3-operand ALU instructions, 2-cycle execute, PC-relative jumps, hardware call/return, instantaneous interrupts, and immediate arithmetic/logic. Unrecognized opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
-
-## Bus Protocol
-
-RISCY-V02 uses the same TT mux/demux bus protocol as the 6502 comparison model. The active clock edge alternates between address output and data transfer using a dual-edge mux select signal.
-
-**mux_sel = 0 (address phase):**
-- `uo_out[7:0]` = AB[7:0]
-- `uio_out[7:0]` = AB[15:8] (all output)
-
-**mux_sel = 1 (data phase):**
-- `uo_out[0]` = RWB (1 = read, 0 = write)
-- `uo_out[1]` = SYNC (1 = at instruction boundary)
-- `uo_out[7:2]` = 0
-- `uio[7:0]` = D[7:0] (bidirectional; output during writes, input during reads)
-
-**Control inputs:**
-- `ui_in[0]` = IRQB (active-low interrupt request, level-sensitive)
-- `ui_in[1]` = NMIB (active-low non-maskable interrupt, edge-triggered)
-- `ui_in[2]` = RDY (active-high ready signal)
 
 ## Architecture
 
