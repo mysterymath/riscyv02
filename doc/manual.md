@@ -2,11 +2,11 @@
 
 RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacement for the WDC 65C02. It uses the same 8-bit multiplexed bus protocol, same control signals, and fits in the same Tiny Tapeout 1x2 tile. Different ISA, same socket.
 
-## Comparison with Arlet 6502
+## Comparison with 6502
 
-Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The clock speed is pinned to match the 6502 (~71 MHz), simulating 1970s DRAM constraints where raw clock speed improvements don't matter. The comparison focuses on IPC and transistor efficiency.
+The comparison baseline is a 6502 implementation based on [Arlet Ottens' open-source 6502 core](https://github.com/Arlet/verilog-6502), wrapped for the same TT mux/demux bus protocol and synthesized on the same IHP sg13g2 130nm process and 1x2 Tiny Tapeout tile. The clock speed is pinned to match the 6502's maximum (~71 MHz), simulating 1970s DRAM constraints where raw clock speed improvements don't matter. The comparison focuses on IPC and transistor efficiency.
 
-| Metric | RISCY-V02 | Arlet 6502 |
+| Metric | RISCY-V02 | 6502 |
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
@@ -18,7 +18,7 @@ The SRAM-adjusted total is within 1% of the 6502, with significantly more capabi
 
 ## Bus Protocol
 
-RISCY-V02 uses the same TT mux/demux bus protocol as the Arlet 6502 wrapper. The active clock edge alternates between address output and data transfer using a dual-edge mux select signal.
+RISCY-V02 uses the same TT mux/demux bus protocol as the 6502 comparison model. The active clock edge alternates between address output and data transfer using a dual-edge mux select signal.
 
 **mux_sel = 0 (address phase):**
 - `uo_out[7:0]` = AB[7:0]

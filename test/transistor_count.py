@@ -138,7 +138,7 @@ def main():
     # total, eliminating cross-run non-determinism.
     REGFILE_MODULE = "riscyv02_regfile"
     REGFILE_SRAM_TX = 1500   # 8T SRAM design (128x8T storage + 354T peripherals + 122T write staging)
-    ARLET_6502_TX   = 13176  # comparison baseline (original decode + bus_keep)
+    BASELINE_6502_TX = 13176  # 6502 comparison model (Arlet Ottens' core)
 
     regfile_key = f"\\{REGFILE_MODULE}"
     if regfile_key in modules:
@@ -153,8 +153,8 @@ def main():
 
     discount = regfile_stdcell_tx - REGFILE_SRAM_TX
     adjusted_tx = total_tx - discount
-    vs_6502_std = (total_tx - ARLET_6502_TX) / ARLET_6502_TX * 100
-    vs_6502_adj = (adjusted_tx - ARLET_6502_TX) / ARLET_6502_TX * 100
+    vs_6502_std = (total_tx - BASELINE_6502_TX) / BASELINE_6502_TX * 100
+    vs_6502_adj = (adjusted_tx - BASELINE_6502_TX) / BASELINE_6502_TX * 100
 
     print()
     print("SRAM-Adjusted Transistor Count")
@@ -165,7 +165,7 @@ def main():
     print(f"  {'SRAM discount:':<40s} {-discount:>10,d}")
     print(f"  {'SRAM-adjusted total:':<40s} {adjusted_tx:>10,d}")
     print()
-    print(f"  {'vs Arlet 6502 ({:,d}):'.format(ARLET_6502_TX):<40s}")
+    print(f"  {'vs 6502 ({:,d}):'.format(BASELINE_6502_TX):<40s}")
     print(f"  {'  Standard cell:':<40s} {vs_6502_std:>+10.1f}%")
     print(f"  {'  SRAM-adjusted:':<40s} {vs_6502_adj:>+10.1f}%")
     print()

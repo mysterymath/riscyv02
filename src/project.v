@@ -6,7 +6,7 @@
  * Architecture: 2-stage pipeline (Fetch / Execute) with 8-bit muxed bus.
  * ISA: fixed 16-bit encoding (see riscyv02_execute.v).
  *
- * Bus protocol: identical to tt_um_arlet_6502 mux/demux protocol.
+ * Bus protocol: shared with the 6502 comparison model (TT mux/demux).
  *
  *   mux_sel=0 (address out):
  *     uo_out[7:0]  = AB[7:0]
@@ -78,7 +78,7 @@ module tt_um_riscyv02 (
     else if (nmi_edge)     nmi_pending <= 1'b1;
 
   // -----------------------------------------------------------------------
-  // Mux select: dual-edge register (identical to 6502 wrapper).
+  // Mux select: dual-edge register (shared with 6502 comparison model).
   // Runs on clk so protocol timing continues even when CPU is halted.
   //
   // Timing diagram (mux_sel toggles on both clock edges):
@@ -183,7 +183,7 @@ module tt_um_riscyv02 (
   (* keep *) wire SYNC = sync_r;
 
   // -----------------------------------------------------------------------
-  // Output muxes (identical protocol to 6502 wrapper)
+  // Output muxes (shared protocol with 6502 comparison model)
   //
   // All bus signals routed through bus_keep modules so that (* keep *)
   // net names are guaranteed to survive synthesis as real path waypoints.

@@ -2,7 +2,7 @@
 
 RISCY-V02's register file is an 8-word x 16-bit regular array of general-purpose registers (R0–R7) with 2 read ports and 1 write port (2R1W). All ports are 16 bits wide and use 3-bit select lines. Both bytes of a register are read/written simultaneously. Standard cell synthesis implements it using latches and mux trees, but a real chip would use SRAM — the array is perfectly regular and far too large for individual register cells.
 
-This document designs an equivalent 8T SRAM register file from first principles, counts every transistor, and computes the SRAM-adjusted transistor count for fair comparison with the Arlet 6502.
+This document designs an equivalent 8T SRAM register file from first principles, counts every transistor, and computes the SRAM-adjusted transistor count for fair comparison with the 6502 baseline.
 
 ## Why This Discount Is Fair
 
@@ -11,9 +11,9 @@ The discount applies only to **regular storage arrays** — structures where ide
 1. Identify separately-synthesizable modules that are pure regular arrays
 2. Count their standard cell transistors exactly (from standalone synthesis)
 3. Design an equivalent SRAM from first principles, counting every transistor
-4. Apply the same methodology to the comparison target (Arlet 6502)
+4. Apply the same methodology to the comparison target (the 6502)
 
-The Arlet 6502 has no regular arrays — its registers (A, X, Y, SP) are asymmetric, each wired to different parts of the datapath. The same methodology applied to the 6502 yields zero discount.
+The 6502 has no regular arrays — its registers (A, X, Y, SP) are asymmetric, each wired to different parts of the datapath. The same methodology applied to the 6502 yields zero discount.
 
 ## Standard Cell Register File (Synthesized)
 
@@ -184,6 +184,6 @@ These figures are computed automatically by `transistor_count.py` from each buil
 
 2. **The 8T cell transistor count is definitional.** An 8T SRAM cell has 8 transistors by definition — that's what "8T" means. This is not a process-specific or PDK-specific number.
 
-3. **The same methodology applies to both designs.** The Arlet 6502's registers (A, X, Y, SP) are asymmetric special-purpose registers wired to different datapath elements. They are not a regular array and would not use SRAM in any implementation. Applying this methodology to the 6502 yields zero discount.
+3. **The same methodology applies to both designs.** The 6502's registers (A, X, Y, SP) are asymmetric special-purpose registers wired to different datapath elements. They are not a regular array and would not use SRAM in any implementation. Applying this methodology to the 6502 yields zero discount.
 
 4. **No SRAM macro exists** at this size for IHP sg13g2. The smallest available macro (64x32, 2048 bits) stores 16x more than needed and is physically larger than the entire RISCY-V02 design. The SRAM analysis here is a paper design representing what a custom chip would use.
