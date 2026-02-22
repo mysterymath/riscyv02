@@ -3,9 +3,9 @@ project:
   title:        "RISCY-V02"
   author:       "mysterymath"
   discord:      ""
-  description:  "RISCY-V02: a pin-compatible 65C02 replacement using a RISC-V inspired microarchitecture"
+  description:  "16-bit RISC processor, pin-compatible with WDC 65C02"
   language:     "Verilog"
-  clock_hz:     0
+  clock_hz:     71428571
 
   tiles: "1x2"
 
@@ -23,9 +23,9 @@ project:
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: ""
-  ui[1]: ""
-  ui[2]: ""
+  ui[0]: "IRQB (active-low interrupt request)"
+  ui[1]: "NMIB (active-low NMI, edge-triggered)"
+  ui[2]: "RDY (active-high ready)"
   ui[3]: ""
   ui[4]: ""
   ui[5]: ""
