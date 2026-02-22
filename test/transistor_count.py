@@ -131,7 +131,7 @@ def main():
     # SRAM-adjusted transistor count
     # The register file (riscyv02_regfile) is a regular 8x16-bit 2R1W array.
     # In a real chip this would be 8T SRAM, not standard cell latches.
-    # See doc/sram_analysis.md for full design and justification.
+    # See docs/info.md (Register File SRAM Analysis section) for full design and justification.
     #
     # The regfile uses (* keep_hierarchy *) so its cell counts appear as a
     # sub-module in stat.json — extracted from the same synthesis run as the
@@ -169,7 +169,7 @@ def main():
     print(f"  {'  Standard cell:':<40s} {vs_6502_std:>+10.1f}%")
     print(f"  {'  SRAM-adjusted:':<40s} {vs_6502_adj:>+10.1f}%")
     print()
-    print("  See doc/sram_analysis.md for methodology.")
+    print("  See docs/info.md (Register File SRAM Analysis section) for methodology.")
 
 if __name__ == "__main__":
     main()
