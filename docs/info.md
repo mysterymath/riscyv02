@@ -98,44 +98,28 @@ RISCY-V02 supports maskable IRQ and non-maskable NMI interrupts.
 | 1 (BRK) | $0004 | BRK instruction, unconditional |
 | 2 (IRQ) | $0006 | IRQB low, level-sensitive, masked by I=1 |
 
-Vector addresses are computed as `(vector_id + 1) * 2`. Each vector slot is one instruction (2 bytes) -- enough for a JR trampoline to reach the actual handler. IRQ is placed last so its handler can run inline without a jump, since nothing follows it.
+Each vector slot is one instruction (2 bytes) -- enough for a J trampoline to
+reach the actual handler. IRQ is placed last so its handler can run inline
+without a jump, since nothing follows it.
 
-**Instantaneous dispatch:** All interrupt entry (IRQ, NMI, BRK) is handled at dispatch time in a single cycle. When the FSM is ready (instruction completing or idle), the hardware saves EPC and ESR, sets I=1, and redirects the PC to the vector address -- no execute cycles needed. The 2-cycle vector fetch is the only latency. BRK (INT with vector 1) is handled identically at instruction dispatch. Since all three share the same INT encoding format, software can also trigger IRQ/NMI vectors directly.
+NMI is edge-triggered; the behavior is broadly similar to the 6502. NMI has
+priority over IRQ; if both are pending simultaneously, NMI is taken first, and
+the subsequent I=1 masks the IRQ. NMI's state is sampled on negedge.
 
-**IRQ entry (when IRQB=0 and I=0):**
-1. Complete the current instruction
-2. Save ESR = {I, T} -- status flags at interrupt entry
-3. Save EPC = next_PC -- clean 16-bit return address
-4. Set I = 1 -- disable further interrupts
-5. Jump to $0006
+**Warning:** Unlike the 6502, RETI from an NMI handler is undefined behavior.
+NMI overwrites EPC and ESR unconditionally, so if an NMI interrupts an IRQ
+handler before it saves EPC/ESR (via EPCR/SRR), the IRQ's return state is lost.
+NMI handlers typically reset, halt, or spin. This is typical of modern RISC
+CPUs: NMI is intended for fatal hardware falt handling.
 
-**NMI entry (on NMIB falling edge, regardless of I):**
-1. Complete the current instruction
-2. Save ESR = {I, T} -- overwrites any previous ESR
-3. Save EPC = next_PC -- overwrites any previous EPC
-4. Set I = 1 -- disable IRQs
-5. Jump to $0002
+**Interrupt latency:** 2 cycles from instruction completion to first handler
+instruction fetch (instantaneous dispatch + 2-cycle vector fetch). NMI edge
+detection is combinational -- if the falling edge arrives on the same cycle
+that the FSM is ready, the NMI is taken immediately with no additional
+detection delay.
 
-**BRK entry (unconditional, regardless of I):**
-1. Save ESR = {I, T}
-2. Save EPC = PC+2 -- return address
-3. Set I = 1 -- disable IRQs
-4. Jump to $0004
-
-NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low does not re-trigger. NMIB must return high and fall again for a new NMI. NMI has priority over IRQ; if both are pending simultaneously, NMI is taken first, and the subsequent I=1 masks the IRQ.
-
-**Warning:** RETI from an NMI handler is undefined behavior. NMI overwrites EPC and ESR unconditionally, so if an NMI interrupts an IRQ handler before it saves EPC/ESR (via EPCR/SRR), the IRQ's return state is lost. NMI handlers typically reset, halt, or spin.
-
-**Interrupt return (RETI instruction):**
-1. Restore {I, T} from ESR
-2. Jump to EPC
-
-**Exception state:** EPC is a standalone 16-bit register holding the clean return address. ESR is a 2-bit register holding {I, T} at the time of interrupt entry. Neither is directly addressable through normal register fields. EPC is accessible through EPCR/EPCW; ESR is accessible through SRR/SRW (which read/write the live SR = {I, T}, including ESR on interrupt entry). All GP registers (R0-R7) are directly accessible in interrupt context -- there is no register banking.
-
-**I-bit forwarding:** SEI, CLI, SRW, and RETI all take effect immediately at the next instruction boundary. There is no one-instruction delay: if CLI or SRW clears I while IRQB is asserted, the IRQ fires before the next instruction executes.
-
-**Interrupt latency:** 2 cycles from instruction completion to first handler instruction fetch (instantaneous dispatch + 2-cycle vector fetch). NMI edge detection is combinational -- if the falling edge arrives on the same cycle that the FSM is ready, the NMI is taken immediately with no additional detection delay.
-
+[Interrupt implementation](#interrupt-implementation) details are described
+later.
 
 ## How to test
 
@@ -144,6 +128,28 @@ Connect to an external SRAM via the TT mux/demux bus protocol (active clock edge
 ## External hardware
 
 A 32Kx8 asynchronous SRAM (e.g. IS61C256AL-10), two 74HCT573 address latches, a 74LVC245 data bus transceiver, and a 74HCT00 quad NAND for glue logic. See [SRAM PCB Interface Design](#sram-pcb-interface-design) below for the full schematic and timing analysis.
+
+### Interrupt implementation
+
+**Dispatch:** All interrupt entry (IRQ, NMI, BRK) is handled at dispatch time
+in a single cycle. When the FSM is ready (instruction completing or idle), the
+hardware saves EPC and ESR, sets I=1, and redirects the PC to the vector
+address. The 2-cycle vector fetch is the only latency. BRK (INT with vector 1)
+is handled identically at instruction dispatch. Since all three share the same
+INT encoding format, software can also trigger IRQ/NMI vectors directly.
+
+**Interrupt entry:**
+1. Complete the current instruction
+2. Save ESR = {I, T} -- status flags at interrupt entry
+3. Save EPC = next_PC -- clean 16-bit return address
+4. Set I = 1 -- disable further interrupts
+5. Jump to vector entry
+
+**Interrupt return (RETI instruction):**
+1. Restore {I, T} from ESR
+2. Jump to EPC
+
+**Exception state:** EPC is a standalone 16-bit register holding the clean return address. ESR is a 2-bit register holding {I, T} at the time of interrupt entry. Neither is directly addressable through normal register fields. EPC is accessible through EPCR/EPCW; ESR is accessible through SRR/SRW (which read/write the live SR = {I, T}, including ESR on interrupt entry). All GP registers (R0-R7) are directly accessible in interrupt context -- there is no register banking.
 
 ### Register Naming Convention
 
