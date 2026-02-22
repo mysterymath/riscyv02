@@ -1,11 +1,34 @@
-<!---
+## Overview
 
-This file is used to generate your project datasheet. Please fill in the information below and delete any unused
-sections.
+RISCY-V02 is a 16-bit RISC processor that is logically pin-compatible with the
+WDC 65C02. Adjusted for lack of a usable SRAM IP on TT IHP, the design fits
+roughtly within the same transistor count (~13K) as an off-the-shelf model of
+the 6502 on the same process. This is comparable to the 11K of a 65C02, so
+we're in the right ballpark; hand layout would of course do much better.
 
-You can also include images in this folder and reference them in the markdown. Each image must be less than
-512 kb in size, and the combined size of all images must be less than 1 MB.
--->
+In comparison to the 6502, it provides:
+
+| RISCY-V02 | 6502 |
+| --- | --- |
+| 8x 16-bit registers | 3x 8-bit registers |
+| 2-cycle 16-bit arithmetic | 2/3-cycle 8-bit arithmetic |
+| 2-cycle variable-width shifts (arithmetic or logical) | 2-3 cycle 1-bit logical shifts |
+| 2 cycle interrupt entry/exit | 7-cycle interrupt entry, 6 cycle exit |
+| 2 cycle interrupt entry/exit | 7-cycle interrupt entry, 6 cycle exit |
+| 3-5 cycle calls, 3 cycle returns | 6-cycle calls/returns |
+| 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
+| 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
+
+This project exists to provide evidence against a notion floating around in the
+retrocomputing scene: that the 6502 was a "local optima" in the design speace
+of processors in its transistor budget. This never sat right with me, because
+it implies that we haven't learned anything about how to make CPUs in the
+intervening 40 years, and yet its design is full of things now generally
+considered to be bad ideas: microcode PLAs, a large selection of borderline
+useless addressing modes available on questionable instructions, hardware BCD.
+One of the major points of RISC is that this area is better spent on things
+that make the processor faster: pipelining, barrel shifters, and more
+registers! This design does exactly that.
 
 ## How it works
 
