@@ -265,7 +265,7 @@ Stores the low byte of the register at ir[7:5] to memory. R0 is the implicit bas
 
 #### JR -- Jump Register
 
-`PC = rs + sext(imm8)` -- 4 cycles
+`PC = rs + sext(imm8)` -- 3-4 cycles
 
 Unconditional jump to a register plus a signed byte offset. The 8-bit offset gives a range of -128 to +127 bytes from the register value.
 
@@ -308,13 +308,13 @@ Compares the source register against a sign-extended 8-bit immediate as unsigned
 
 #### BZ -- Branch if Zero
 
-`if rs == 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 4 cycles (taken)
+`if rs == 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
 
 Branches to a PC-relative target if the source register is zero. The 8-bit signed offset is shifted left by 1, giving a range of -256 to +254 bytes from the next instruction address. Tests the full 16-bit register value. Useful for loop counters and null-pointer checks.
 
 #### BNZ -- Branch if Non-Zero
 
-`if rs != 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 4 cycles (taken)
+`if rs != 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
 
 Branches to a PC-relative target if the source register is non-zero. Useful for loop counters: `ADDI rd, -1; BNZ rd, loop`.
 
@@ -358,7 +358,7 @@ Adds an 8-bit immediate, placed in the upper byte, to the address of the next in
 
 #### J -- Jump
 
-`PC += sext(imm10) << 1` -- 4 cycles
+`PC += sext(imm10) << 1` -- 3-4 cycles
 
 Unconditional PC-relative jump. The 10-bit signed offset is shifted left by 1, giving a range of -1024 to +1022 bytes from the next instruction address.
 
@@ -436,11 +436,11 @@ Shifts rd right by 1. The old bit 0 is captured in T. Bit 15 is filled with the 
 
 R-type loads and stores use explicit registers for both data and base, with no offset. For loads, rd at ir[13:11] is the destination and rs1 at ir[7:5] is the address. For stores, rs2 at ir[10:8] is the data and rs1 at ir[7:5] is the address.
 
-#### LWR -- `rd = MEM16[rs]` -- 4 cycles
-#### LBR -- `rd = sext(MEM[rs])` -- 3 cycles
-#### LBUR -- `rd = zext(MEM[rs])` -- 3 cycles
-#### SWR -- `MEM16[rs] = rd` -- 4 cycles
-#### SBR -- `MEM[rs] = rd[7:0]` -- 3 cycles
+#### LWR -- `rd = MEM16[rs1]` -- 4 cycles
+#### LBR -- `rd = sext(MEM[rs1])` -- 3 cycles
+#### LBUR -- `rd = zext(MEM[rs1])` -- 3 cycles
+#### SWR -- `MEM16[rs1] = rs2` -- 4 cycles
+#### SBR -- `MEM[rs1] = rs2[7:0]` -- 3 cycles
 
 #### CLT -- Compare Less Than (Signed)
 
@@ -633,4 +633,4 @@ Outputs are valid 4ns after their launching clock edge, providing 4ns of margin 
 
 ## Code Comparison: RISCY-V02 vs 65C02
 
-See [code_comparison.md](code_comparison.md) for side-by-side assembly comparisons (memcpy, strcpy, multiply, division, CRC-8/16, raster bar IRQ handler, RC4, 32-bit arithmetic).
+See [code_comparison.md](code_comparison.md) for side-by-side assembly comparisons (memcpy, strcpy, multiply, division, CRC-8/16, raster bar IRQ handler, RC4, 32-bit arithmetic, packed BCD).

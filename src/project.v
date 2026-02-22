@@ -4,7 +4,7 @@
  *
  * RISCY-V02 — 16-bit RISC processor, pin-compatible with WDC 65C02.
  * Architecture: 2-stage pipeline (Fetch / Execute) with 8-bit muxed bus.
- * ISA: variable-width prefix-free encoding (see riscyv02_execute.v).
+ * ISA: fixed 16-bit encoding (see riscyv02_execute.v).
  *
  * Bus protocol: identical to tt_um_arlet_6502 mux/demux protocol.
  *

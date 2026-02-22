@@ -180,8 +180,8 @@ module riscyv02_execute (
   // Memory groups (range checks replace 10+5 individual wires)
   wire is_r9_load  = opcode >= 5'd2  && opcode <= 5'd4;   // LW/LB/LBU
   wire is_r9_store = opcode == 5'd5  || opcode == 5'd6;    // SW/SB
-  wire is_sp_load  = opcode >= 5'd17 && opcode <= 5'd19;   // LW.S/LB.S/LBU.S
-  wire is_sp_store = opcode == 5'd20 || opcode == 5'd21;   // SW.S/SB.S
+  wire is_sp_load  = opcode >= 5'd17 && opcode <= 5'd19;   // LWS/LBS/LBUS
+  wire is_sp_store = opcode == 5'd20 || opcode == 5'd21;   // SWS/SBS
   wire is_rr_load  = opcode == 5'd28 && fn2 != 2'd3;       // LWR/LBR/LBUR
   wire is_rr_store = (opcode == 5'd28 && fn2 == 2'd3) || (opcode == 5'd29 && fn2 == 2'd0); // SWR/SBR
   wire is_rr_mem   = is_rr_load || is_rr_store;
@@ -189,11 +189,11 @@ module riscyv02_execute (
   // Combined memory properties for E_MEM and r_hi
   wire mem_is_store      = is_r9_store || is_rr_store || is_sp_store;
   wire mem_is_byte_load  = (opcode == 5'd3  || opcode == 5'd4)    // LB/LBU
-                        || (opcode == 5'd18 || opcode == 5'd19)   // LB.S/LBU.S
+                        || (opcode == 5'd18 || opcode == 5'd19)   // LBS/LBUS
                         || (opcode == 5'd28 && (fn2 == 2'd1 || fn2 == 2'd2)); // LBR/LBUR
-  wire mem_is_byte_store = opcode == 5'd6 || opcode == 5'd21     // SB/SB.S
+  wire mem_is_byte_store = opcode == 5'd6 || opcode == 5'd21     // SB/SBS
                         || (opcode == 5'd29 && fn2 == 2'd0);     // SBR
-  wire mem_is_lbu        = opcode == 5'd4 || opcode == 5'd19     // LBU/LBU.S
+  wire mem_is_lbu        = opcode == 5'd4 || opcode == 5'd19     // LBU/LBUS
                         || (opcode == 5'd28 && fn2 == 2'd2);     // LBUR
 
   // I-type ALU write group (LI/LUI routed through ALU as ADD 0)
@@ -668,7 +668,7 @@ module riscyv02_execute (
         // Normal dispatch to execute phase
         if (fetch_opcode >= 5'd2 && fetch_opcode <= 5'd6)        // LW..SB
           next_r1_sel = 3'd0;                                      // R0 base
-        else if (fetch_opcode >= 5'd17 && fetch_opcode <= 5'd21)  // LW.S..SB.S
+        else if (fetch_opcode >= 5'd17 && fetch_opcode <= 5'd21)  // LWS..SBS
           next_r1_sel = 3'd7;                                      // SP (R7)
         else
           next_r1_sel = fetch_ir[7:5];                             // Default: reg at [7:5]

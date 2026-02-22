@@ -800,7 +800,7 @@ loop:
 done:
 ```
 
-8 instructions, **15 bytes.** Per iteration: **25 cycles.** An 8-bit shift costs 205 cycles.
+8 instructions, **15 bytes.** Per iteration: **25 cycles.** An 8-bit shift costs 204 cycles.
 
 **RISCY-V02** — {R1, R0} shifted in-place, count in R2 (consumed), R3 scratch
 
@@ -829,10 +829,10 @@ done:
 | | 65C02 | RISCY-V02 |
 |---|---|---|
 | Code size | 15 B | 26 B |
-| 1-bit shift | 30 cy | 19 cy |
-| 8-bit shift | 205 cy | 19 cy |
-| 16-bit shift | 405 cy | 17 cy |
-| Speedup (N=8) | 1.0× | 10.8× |
+| 1-bit shift | 29 cy | 19 cy |
+| 8-bit shift | 204 cy | 19 cy |
+| 16-bit shift | 404 cy | 17 cy |
+| Speedup (N=8) | 1.0× | 10.7× |
 
 The 6502 is more compact (1-byte DEX, ASL, ROL) but O(N). RISCY-V02's barrel shifter makes the shift itself free — the overhead is all in the cross-word merge logic. For typical shift amounts (4–12), the barrel version is 5–10× faster.
 
@@ -888,10 +888,10 @@ done:
 | | 65C02 | RISCY-V02 |
 |---|---|---|
 | Code size | 15 B | 26 B |
-| 1-bit shift | 30 cy | 19 cy |
-| 8-bit shift | 205 cy | 19 cy |
-| 16-bit shift | 405 cy | 17 cy |
-| Speedup (N=8) | 1.0× | 10.8× |
+| 1-bit shift | 29 cy | 19 cy |
+| 8-bit shift | 204 cy | 19 cy |
+| 16-bit shift | 404 cy | 17 cy |
+| Speedup (N=8) | 1.0× | 10.7× |
 
 ### 32-bit SRA (Shift Right Arithmetic)
 
@@ -947,10 +947,10 @@ done:
 | | 65C02 | RISCY-V02 |
 |---|---|---|
 | Code size | 18 B | 26 B |
-| 1-bit shift | 35 cy | 19 cy |
-| 8-bit shift | 245 cy | 19 cy |
-| 16-bit shift | 485 cy | 17 cy |
-| Speedup (N=8) | 1.0× | 12.9× |
+| 1-bit shift | 34 cy | 19 cy |
+| 8-bit shift | 244 cy | 19 cy |
+| 16-bit shift | 484 cy | 17 cy |
+| Speedup (N=8) | 1.0× | 12.8× |
 
 ### 32-bit Summary
 
@@ -962,9 +962,9 @@ done:
 | AND | 24 | 36 | 4 | 4 | 9.0× |
 | OR | 24 | 36 | 4 | 4 | 9.0× |
 | XOR | 24 | 36 | 4 | 4 | 9.0× |
-| SLL (N=8) | 15 | 205 | 26 | 19 | 10.8× |
-| SRL (N=8) | 15 | 205 | 26 | 19 | 10.8× |
-| SRA (N=8) | 18 | 245 | 26 | 19 | 12.9× |
+| SLL (N=8) | 15 | 204 | 26 | 19 | 10.7× |
+| SRL (N=8) | 15 | 204 | 26 | 19 | 10.7× |
+| SRA (N=8) | 18 | 244 | 26 | 19 | 12.8× |
 
 For ADD/SUB, the 16-bit ALU collapses 4 byte additions to 2 word additions plus a lightweight carry/borrow chain (CLTU+BF). For bitwise ops, the advantage is stark: 2 instructions vs 12. For shifts, the barrel shifter makes the operation O(1) — the 6502 must loop N times with no escape, while RISCY-V02 handles any shift amount in a fixed 17–19 cycles. This is the clearest architectural win: the barrel shifter transforms shifts from the 6502's weakest operation into a constant-time operation that's 10–13× faster.
 
@@ -1010,16 +1010,15 @@ uint8_t bcd_add8(uint8_t a, uint8_t b);
     SRLI R3, 3           ;  2 cy   2 B    R3 >>= 3
     OR   R3, R3, R4      ;  2 cy   2 B    correction = 6 per nibble
     SUB  R0, R0, R3      ;  2 cy   2 B    subtract excess 6
-    ANDI R0, 0xFF        ;  2 cy   2 B    mask to 8 bits
 ```
 
-15 instructions, **30 bytes, 30 cycles.** BCD carry is in bit 8 of the pre-masked result (test before the final ANDI if needed). The Jones algorithm is branchless but requires 5 steps: inject, add, detect carries, build correction, subtract.
+14 instructions, **28 bytes, 28 cycles.** BCD carry is in bit 8 of the result (paralleling the 6502's C flag). The Jones algorithm is branchless but requires 5 steps: inject, add, detect carries, build correction, subtract.
 
 | | 65C02 | RISCY-V02 |
 |---|---|---|
-| Code size | 5 B | 30 B |
-| Cycles | 9 cy | 30 cy |
-| Speedup | 3.3× | 1.0× |
+| Code size | 5 B | 28 B |
+| Cycles | 9 cy | 28 cy |
+| Speedup | 1.0× | 0.3× |
 
 ### 16-bit Packed BCD Addition
 
@@ -1163,12 +1162,12 @@ The 6502's advantage continues to erode. Its cost grows by 9 cycles per byte (LD
 | Operation | 65C02 | | RISCY-V02 | | Speedup |
 |---|---|---|---|---|---|
 | | Bytes | Cycles | Bytes | Cycles | |
-| 8-bit add (2 digits) | 5 | 9 | 30 | 30 | 0.3× |
+| 8-bit add (2 digits) | 5 | 9 | 28 | 28 | 0.3× |
 | 16-bit add (4 digits) | 15 | 24 | 30 | 30 | 0.8× |
 | 32-bit add (8 digits) | 25 | 42 | 68 | 68 | 0.6× |
 
-Hardware BCD is the 6502's clearest architectural advantage. For 2-digit addition, `SED; CLC; ADC; CLD` is unbeatable — 4 instructions, 5 bytes, 9 cycles. The RISCY-V02 needs 15 instructions of bit manipulation to do what the 6502 does in microcode.
+Hardware BCD is the 6502's clearest architectural advantage. For 2-digit addition, `SED; CLC; ADC; CLD` is unbeatable — 4 instructions, 5 bytes, 9 cycles. The RISCY-V02 needs 14 instructions of bit manipulation to do what the 6502 does in microcode.
 
-But the gap narrows with wider operands. The 6502 scales linearly — each additional byte costs LDA+ADC+STA (9 cy, 6 B) — while RISCY-V02's Jones algorithm handles all 4 nibbles in a 16-bit register in parallel. The cost per additional 16-bit word is one carry extraction (3 insns) plus a repeat of the fixed Jones sequence (16 insns). At 4 digits the cycle counts are nearly tied; at 8 digits the 6502 leads by only 1.7×.
+But the gap narrows with wider operands. The 6502 scales linearly — each additional byte costs LDA+ADC+STA (9 cy, 6 B) — while RISCY-V02's Jones algorithm handles all 4 nibbles in a 16-bit register in parallel. The cost per additional 16-bit word is one carry extraction (3 insns) plus a repeat of the fixed Jones sequence (15 insns). At 4 digits the cycle counts nearly converge; at 8 digits the 6502 leads by only 1.6×.
 
-The real question is whether BCD matters enough to justify the ~400 transistors the 6502 spends on decimal mode. In the 1970s home computer context, BCD was used for score displays, clock readouts, and financial calculations — common but not performance-critical. A subroutine call to a BCD add routine costs RISCY-V02 about 30 cycles vs the 6502's 9 — noticeable but not crippling, and the transistor budget is better spent on features that accelerate the hot loops (barrel shifter, wider ALU).
+The real question is whether BCD matters enough to justify the ~400 transistors the 6502 spends on decimal mode. In the 1970s home computer context, BCD was used for score displays, clock readouts, and financial calculations — common but not performance-critical. A subroutine call to a BCD add routine costs RISCY-V02 about 28 cycles vs the 6502's 9 — noticeable but not crippling, and the transistor budget is better spent on features that accelerate the hot loops (barrel shifter, wider ALU).
