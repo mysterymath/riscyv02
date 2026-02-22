@@ -4,17 +4,17 @@ RISCY-V02 is a 16-bit RISC processor that is a pin-compatible drop-in replacemen
 
 ## Comparison with Arlet 6502
 
-Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The clock speed is pinned to match the 6502 (~62 MHz), simulating 1970s DRAM constraints where raw clock speed improvements don't matter. The comparison focuses on IPC and transistor efficiency.
+Both designs target the IHP sg13g2 130nm process on a 1x2 Tiny Tapeout tile. The clock speed is pinned to match the 6502 (~71 MHz), simulating 1970s DRAM constraints where raw clock speed improvements don't matter. The comparison focuses on IPC and transistor efficiency.
 
 | Metric | RISCY-V02 | Arlet 6502 |
 |---|---|---|
 | Clock period | 14 ns | 14 ns |
 | fMax (slow corner) | 71.4 MHz | 71.4 MHz |
-| Utilization | 62.8% | 45.3% |
-| Transistor count (synth) | 16,632 | 13,176 |
-| SRAM-adjusted | 13,240 | 13,176 |
+| Utilization | 62.9% | 48.5% |
+| Transistor count (synth) | 16,682 | 13,176 |
+| SRAM-adjusted | 13,298 | 13,176 |
 
-The SRAM-adjusted total is within 0.5% of the 6502, with significantly more capability per transistor: 16-bit registers, 3-operand ALU instructions, 2-cycle execute, PC-relative jumps, hardware call/return, instantaneous interrupts, and immediate arithmetic/logic. Unrecognized opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
+The SRAM-adjusted total is within 1% of the 6502, with significantly more capability per transistor: 16-bit registers, 3-operand ALU instructions, 2-cycle execute, PC-relative jumps, hardware call/return, instantaneous interrupts, and immediate arithmetic/logic. Unrecognized opcodes are treated as NOPs (2-cycle no-ops that advance the PC).
 
 ## Bus Protocol
 
