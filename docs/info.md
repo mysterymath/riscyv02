@@ -49,6 +49,8 @@ latch on the following posedge. Then, the pins are muxed over to expose the
 control outputs and the data (read or write), to be latched on the following
 negedge. Control inputs stay consistent between the two phases.
 
+### Pinout
+
 **Address Phase**
 - `uo_out[7:0]` = AB[7:0]
 - `uio_out[7:0]` = AB[15:8] (all output)
@@ -64,37 +66,24 @@ negedge. Control inputs stay consistent between the two phases.
 - `ui_in[1]` = NMIB (active-low non-maskable interrupt, edge-triggered)
 - `ui_in[2]` = RDY (active-high ready signal)
 
+### Architecture
 
-## How to test
-
-Connect to an external SRAM via the TT mux/demux bus protocol (active clock edge alternates between address output and data transfer). Control inputs: IRQB (active-low), NMIB (active-low edge-triggered), RDY (active-high). See [Bus Protocol](#bus-protocol), [RDY and SYNC Signals](#rdy-and-sync-signals), and [Input Timing](#input-timing) below.
-
-## External hardware
-
-A 32Kx8 asynchronous SRAM (e.g. IS61C256AL-10), two 74HCT573 address latches, a 74LVC245 data bus transceiver, and a 74HCT00 quad NAND for glue logic. See [SRAM PCB Interface Design](#sram-pcb-interface-design) below for the full schematic and timing analysis.
-
-## Architecture
-
-- **8 general-purpose registers**: R0-R7, each 16 bits wide (3-bit encoding)
-- **16-bit program counter** (not directly accessible)
+- **8x 16-bit general-purpose registers**: R0-R7 (3-bit encoding)
+- **16-bit program counter**
 - **T flag**: single-bit condition flag, set by comparisons (CLT, CLTU, CEQ, CLTI, CLTUI, CEQI), tested by BT/BF branches
 - **I flag**: interrupt disable (1 = disabled)
 - **ESR**: 2-bit exception status register {I, T}, saved on interrupt entry, restored by RETI
 - **EPC**: 16-bit exception PC, saved on interrupt entry
-- **16-bit address space**, byte-addressable, little-endian
-- **Fixed 16-bit instructions**, fetched low byte first
-- **2-stage pipeline**: Fetch and Execute with speculative fetch and redirect
+- **Fixed 16-bit instructions**: fetched low byte first
+- **2-stage pipeline**: Fetch,Execute with speculative fetch and redirect
 
 ### Reset
 
-On reset:
 - PC is set to $0000 and execution begins
 - I (interrupt disable) is set to 1 -- interrupts are disabled
 - T (condition flag) is cleared to 0
 - ESR is set to {I=1, T=0}
 - All registers are cleared to zero
-
-There is no vector fetch; code is placed directly at address $0000. Software must execute CLI to enable interrupts.
 
 ### Interrupts
 
@@ -146,6 +135,15 @@ NMI is edge-triggered: only one NMI fires per falling edge. Holding NMIB low doe
 **I-bit forwarding:** SEI, CLI, SRW, and RETI all take effect immediately at the next instruction boundary. There is no one-instruction delay: if CLI or SRW clears I while IRQB is asserted, the IRQ fires before the next instruction executes.
 
 **Interrupt latency:** 2 cycles from instruction completion to first handler instruction fetch (instantaneous dispatch + 2-cycle vector fetch). NMI edge detection is combinational -- if the falling edge arrives on the same cycle that the FSM is ready, the NMI is taken immediately with no additional detection delay.
+
+
+## How to test
+
+Connect to an external SRAM via the TT mux/demux bus protocol (active clock edge alternates between address output and data transfer). Control inputs: IRQB (active-low), NMIB (active-low edge-triggered), RDY (active-high). See [Bus Protocol](#bus-protocol), [RDY and SYNC Signals](#rdy-and-sync-signals), and [Input Timing](#input-timing) below.
+
+## External hardware
+
+A 32Kx8 asynchronous SRAM (e.g. IS61C256AL-10), two 74HCT573 address latches, a 74LVC245 data bus transceiver, and a 74HCT00 quad NAND for glue logic. See [SRAM PCB Interface Design](#sram-pcb-interface-design) below for the full schematic and timing analysis.
 
 ### Register Naming Convention
 
