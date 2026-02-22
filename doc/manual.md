@@ -412,7 +412,7 @@ All shift/rotate-through-T instructions are 2 cycles, shift by exactly 1 bit, an
 
 `T = rd[15]; rd = {rd[14:0], 0}` -- 2 cycles
 
-Shifts rd left by 1. The old bit 15 (shifted out) is captured in T. Bit 0 is filled with 0. Replaces the `CLTI rd, 0` + `SLLI rd, 1` pattern for extracting the sign bit before a shift.
+Shifts rd left by 1. The old bit 15 (shifted out) is captured in T. Bit 0 is filled with 0. Extracts the sign bit and shifts in a single instruction, useful for sign-based algorithms and multi-word shifts.
 
 #### SRLT -- Shift Right Logical through T
 

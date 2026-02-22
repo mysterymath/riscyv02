@@ -85,7 +85,7 @@ module riscyv02_execute (
   // Cycle-to-cycle temporary (mem addr, branch target, ALU/shift result).
   // Declared as regs below, captured in the main sequential block.
   reg        carry_r;     // ALU carry (DFF — feeds ci_ext)
-  // mem_carry eliminated: tmp is pre-incremented at E_MEM_LO (registered)
+  // tmp is pre-incremented at E_MEM_LO: tmp_lo += 1, tmp_hi += carry (registered)
   wire [15:0] tmp = {tmp_hi, tmp_lo};
 
   // Interrupt and PC state
@@ -177,7 +177,7 @@ module riscyv02_execute (
 
   localparam LINK_REG = 3'd6;
 
-  // Memory groups (range checks replace 10+5 individual wires)
+  // Memory groups (range checks for compact opcode classification)
   wire is_r9_load  = opcode >= 5'd2  && opcode <= 5'd4;   // LW/LB/LBU
   wire is_r9_store = opcode == 5'd5  || opcode == 5'd6;    // SW/SB
   wire is_sp_load  = opcode >= 5'd17 && opcode <= 5'd19;   // LWS/LBS/LBUS
