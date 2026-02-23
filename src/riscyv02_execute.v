@@ -655,10 +655,14 @@ module riscyv02_execute (
       next_r2_hi_r = 1'b0;
       if (soft_int_disp) begin
         // Software INT: instantaneous
-        next_epc   = {pc + 15'd1, 1'b0};
-        next_esr   = {insn_i_bit, next_t_bit};
-        next_i_bit = 1'b1;
-        next_pc    = {13'b0, fetch_ir[7:6] + 2'd1};
+        if (fetch_ir[7:6] != 2'b11) begin
+          // vec 0-2: save context and jump to vector
+          next_epc   = {pc + 15'd1, 1'b0};
+          next_esr   = {insn_i_bit, next_t_bit};
+          next_i_bit = 1'b1;
+          next_pc    = {13'b0, fetch_ir[7:6] + 2'd1};
+        end
+        // vec 3: NOP — next_pc stays as pc+1, no side effects
         next_state = E_IDLE;
       end else if (reti_disp) begin
         // RETI: instantaneous (use next_epc for back-to-back EPCW+RETI)

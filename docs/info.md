@@ -17,8 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 16,754 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,370 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 16,934 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,550 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -403,7 +403,7 @@ sub8=0x08   SRW     ESR=rs[3:2], {I,T}=rs[1:0] (reg at [7:5])
 sub8=0x10   EPCR    rd = EPC                    (reg at [7:5])
 sub8=0x18   EPCW    EPC = rs                    (reg at [7:5])
 sub8=0x28   SRR     rd = {12'b0, ESR, I, T}     (reg at [7:5])
-sub8=0xC0+  INT     ESR={I,T}; EPC=pc+2; I=1; pc=(vec+1)*2  (vec at [7:6])
+sub8=0xC0+  INT     ESR={I,T}; EPC=pc+2; I=1; pc=(vec+1)*2  (vec 0-2 at [7:6]; vec 3 = NOP)
 
 All other encodings execute as NOP (2-cycle no-op).
 ```

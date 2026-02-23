@@ -230,20 +230,25 @@ class RISCYV02Sim:
         next_pc = self.pc
         regs_before = list(self.regs)
 
-        # INT (opcode 31, ir[15:14]=11): instantaneous redirect
+        # INT (opcode 31, ir[15:14]=11): instantaneous
         if opcode == 31 and ((ir >> 14) & 3) == 3:
             vector_idx = (ir >> 6) & 3
-            self.esr = (int(self.i_bit) << 1) | int(self.t_bit)
-            self.epc = self.pc
-            self.i_bit = True
-            self.pc = ((vector_idx + 1) & 3) << 1
+            if vector_idx != 3:
+                # vec 0-2: save context and jump to vector
+                self.esr = (int(self.i_bit) << 1) | int(self.t_bit)
+                self.epc = self.pc
+                self.i_bit = True
+                self.pc = ((vector_idx + 1) & 3) << 1
+            # vec 3: NOP — PC stays at next instruction, flush + refetch
             self._bus_seq = self._fetch_seq(self.pc)
             self._interrupt_point = 0  # E_IDLE: interruptible every cycle
             self.current_sync = True
             self.last_dispatch = (
-                f"INSN @0x{fetch_pc:04X} ir=0x{ir:04X} INT"
+                f"INSN @0x{fetch_pc:04X} ir=0x{ir:04X}"
+                f" {'INT' if vector_idx != 3 else 'NOP(INT3)'}"
                 f" regs={['%04X' % r for r in regs_before]}"
-                f" -> pc=0x{self.pc:04X} epc=0x{self.epc:04X}"
+                f" -> pc=0x{self.pc:04X}"
+                + (f" epc=0x{self.epc:04X}" if vector_idx != 3 else "")
             )
             return
 
