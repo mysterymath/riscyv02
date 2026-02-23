@@ -584,40 +584,41 @@ class RISCYV02Sim:
             return []
 
         # =================================================================
-        # SI-type (opcode 30): SLLI, SRLI, SRAI
-        # [fn2:2 @ 15:14][dc:2 @ 13:12][shamt:4 @ 11:8][rs/rd:3 @ 7:5]
+        # SI-type (opcode 30): funct3 at [14:12]
+        # [dc:1 @ 15][funct3:3 @ 14:12][shamt:4 @ 11:8][rs/rd:3 @ 7:5]
+        # funct3: [14]=T, [13]=right, [12]=mode
         # =================================================================
         if opcode == 30:
-            funct2 = (ir >> 14) & 3
+            if ir & 0x8000:             # ir[15]=1: 2-cycle NOP
+                return []
+            funct3 = (ir >> 12) & 7
             shamt = (ir >> 8) & 0xF
             rs_idx = (ir >> 5) & 7
-            if funct2 == 0:             # SLLI
-                self.regs[rs_idx] = (self.regs[rs_idx] << shamt) & 0xFFFF
+            if funct3 < 4:              # Immediate shifts
+                if funct3 == 0:             # SLLI
+                    self.regs[rs_idx] = (self.regs[rs_idx] << shamt) & 0xFFFF
+                elif funct3 == 2:           # SRLI
+                    self.regs[rs_idx] = self.regs[rs_idx] >> shamt
+                elif funct3 == 3:           # SRAI
+                    self.regs[rs_idx] = (to_signed16(self.regs[rs_idx]) >> shamt) & 0xFFFF
+                # funct3==1: don't-care (NOP)
                 return []
-            if funct2 == 1:             # SRLI
-                self.regs[rs_idx] = self.regs[rs_idx] >> shamt
-                return []
-            if funct2 == 2:             # SRAI
-                self.regs[rs_idx] = (to_signed16(self.regs[rs_idx]) >> shamt) & 0xFFFF
-                return []
-            if funct2 == 3:             # SLLT / SRLT / RLT / RRT
-                dc = (ir >> 12) & 3
-                val = self.regs[rs_idx]
-                is_right = dc & 1
-                is_rotate = dc & 2
-                old_t = int(self.t_bit)
-                if is_right:
-                    self.t_bit = bool(val & 1)
-                    result = val >> 1
-                    if is_rotate:
-                        result |= old_t << 15
-                else:
-                    self.t_bit = bool((val >> 15) & 1)
-                    result = (val << 1) & 0xFFFF
-                    if is_rotate:
-                        result |= old_t
-                self.regs[rs_idx] = result
-                return []
+            # T-shifts (funct3 >= 4): 100=SLLT, 101=RLT, 110=SRLT, 111=RRT
+            val = self.regs[rs_idx]
+            is_right = funct3 & 2
+            is_rotate = funct3 & 1
+            old_t = int(self.t_bit)
+            if is_right:
+                self.t_bit = bool(val & 1)
+                result = val >> 1
+                if is_rotate:
+                    result |= old_t << 15
+            else:
+                self.t_bit = bool((val >> 15) & 1)
+                result = (val << 1) & 0xFFFF
+                if is_rotate:
+                    result |= old_t
+            self.regs[rs_idx] = result
             return []
 
         # =================================================================

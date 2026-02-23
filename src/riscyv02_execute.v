@@ -10,7 +10,7 @@
 //
 // All instruction state is held in a single 16-bit ir register containing the
 // raw instruction word.
-// All decode properties are derived from named instruction fields (opcode, fn2,
+// All decode properties are derived from named instruction fields (opcode, funct3,
 // imm8, etc.) and format-level group signals.
 //
 // All instructions dispatch to E_EXEC_LO, then optionally continue to
@@ -39,7 +39,7 @@
 //   B       [imm8:8|funct3:3|opcode:5]                       BT, BF
 //   J       [s:1|imm[6:0]:7|imm[8:7]:2|fn1:1|opcode:5]      J, JAL
 //   R       [fn2:2|rd:3|rs2:3|rs1:3|opcode:5]                R,R,R(8) + R,R(8)
-//   SI      [fn2:2|fn4:2|shamt:4|rs/rd:3|opcode:5]           SLLI,SRLI,SRAI,SLLT,SRLT,RLT,RRT
+//   SI      [0:1|funct3:3|shamt:4|rs/rd:3|opcode:5]          SLLI,SRLI,SRAI,SLLT,SRLT,RLT,RRT
 //   SYS     [sub:8|reg:3|opcode:5]                           11 system insns
 //
 // ADDI has opcode 0 so that 0x0000 = ADDI R0, 0 = NOP.
@@ -148,16 +148,17 @@ module riscyv02_execute (
   wire is_cltu = opcode == 5'd29 && fn2 == 2'd2;
   wire is_ceq  = opcode == 5'd29 && fn2 == 2'd3;
 
-  // --- SI-type (opcode 30) ---
-  wire is_slli = opcode == 5'd30 && fn2 == 2'd0;
-  wire is_srli = opcode == 5'd30 && fn2 == 2'd1;
-  wire is_srai = opcode == 5'd30 && fn2 == 2'd2;
+  // --- SI-type (opcode 30, funct3 at [14:12]: [14]=T, [13]=right, [12]=mode) ---
+  // ir[15] must be 0; ir[15]=1 decodes as 2-cycle NOP (no duplicate encodings).
+  wire is_slli = opcode == 5'd30 && ir[15:12] == 4'd0;
+  wire is_srli = opcode == 5'd30 && ir[15:12] == 4'd2;
+  wire is_srai = opcode == 5'd30 && ir[15:12] == 4'd3;
 
-  // SI-type shift/rotate through T (opcode 30, fn2=3)
-  // fn4 at ir[13:12]: 00=SLLT, 01=SRLT, 10=RLT, 11=RRT
-  wire is_si_t        = opcode == 5'd30 && fn2 == 2'd3;
-  wire is_si_t_right  = is_si_t && ir[12];
-  wire is_si_t_rotate = is_si_t && ir[13];
+  // SI-type shift/rotate through T (funct3[2]=1)
+  // 0_100=SLLT, 0_101=RLT, 0_110=SRLT, 0_111=RRT
+  wire is_si_t        = opcode == 5'd30 && ir[15:14] == 2'b01;
+  wire is_si_t_right  = is_si_t && ir[13];
+  wire is_si_t_rotate = is_si_t && ir[12];
 
   // R-type shifts (opcode 27, fn2 1-3)
   wire is_sll = is_alu2 && fn2 == 2'd1;
@@ -578,7 +579,7 @@ module riscyv02_execute (
               w_we   = 1'b1;
             end
             if (is_si_t)
-              next_t_bit = ir[12] ? r1[0] : r1[15];
+              next_t_bit = ir[13] ? r1[0] : r1[15];
           end else if (is_pc_rel) begin
             if ((is_branch && (!(|r1) ^ opcode[0]))
              || (is_t_branch && (t_bit ^ ir[5]))

@@ -17,8 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 16,934 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,550 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 16,854 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,470 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -335,7 +335,7 @@ All 61 instructions are fixed 16-bit. Three properties drive the encoding: the s
 | B | `[imm8:8\|funct3:3\|opcode:5]` | 2 |
 | J | `[s:1\|imm[6:0]:7\|imm[8:7]:2\|fn1:1\|opcode:5]` | 2 |
 | R | `[fn2:2\|rd:3\|rs2:3\|rs1:3\|opcode:5]` | 16 |
-| SI | `[fn2:2\|fn4:2\|shamt:4\|rs/rd:3\|opcode:5]` | 7 |
+| SI | `[dc:1\|funct3:3\|shamt:4\|rs/rd:3\|opcode:5]` | 7 |
 | SYS | `[sub:8\|reg:3\|opcode:5]` | 10 |
 
 In R-type, rs2 is at [10:8] and rd at [13:11].
@@ -344,38 +344,38 @@ In R-type, rs2 is at [10:8] and rd at [13:11].
 
 ```
 --- I-type (opcode 0-23) ---
-00000 (0)   ADDI    rd = rd + sext(imm8)
-00001 (1)   LI      rd = sext(imm8)
-00010 (2)   LW      rd = mem16[R0 + sext(imm8)]
-00011 (3)   LB      rd = sext(mem[R0 + sext(imm8)])
-00100 (4)   LBU     rd = zext(mem[R0 + sext(imm8)])
-00101 (5)   SW      mem16[R0 + sext(imm8)] = rs
-00110 (6)   SB      mem[R0 + sext(imm8)] = rs[7:0]
-00111 (7)   JR      pc = rs + sext(imm8)
-01000 (8)   JALR    R6 = pc+2; pc = rs + sext(imm8)
-01001 (9)   ANDI    rd = rd & zext(imm8)
-01010 (10)  ORI     rd = rd | zext(imm8)
-01011 (11)  XORI    rd = rd ^ sext(imm8)
-01100 (12)  CLTI    T = (rs <s sext(imm8))
-01101 (13)  CLTUI   T = (rs < zext(imm8))
-01110 (14)  BZ      if rs == 0, pc += sext(imm8) << 1
-01111 (15)  BNZ     if rs != 0, pc += sext(imm8) << 1
-10000 (16)  CEQI    T = (rs == sext(imm8))
-10001 (17)  LWS     rd = mem16[R7 + sext(imm8)]
-10010 (18)  LBS     rd = sext(mem[R7 + sext(imm8)])
-10011 (19)  LBUS    rd = zext(mem[R7 + sext(imm8)])
-10100 (20)  SWS     mem16[R7 + sext(imm8)] = rs
-10101 (21)  SBS     mem[R7 + sext(imm8)] = rs[7:0]
-10110 (22)  LUI     rd = imm8 << 8
-10111 (23)  AUIPC   rd = (pc+2) + (imm8 << 8)
+00000 (0)   ADDI
+00001 (1)   LI
+00010 (2)   LW
+00011 (3)   LB
+00100 (4)   LBU
+00101 (5)   SW
+00110 (6)   SB
+00111 (7)   JR
+01000 (8)   JALR
+01001 (9)   ANDI
+01010 (10)  ORI
+01011 (11)  XORI
+01100 (12)  CLTI
+01101 (13)  CLTUI
+01110 (14)  BZ
+01111 (15)  BNZ
+10000 (16)  CEQI
+10001 (17)  LWS
+10010 (18)  LBS
+10011 (19)  LBUS
+10100 (20)  SWS
+10101 (21)  SBS
+10110 (22)  LUI
+10111 (23)  AUIPC
 
 --- B-type (opcode 24, funct3 at [7:5]) ---
-11000.000   BT      if T == 1, pc += sext(imm8) << 1
-11000.001   BF      if T == 0, pc += sext(imm8) << 1
+11000.000   BT
+11000.001   BF
 
 --- J-type (opcode 25, fn1 at [5]) ---
-11001.0     J       pc += sext(imm10) << 1
-11001.1     JAL     R6 = pc+2; pc += sext(imm10) << 1
+11001.0     J
+11001.1     JAL
 
 --- R-type (opcodes 26-29, fn2 at [15:14]) ---
 Opcode 26 (R-ALU1): 00=ADD, 01=SUB, 10=AND, 11=OR
@@ -383,27 +383,26 @@ Opcode 27 (R-ALU2): 00=XOR, 01=SLL, 10=SRL, 11=SRA
 Opcode 28 (R-MEM):  00=LWR, 01=LBR, 10=LBUR, 11=SWR
 Opcode 29 (R-MISC): 00=SBR, 01=CLT, 10=CLTU, 11=CEQ
 
---- SI-type (opcode 30, fn2 at [15:14]) ---
-11110.00    SLLI    rd = rd << shamt
-11110.01    SRLI    rd = rd >>u shamt
-11110.10    SRAI    rd = rd >>s shamt
-11110.11    Shift/rotate through T (fn4 at [13:12]):
-  fn4=00    SLLT    T = rd[15]; rd <<= 1
-  fn4=01    SRLT    T = rd[0];  rd >>= 1
-  fn4=10    RLT     T = rd[15]; rd = {rd[14:0], old_T}
-  fn4=11    RRT     T = rd[0];  rd = {old_T, rd[15:1]}
+--- SI-type (opcode 30, funct3 at [14:12]: [14]=T, [13]=right, [12]=mode) ---
+funct3=000  SLLI
+funct3=010  SRLI
+funct3=011  SRAI
+funct3=100  SLLT
+funct3=101  RLT
+funct3=110  SRLT
+funct3=111  RRT
 
 --- SYS-type (opcode 31, sub8 at [15:8]) ---
-sub8=0x01   SEI     I = 1
-sub8=0x02   CLI     I = 0
-sub8=0x03   RETI    {I, T} = ESR; pc = EPC
-sub8=0x05   WAI     halt until interrupt
-sub8=0x07   STP     halt permanently (reset only)
-sub8=0x08   SRW     ESR=rs[3:2], {I,T}=rs[1:0] (reg at [7:5])
-sub8=0x10   EPCR    rd = EPC                    (reg at [7:5])
-sub8=0x18   EPCW    EPC = rs                    (reg at [7:5])
-sub8=0x28   SRR     rd = {12'b0, ESR, I, T}     (reg at [7:5])
-sub8=0xC0+  INT     ESR={I,T}; EPC=pc+2; I=1; pc=(vec+1)*2  (vec 0-2 at [7:6]; vec 3 = NOP)
+sub8=0x01   SEI
+sub8=0x02   CLI
+sub8=0x03   RETI
+sub8=0x05   WAI
+sub8=0x07   STP
+sub8=0x08   SRW     (reg at [7:5])
+sub8=0x10   EPCR    (reg at [7:5])
+sub8=0x18   EPCW    (reg at [7:5])
+sub8=0x28   SRR     (reg at [7:5])
+sub8=0xC0+  INT     (vec 0-2 at [7:6]; vec 3 = NOP)
 
 All other encodings execute as NOP (2-cycle no-op).
 ```
