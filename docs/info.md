@@ -154,18 +154,20 @@ INT encoding format, software can also trigger IRQ/NMI vectors directly.
 
 ### Register Naming Convention
 
-Two registers have architectural roles: R0 is the implicit base for I-type loads and stores (`R0 + sext(imm8)`), making it the natural accumulator/pointer, and R7 is the stack pointer for SP-relative memory instructions. The remaining six are truly general-purpose. Comparisons write to the T flag rather than a destination register, so all eight GPRs are available as operands.
-
 | Register | Name | Purpose |
 |---|---|---|
-| R0 | a0 | Accumulator / implicit base (I-type memory) |
-| R1 | a1 | Argument / scratch |
-| R2 | t0 | Temporary |
-| R3 | t1 | Temporary |
+| R0 | a0 | Argument / implicit base (I-type memory) |
+| R1 | a1 | Argument |
+| R2 | a2 | Argument |
+| R3 | t0 | Temporary |
 | R4 | s0 | Callee-saved |
 | R5 | s1 | Callee-saved |
 | R6 | ra | Return address (JAL/JALR write PC+2 here; return via `JR R6, 0`) |
 | R7 | sp | Stack pointer |
+
+Two registers have architectural roles: R0 is the implicit base for I-type loads and stores (`R0 + sext(imm8)`), and R7 is the stack pointer for SP-relative memory instructions. The remaining six are truly general-purpose. Comparisons write to the T flag rather than a destination register, so all eight GPRs are available as operands.
+
+The 3/1/2 split (argument/temporary/callee-saved) among the six free registers follows the RV32E calling convention's ratios: after removing ra, sp, and the special-purpose registers (zero, gp, tp), RV32E allocates 6/11 argument, 3/11 temporary, and 2/11 callee-saved. Scaled to 6 registers and rounded, that gives 3, 1, 2.
 
 R6 is a normal GPR — callee-saved, and interrupt handlers that use it must save and restore it manually. The interrupt return address lives in EPC, not R6. R-type loads and stores bypass the R0 convention, allowing explicit selection of both data register and base with no offset.
 
