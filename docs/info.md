@@ -169,7 +169,176 @@ Two registers have architectural roles: R0 is the implicit base for I-type loads
 
 R6 is a normal GPR — callee-saved, and interrupt handlers that use it must save and restore it manually. The interrupt return address lives in EPC, not R6. R-type loads and stores bypass the R0 convention, allowing explicit selection of both data register and base with no offset.
 
+## Instruction Set
+
+All 61 instructions are fixed 16-bit (2 bytes). All immediates are sign-extended. "Page crossing" means the upper byte of the target address differs from PC+2.
+
+### Instruction Reference
+
+**Arithmetic & Logic**
+
+| Mnemonic | Name | Effect | Cycles | |
+|---|---|---|---|---|
+| ADDI | Add immediate | rd += sext(imm8) | 2 | [1](#notes) |
+| ADD | Add | rd = rs1 + rs2 | 2 | |
+| SUB | Subtract | rd = rs1 - rs2 | 2 | |
+| ANDI | And immediate | rd &= sext(imm8) | 2 | [2](#notes) |
+| ORI | Or immediate | rd \|= sext(imm8) | 2 | |
+| XORI | Xor immediate | rd ^= sext(imm8) | 2 | [3](#notes) |
+| AND | And | rd = rs1 & rs2 | 2 | |
+| OR | Or | rd = rs1 \| rs2 | 2 | |
+| XOR | Xor | rd = rs1 ^ rs2 | 2 | |
+
+**Shifts**
+
+| Mnemonic | Name | Effect | Cycles | |
+|---|---|---|---|---|
+| SLLI | Shift left immediate | rd <<= shamt | 2 | [28](#notes) |
+| SRLI | Shift right logical imm | rd >>= shamt (logical) | 2 | [28](#notes) |
+| SRAI | Shift right arith imm | rd >>= shamt (arithmetic) | 2 | [28](#notes) |
+| SLL | Shift left logical | rd = rs1 << rs2[3:0] | 2 | |
+| SRL | Shift right logical | rd = rs1 >> rs2[3:0] (logical) | 2 | |
+| SRA | Shift right arithmetic | rd = rs1 >> rs2[3:0] (arithmetic) | 2 | |
+| SLLT | Shift left, link T | T = rd[15]; rd = {rd[14:0], 0} | 2 | [19](#notes) |
+| SRLT | Shift right, link T | T = rd[0]; rd = {0, rd[15:1]} | 2 | [19](#notes) |
+| RLT | Rotate left through T | T = rd[15]; rd = {rd[14:0], old_T} | 2 | [20](#notes) |
+| RRT | Rotate right through T | T = rd[0]; rd = {old_T, rd[15:1]} | 2 | [20](#notes) |
+
+**Comparisons**
+
+| Mnemonic | Name | Effect | Cycles | |
+|---|---|---|---|---|
+| CLTI | Compare < immediate | T = (rs < sext(imm8)) signed | 2 | [4](#notes) |
+| CLTUI | Compare <u immediate | T = (rs <u sext(imm8)) unsigned | 2 | [5](#notes) |
+| CEQI | Compare == immediate | T = (rs == sext(imm8)) | 2 | |
+| CLT | Compare < | T = (rs1 < rs2) signed | 2 | [21](#notes) |
+| CLTU | Compare <u | T = (rs1 <u rs2) unsigned | 2 | [21](#notes) |
+| CEQ | Compare == | T = (rs1 == rs2) | 2 | [21](#notes) |
+
+**Branches**
+
+| Mnemonic | Name | Effect | Cycles | |
+|---|---|---|---|---|
+| BZ | Branch if zero | if rs == 0: PC += sext(imm8) << 1 | 2 / 3-4 | [6](#notes) |
+| BNZ | Branch if non-zero | if rs != 0: PC += sext(imm8) << 1 | 2 / 3-4 | [7](#notes) |
+| BT | Branch if T set | if T == 1: PC += sext(imm8) << 1 | 2 / 3-4 | [8](#notes) |
+| BF | Branch if T clear | if T == 0: PC += sext(imm8) << 1 | 2 / 3-4 | [8](#notes) |
+
+**Loads**
+
+| Mnemonic | Name | Effect | Cycles | |
+|---|---|---|---|---|
+| LI | Load immediate | rd = sext(imm8) | 2 | |
+| LUI | Load upper immediate | rd = imm8 << 8 | 2 | [13](#notes) |
+| AUIPC | Add upper imm to PC | rd = (PC+2) + (imm8 << 8) | 2 | [14](#notes) |
+| LW | Load word | rd = MEM16[R0 + sext(imm8)] | 4 | [9](#notes) |
+| LB | Load byte signed | rd = sext(MEM[R0 + sext(imm8)]) | 3 | [9](#notes) |
+| LBU | Load byte unsigned | rd = zext(MEM[R0 + sext(imm8)]) | 3 | [9](#notes) |
+| LWS | Load word (SP) | rd = MEM16[R7 + sext(imm8)] | 4 | [11](#notes) |
+| LBS | Load byte signed (SP) | rd = sext(MEM[R7 + sext(imm8)]) | 3 | [11](#notes) |
+| LBUS | Load byte unsigned (SP) | rd = zext(MEM[R7 + sext(imm8)]) | 3 | [11](#notes) |
+| LWR | Load word (register) | rd = MEM16[rs1] | 4 | [12](#notes) |
+| LBR | Load byte signed (reg) | rd = sext(MEM[rs1]) | 3 | [12](#notes) |
+| LBUR | Load byte unsigned (reg) | rd = zext(MEM[rs1]) | 3 | [12](#notes) |
+
+**Stores**
+
+| Mnemonic | Name | Effect | Cycles | |
+|---|---|---|---|---|
+| SW | Store word | MEM16[R0 + sext(imm8)] = rs | 4 | [10](#notes) |
+| SB | Store byte | MEM[R0 + sext(imm8)] = rs[7:0] | 3 | [10](#notes) |
+| SWS | Store word (SP) | MEM16[R7 + sext(imm8)] = rs | 4 | [11](#notes) |
+| SBS | Store byte (SP) | MEM[R7 + sext(imm8)] = rs[7:0] | 3 | [11](#notes) |
+| SWR | Store word (register) | MEM16[rs1] = rs2 | 4 | [12](#notes) |
+| SBR | Store byte (register) | MEM[rs1] = rs2[7:0] | 3 | [12](#notes) |
+
+**Jumps & Calls**
+
+| Mnemonic | Name | Effect | Cycles | |
+|---|---|---|---|---|
+| JR | Jump register | PC = rs + sext(imm8) | 3-4 | [15](#notes) |
+| JALR | Jump and link register | rs = PC+2; PC = rs + sext(imm8) | 4 | [16](#notes) |
+| J | Jump | PC += sext(imm10) << 1 | 3-4 | [17](#notes) |
+| JAL | Jump and link | R6 = PC+2; PC += sext(imm10) << 1 | 4 | [18](#notes) |
+
+**System**
+
+| Mnemonic | Name | Effect | Cycles | |
+|---|---|---|---|---|
+| SEI | Set interrupt disable | I = 1 | 2 | |
+| CLI | Clear interrupt disable | I = 0 | 2 | [22](#notes) |
+| SRR | Status register read | rd = {12'b0, ESR, I, T} | 2 | [24](#notes) |
+| SRW | Status register write | ESR = rs[3:2]; {I, T} = rs[1:0] | 2 | [24](#notes) |
+| EPCR | Read EPC | rd = EPC | 2 | |
+| EPCW | Write EPC | EPC = rs | 2 | |
+| RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 2 | [23](#notes) |
+| INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 2 | [25](#notes) |
+| WAI | Wait for interrupt | halt until interrupt | 2 / halt | [26](#notes) |
+| STP | Stop | halt permanently | 1 | [27](#notes) |
+
+### Notes
+
+<a id="notes"></a>
+
+1. **ADDI** — `ADDI R0, 0` (encoding `0x0000`) is the canonical NOP. Pairs with LUI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`.
+
+2. **ANDI** — Positive immediate masks low 7 bits and clears the high byte; negative immediate masks the low byte and preserves the high byte. `ANDI rd, 0xFF` is a no-op (sign-extends to 0xFFFF); use LBU to extract a low byte.
+
+3. **XORI** — `XORI rd, -1` inverts all 16 bits (bitwise NOT).
+
+4. **CLTI** — Sets T=1 if less, T=0 otherwise. No register modified. Pattern: `CLTI rs, val; BT target`.
+
+5. **CLTUI** — The immediate is sign-extended then compared as unsigned.
+
+6. **BZ** — Offset shifted left by 1, giving -256 to +254 bytes range. Tests the full 16-bit register value. Taken same-page: 3cy, page-crossing: 4cy.
+
+7. **BNZ** — Loop pattern: `ADDI rd, -1; BNZ rd, loop`. Taken same-page: 3cy, page-crossing: 4cy.
+
+8. **BT/BF** — Branch on T flag set by comparison instructions. Taken same-page: 3cy, page-crossing: 4cy. BF pattern: `CLTI rs, val; BF target` (branch if rs >= val).
+
+9. **LW/LB/LBU** — R0-relative with signed byte offset (-128 to +127). Word loads transfer low byte first.
+
+10. **SW/SB** — R0-relative with signed byte offset (-128 to +127). Word stores transfer low byte first.
+
+11. **LWS/LBS/LBUS/SWS/SBS** — R7 (SP)-relative, same semantics as R0-relative variants.
+
+12. **LWR/LBR/LBUR/SWR/SBR** — Explicit base and data registers, no offset. Loads: rd at ir[13:11], address at rs1 ir[7:5]. Stores: data at rs2 ir[10:8], address at rs1 ir[7:5].
+
+13. **LUI** — Loads upper byte, clears low byte. Pairs with ADDI for full 16-bit constants: `LUI rd, hi; ADDI rd, lo`. When the low byte has bit 7 set, compensate the upper byte by +1 (same as RISC-V).
+
+14. **AUIPC** — Uses PC+2 (address of next instruction). Pairs with LW/SW/JR offset for PC-relative addressing: AUIPC provides the upper bits, the subsequent instruction provides the lower bits.
+
+15. **JR** — Unconditional jump to register plus signed byte offset (-128 to +127). Same-page: 3cy, page-crossing: 4cy.
+
+16. **JALR** — Register-indirect call. The single register field is both jump base and link destination: `JALR R6, offset` reads the target from R6, then writes the return address back. Pairs with AUIPC for full 16-bit PC-relative calls: `AUIPC t0, upper; JALR t0, lower`.
+
+17. **J** — Range: -1024 to +1022 bytes. Same-page: 3cy, page-crossing: 4cy.
+
+18. **JAL** — Link register is R6. Return via `JR R6, 0`.
+
+19. **SLLT/SRLT** — Shift by exactly 1 bit, capture the shifted-out bit into T. Designed for bit-at-a-time algorithms (CRC, long division, multiply) and multi-word shifts.
+
+20. **RLT/RRT** — 17-bit rotate path through T (equivalent to 6502 ROL/ROR). Chaining across two registers shifts a bit from one into the other.
+
+21. **CLT/CLTU/CEQ** — No register modified. Use `SRR rd; ANDI rd, 1` to capture T into a register.
+
+22. **CLI** — Pending IRQ taken at next dispatch boundary.
+
+23. **RETI** — Restores flags from ESR and returns. If ESR restores I=0 and IRQB is asserted, the IRQ fires immediately.
+
+24. **SRR/SRW** — Pack the saved exception state (ESR) alongside the live flags into a single register. On handler entry, `SRR rd` captures everything; before RETI, `SRW rd` restores it. EPCR/EPCW access the return address separately. The `read_t` pseudo (`SRR rd; ANDI rd, 1`) correctly masks ESR bits. SRW forwards all flags immediately.
+
+25. **INT** — Unconditional: fires regardless of the I bit. BRK is INT with vector 1 (handler at $0004). Software can trigger any vector (NMI=0, BRK=1, IRQ=2).
+
+26. **WAI** — PC is advanced past WAI before halting, so RETI returns to the next instruction. With I=1, an IRQ wakes execution without entering a handler (65C02-style hint). 2 cycles if interrupt already pending; otherwise halted until wake.
+
+27. **STP** — Reset only. Both WAI and STP halt via internal clock gating.
+
+28. **SLLI/SRLI/SRAI** — Operate in-place (rd = rd op shamt), shift amount range 0-15.
+
 ## Instruction Encoding
+
+This section documents the binary encoding for tools and hardware implementors.
 
 All 61 instructions are fixed 16-bit. Three properties drive the encoding: the sign bit is always ir[15], so sign extension runs in parallel with decode; the primary register field ir[7:5] is shared across I/SI/SYS/R-type formats, enabling a speculative register read before the opcode is fully decoded; and `0x0000` encodes ADDI R0, 0 (NOP). All immediates are sign-extended, same as RISC-V.
 
@@ -252,224 +421,13 @@ sub8=0xC0+  INT     ESR={I,T}; EPC=pc+2; I=1; pc=(vec+1)*2  (vec at [7:6])
 All other encodings execute as NOP (2-cycle no-op).
 ```
 
-## Instruction Set
-
-### I-type -- Loads, Stores, Immediate, Jumps
-
-#### ADDI -- Add Immediate
-
-`rd = rd + sext(imm8)` -- 2 cycles
-
-Adds a sign-extended 8-bit immediate (-128 to +127) to the destination register. `ADDI R0, 0` (encoding `0x0000`) is the canonical NOP. Pairs with LUI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`.
-
-#### LI -- Load Immediate
-
-`rd = sext(imm8)` -- 2 cycles
-
-Loads a sign-extended 8-bit immediate (-128 to +127) into a register.
-
-#### LW, LB, LBU -- Load (R0-relative)
-
-All I-type loads use R0 as the implicit base with a signed byte offset (-128 to +127). Word loads transfer low byte first.
-
-- `LW rd, imm8` -- `rd = MEM16[R0 + sext(imm8)]` -- 4 cycles
-- `LB rd, imm8` -- `rd = sext(MEM[R0 + sext(imm8)])` -- 3 cycles
-- `LBU rd, imm8` -- `rd = zext(MEM[R0 + sext(imm8)])` -- 3 cycles
-
-#### SW, SB -- Store (R0-relative)
-
-- `SW rs, imm8` -- `MEM16[R0 + sext(imm8)] = rs` -- 4 cycles (low byte first)
-- `SB rs, imm8` -- `MEM[R0 + sext(imm8)] = rs[7:0]` -- 3 cycles
-
-#### JR -- Jump Register
-
-`PC = rs + sext(imm8)` -- 3-4 cycles
-
-Unconditional jump to a register plus a signed byte offset (-128 to +127).
-
-#### JALR -- Jump and Link Register
-
-`rs = PC+2; PC = rs + sext(imm8)` -- 4 cycles
-
-Register-indirect call. The single register field is both jump base and link destination: `JALR R6, offset` reads the target from R6, then writes the return address back. Pairs with AUIPC for full 16-bit PC-relative calls: `AUIPC t0, upper; JALR t0, lower`.
-
-#### ANDI -- And Immediate
-
-`rd = rd & sext(imm8)` -- 2 cycles
-
-Positive immediate masks low 7 bits and clears the high byte; negative immediate masks the low byte and preserves the high byte. Note: `ANDI rd, 0xFF` is a no-op (sign-extends to 0xFFFF); use `LBU` to extract a low byte.
-
-#### ORI -- Or Immediate
-
-`rd = rd | sext(imm8)` -- 2 cycles
-
-#### XORI -- Xor Immediate
-
-`rd = rd ^ sext(imm8)` -- 2 cycles
-
-`XORI rd, -1` inverts all 16 bits (bitwise NOT).
-
-#### CLTI -- Compare Less Than Immediate (Signed)
-
-`T = (rs < sext(imm8))` -- 2 cycles
-
-Sets T=1 if less, T=0 otherwise. No register modified. Pattern: `CLTI rs, val; BT target`.
-
-#### CLTUI -- Compare Less Than Immediate (Unsigned)
-
-`T = (rs <u sext(imm8))` -- 2 cycles
-
-The immediate is sign-extended then compared as unsigned.
-
-#### BZ -- Branch if Zero
-
-`if rs == 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
-
-The offset is shifted left by 1, giving -256 to +254 bytes range. Tests the full 16-bit register value.
-
-#### BNZ -- Branch if Non-Zero
-
-`if rs != 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
-
-Pattern: `ADDI rd, -1; BNZ rd, loop`.
-
-#### CEQI -- Compare Equal Immediate
-
-`T = (rs == sext(imm8))` -- 2 cycles
-
-### B-type -- T-Flag Branches
-
-Branch based on the T flag set by comparison instructions. Same-page taken: 3 cycles; page-crossing: 4 cycles.
-
-#### BT -- Branch if T Set
-
-`if T == 1: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
-
-#### BF -- Branch if T Clear
-
-`if T == 0: PC += sext(imm8) << 1` -- 2 cycles (not taken) / 3-4 cycles (taken)
-
-Pattern: `CLTI rs, val; BF target` (branch if rs >= val).
-
-### I-type -- Upper Immediate
-
-#### LUI -- Load Upper Immediate
-
-`rd = imm8 << 8` -- 2 cycles
-
-Loads an 8-bit immediate into the upper byte, clearing the low byte. Pairs with ADDI for full 16-bit constants: `LUI rd, hi; ADDI rd, lo`. When the low byte has bit 7 set, compensate the upper byte by +1 (same as RISC-V).
-
-#### AUIPC -- Add Upper Immediate to PC
-
-`rd = (PC+2) + (imm8 << 8)` -- 2 cycles
-
-Pairs with LW/SW/JR's offset for PC-relative addressing: AUIPC provides the upper bits, the subsequent instruction provides the lower bits.
-
-### J-type -- PC-Relative Jumps
-
-#### J -- Jump
-
-`PC += sext(imm10) << 1` -- 3-4 cycles
-
-Range: -1024 to +1022 bytes.
-
-#### JAL -- Jump and Link
-
-`R6 = PC+2; PC += sext(imm10) << 1` -- 4 cycles
-
-Subroutine call; return with `JR R6, 0`.
-
-### R-type -- Register ALU
-
-All R-type ALU instructions are 2 cycles. rd at ir[13:11], rs2 at ir[10:8], rs1 at ir[7:5].
-
-#### ADD -- `rd = rs1 + rs2`
-#### SUB -- `rd = rs1 - rs2`
-#### AND -- `rd = rs1 & rs2`
-#### OR -- `rd = rs1 | rs2`
-#### XOR -- `rd = rs1 ^ rs2`
-#### SLL -- `rd = rs1 << rs2[3:0]` (shift left logical, 0-15)
-#### SRL -- `rd = rs1 >>u rs2[3:0]` (shift right logical, 0-15)
-#### SRA -- `rd = rs1 >>s rs2[3:0]` (shift right arithmetic, 0-15)
-
-### SI-type -- Shift Immediate
-
-All shift immediate instructions are 2 cycles and operate in-place (rd = rd shift shamt).
-
-#### SLLI -- `rd = rd << shamt` (shamt 0-15)
-#### SRLI -- `rd = rd >>u shamt` (shamt 0-15)
-#### SRAI -- `rd = rd >>s shamt` (shamt 0-15)
-
-### SI-type -- Shift/Rotate Through T
-
-All 2 cycles, shift by exactly 1 bit, capture the shifted-out bit into T. Designed for bit-at-a-time algorithms (CRC, long division, multiply) and multi-word shifts.
-
-#### SLLT -- `T = rd[15]; rd = {rd[14:0], 0}`
-#### SRLT -- `T = rd[0]; rd = {0, rd[15:1]}`
-
-#### RLT -- Rotate Left through T
-
-`T = rd[15]; rd = {rd[14:0], old_T}` -- 17-bit rotate path (equivalent to 6502 ROL). Chaining RLT across two registers shifts a bit from one into the other.
-
-#### RRT -- Rotate Right through T
-
-`T = rd[0]; rd = {old_T, rd[15:1]}` -- equivalent to 6502 ROR.
-
-### R-type -- Register Load/Store and Compare
-
-Explicit registers for both data and base, no offset. Loads: rd at ir[13:11], address at rs1 ir[7:5]. Stores: data at rs2 ir[10:8], address at rs1 ir[7:5].
-
-#### LWR -- `rd = MEM16[rs1]` -- 4 cycles
-#### LBR -- `rd = sext(MEM[rs1])` -- 3 cycles
-#### LBUR -- `rd = zext(MEM[rs1])` -- 3 cycles
-#### SWR -- `MEM16[rs1] = rs2` -- 4 cycles
-#### SBR -- `MEM[rs1] = rs2[7:0]` -- 3 cycles
-
-#### CLT -- `T = (rs1 < rs2)` -- 2 cycles (signed)
-#### CLTU -- `T = (rs1 <u rs2)` -- 2 cycles (unsigned)
-#### CEQ -- `T = (rs1 == rs2)` -- 2 cycles
-
-No register modified. Use `SRR rd; ANDI rd, 1` to capture T into a register.
-
-### System Format
-
-#### SEI -- `I = 1` -- 2 cycles (disable interrupts)
-#### CLI -- `I = 0` -- 2 cycles (enable interrupts; pending IRQ taken at next boundary)
-
-#### RETI -- Return from Interrupt
-
-`{I, T} = ESR; PC = EPC` -- 2 cycles
-
-Restores flags from ESR and returns. If ESR restores I=0 and IRQB is asserted, the IRQ fires immediately.
-
-#### EPCR -- `rd = EPC` -- 2 cycles
-#### EPCW -- `EPC = rs` -- 2 cycles
-#### SRR -- `rd = {12'b0, ESR[1:0], I, T}` -- 2 cycles
-#### SRW -- `ESR = rs[3:2], {I, T} = rs[1:0]` -- 2 cycles (all flags forwarded immediately)
-
-SRR/SRW pack the saved exception state (ESR) alongside the live flags into a single register. On handler entry, `SRR rd` captures everything; before RETI, `SRW rd` restores it. EPCR/EPCW access the return address separately. The `read_t` pseudo (`SRR rd; ANDI rd, 1`) correctly masks ESR bits.
-
-#### INT -- Software Interrupt
-
-`ESR = {I, T}; EPC = PC+2; I = 1; PC = (vector[1:0] + 1) * 2` -- 2 cycles
-
-Unconditional — fires regardless of the I bit. BRK is INT with vector 1 (handler at $0004).
-
-#### WAI -- Wait for Interrupt
-
-Halts until an interrupt arrives. PC is advanced past WAI before halting, so RETI returns to the next instruction. With I=1, an IRQ wakes execution without entering a handler (65C02-style hint). 2 cycles if interrupt already pending; otherwise halted until wake.
-
-#### STP -- Stop
-
-Halts permanently (reset only). Both WAI and STP halt via internal clock gating. 1 cycle.
-
 ## Pipeline and Timing
 
 The 2-stage pipeline (Fetch and Execute) overlaps fetch of the next instruction with execution of the current one. For sequential code and not-taken branches, the execute cost is completely hidden — throughput is limited by the 2-cycle fetch. Only taken branches and jumps pay execute cost directly, because the redirect flushes the speculative fetch.
 
 ### Cycle Counts (Throughput)
 
-Throughput measured from one instruction boundary (SYNC) to the next:
+The [instruction reference table](#instruction-reference) above gives cycle counts; this table breaks down how those cycles are spent in the pipeline. Throughput measured from one instruction boundary (SYNC) to the next:
 
 | Instruction | Cycles | Notes |
 |---|---|---|
