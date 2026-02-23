@@ -122,11 +122,11 @@ later.
 
 ## How to test
 
-Connect to an external SRAM via the TT mux/demux bus protocol (active clock edge alternates between address output and data transfer). Control inputs: IRQB (active-low), NMIB (active-low edge-triggered), RDY (active-high). See [Bus Protocol](#bus-protocol), [RDY and SYNC Signals](#rdy-and-sync-signals), and [Input Timing](#input-timing) below.
+Flash the [demo board firmware](#demo-board-firmware) onto the TT demoboard's RP2350. The firmware emulates 64 KiB of SRAM and a UART peripheral, providing everything the CPU needs to run programs. Load a test binary into the firmware's `mem[]` array, connect to the demoboard's USB serial port, and verify output via the memory-mapped UART.
 
 ## External hardware
 
-A 32Kx8 asynchronous SRAM (e.g. IS61C256AL-10), two 74HCT573 address latches, a 74LVC245 data bus transceiver, and a 74HCT00 quad NAND for glue logic. See [SRAM PCB Interface Design](#sram-pcb-interface-design) below for the full schematic and timing analysis.
+None — the TT demoboard's RP2350 provides SRAM emulation and I/O. No additional PCB or components are needed.
 
 ### Interrupt implementation
 
