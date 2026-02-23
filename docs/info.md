@@ -285,14 +285,14 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 |---|---|---|---|---|
 | CLI | Clear interrupt disable | I = 0 | 2 | [5](#notes) |
 | SEI | Set interrupt disable | I = 1 | 2 | |
-| SRR | Status register read | rd = {12'b0, ESR, I, T} | 2 | [7](#notes) |
-| SRW | Status register write | ESR = rs[3:2]; {I, T} = rs[1:0] | 2 | [7](#notes) |
+| SRR | Status register read | rd = {12'b0, ESR, I, T} | 2 | |
+| SRW | Status register write | ESR = rs[3:2]; {I, T} = rs[1:0] | 2 | |
 | EPCR | Read EPC | rd = EPC | 2 | |
 | EPCW | Write EPC | EPC = rs | 2 | |
-| INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 2 | [8](#notes) |
+| INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 2 | [7](#notes) |
 | RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 2 | [6](#notes) |
-| WAI | Wait for interrupt | halt until interrupt | 2 / halt | [9](#notes) |
-| STP | Stop | halt permanently | 1 | [10](#notes) |
+| WAI | Wait for interrupt | halt until interrupt | 2 / halt | [8](#notes) |
+| STP | Stop | halt until reset | 1 | |
 
 ### Notes
 
@@ -308,15 +308,11 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 
 5. **CLI** — Pending IRQ taken at next dispatch boundary.
 
-6. **RETI** — Immediate IRQ if I restored to 0.
+6. **RETI** — If I restored to 0, pending IRQ fires at RETI dispatch.
 
-7. **SRR/SRW** — Pack ESR alongside live flags. SRW forwards immediately.
+7. **INT** — Unconditional (ignores I).
 
-8. **INT** — Unconditional (ignores I).
-
-9. **WAI** — PC past WAI before halt. I=1: wake without handler entry.
-
-10. **STP** — Reset only. WAI/STP halt via clock gating.
+8. **WAI** — PC increments past WAI before halt. If I=1, wakes without handler entry.
 
 ### Idioms
 
