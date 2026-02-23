@@ -110,13 +110,13 @@ def _encode_jalr(rs, imm):
     return _encode_i(8, imm, rs)
 
 def _encode_andi(rd, imm):
-    """ANDI: rd = rd & sext(imm8). All immediates sign-extended."""
-    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    """ANDI: rd = rd & zext(imm8). Immediate is zero-extended."""
+    assert -128 <= imm <= 255, f"imm out of range: {imm}"
     return _encode_i(9, imm, rd)
 
 def _encode_ori(rd, imm):
-    """ORI: rd = rd | sext(imm8). All immediates sign-extended."""
-    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    """ORI: rd = rd | zext(imm8). Immediate is zero-extended."""
+    assert -128 <= imm <= 255, f"imm out of range: {imm}"
     return _encode_i(10, imm, rd)
 
 def _encode_xori(rd, imm):
@@ -130,8 +130,8 @@ def _encode_clti(rs, imm):
     return _encode_i(12, imm, rs)
 
 def _encode_cltui(rs, imm):
-    """CLTUI: T = (rs <u sext(imm)). Unsigned comparison, sets T flag."""
-    assert -128 <= imm <= 127, f"imm out of range: {imm}"
+    """CLTUI: T = (rs <u zext(imm)). Unsigned comparison, sets T flag."""
+    assert -128 <= imm <= 255, f"imm out of range: {imm}"
     return _encode_i(13, imm, rs)
 
 def _encode_bz(rs, imm):

@@ -17,8 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 16,492 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,108 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 16,554 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,170 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -173,7 +173,7 @@ R6 is a normal GPR — callee-saved, and interrupt handlers that use it must sav
 
 ## Instruction Set
 
-All 61 instructions are fixed 16-bit (2 bytes). All immediates are sign-extended. "Page crossing" means the upper byte of the target address differs from PC+2.
+All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by default; ANDI, ORI, and CLTUI zero-extend instead. "Page crossing" means the upper byte of the target address differs from PC+2.
 
 ### Instruction Reference
 
@@ -185,9 +185,9 @@ All 61 instructions are fixed 16-bit (2 bytes). All immediates are sign-extended
 | ADDI | Add immediate | rd += sext(imm8) | 2 | [1](#notes) |
 | SUB | Subtract | rd = rs1 - rs2 | 2 | |
 | AND | And | rd = rs1 & rs2 | 2 | |
-| ANDI | And immediate | rd &= sext(imm8) | 2 | [2](#notes) |
+| ANDI | And immediate | rd &= zext(imm8) | 2 | [2](#notes) |
 | OR | Or | rd = rs1 \| rs2 | 2 | |
-| ORI | Or immediate | rd \|= sext(imm8) | 2 | |
+| ORI | Or immediate | rd \|= zext(imm8) | 2 | |
 | XOR | Xor | rd = rs1 ^ rs2 | 2 | |
 | XORI | Xor immediate | rd ^= sext(imm8) | 2 | [3](#notes) |
 
@@ -284,13 +284,13 @@ All 61 instructions are fixed 16-bit (2 bytes). All immediates are sign-extended
 
 1. **ADDI** — `ADDI R0, 0` (encoding `0x0000`) is the canonical NOP. Pairs with LUI for full 16-bit constant loading: `LUI rd, hi; ADDI rd, lo`.
 
-2. **ANDI** — Positive immediate masks low 7 bits and clears the high byte; negative immediate masks the low byte and preserves the high byte. `ANDI rd, 0xFF` is a no-op (sign-extends to 0xFFFF); use LBU to extract a low byte.
+2. **ANDI** — Immediate is zero-extended, so `ANDI rd, 0xFF` masks to the low byte (0x00FF). Any 8-bit mask works naturally.
 
 3. **XORI** — `XORI rd, -1` inverts all 16 bits (bitwise NOT).
 
 4. **CLTI** — Sets T=1 if less, T=0 otherwise. No register modified. Pattern: `CLTI rs, val; BT target`.
 
-5. **CLTUI** — The immediate is sign-extended then compared as unsigned.
+5. **CLTUI** — Immediate is zero-extended, giving a clean unsigned compare range of 0-255.
 
 6. **BZ** — Offset shifted left by 1, giving -256 to +254 bytes range. Tests the full 16-bit register value. Taken same-page: 3cy, page-crossing: 4cy.
 
@@ -342,7 +342,7 @@ All 61 instructions are fixed 16-bit (2 bytes). All immediates are sign-extended
 
 This section documents the binary encoding for tools and hardware implementors.
 
-All 61 instructions are fixed 16-bit. Three properties drive the encoding: the sign bit is always ir[15], so sign extension runs in parallel with decode; the primary register field ir[7:5] is shared across I/SI/SYS/R-type formats, enabling a speculative register read before the opcode is fully decoded; and `0x0000` encodes ADDI R0, 0 (NOP). All immediates are sign-extended, same as RISC-V.
+All 61 instructions are fixed 16-bit. Three properties drive the encoding: the sign bit is always ir[15], so sign extension runs in parallel with decode; the primary register field ir[7:5] is shared across I/SI/SYS/R-type formats, enabling a speculative register read before the opcode is fully decoded; and `0x0000` encodes ADDI R0, 0 (NOP). Immediates are sign-extended by default; ANDI, ORI, and CLTUI zero-extend instead.
 
 | Format | Layout (MSB→LSB) | Used |
 |---|---|---|
@@ -368,11 +368,11 @@ In R-type, rs2 is at [10:8] and rd at [13:11].
 00110 (6)   SB      mem[R0 + sext(imm8)] = rs[7:0]
 00111 (7)   JR      pc = rs + sext(imm8)
 01000 (8)   JALR    rs = pc+2; pc = rs + sext(imm8)
-01001 (9)   ANDI    rd = rd & sext(imm8)
-01010 (10)  ORI     rd = rd | sext(imm8)
+01001 (9)   ANDI    rd = rd & zext(imm8)
+01010 (10)  ORI     rd = rd | zext(imm8)
 01011 (11)  XORI    rd = rd ^ sext(imm8)
 01100 (12)  CLTI    T = (rs < sext(imm8))             (signed)
-01101 (13)  CLTUI   T = (rs <u sext(imm8))            (unsigned)
+01101 (13)  CLTUI   T = (rs <u zext(imm8))            (unsigned)
 01110 (14)  BZ      if rs == 0, pc += sext(imm8) << 1
 01111 (15)  BNZ     if rs != 0, pc += sext(imm8) << 1
 10000 (16)  CEQI    T = (rs == sext(imm8))

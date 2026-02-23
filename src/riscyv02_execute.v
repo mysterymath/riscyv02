@@ -104,7 +104,8 @@ module riscyv02_execute (
   wire [2:0] rs1_rd      = ir[7:5];     // I/SI/SYS register field
   wire [2:0] rs2         = ir[10:8];    // R-type second source
   wire [2:0] rd_r        = ir[13:11];   // R-type destination
-  wire [7:0] imm_sext_hi = {8{ir[15]}}; // HI-byte sign extension (all formats)
+  wire zext_imm = is_andi || is_ori || is_cltui;
+  wire [7:0] imm_sext_hi = {8{ir[15] & ~zext_imm}}; // HI-byte: sext default, zext for ANDI/ORI/CLTUI
   wire [7:0] branch_lo   = {ir[14:8], 1'b0}; // ×2 branch/jump LO byte
   wire [4:0] fetch_opcode = fetch_ir[4:0];
 

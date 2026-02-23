@@ -388,14 +388,12 @@ class RISCYV02Sim:
                 self._redirect = True
                 return []
 
-            if opcode == 9:             # ANDI (sign-extended imm)
-                imm16 = sext8(imm8_raw) & 0xFFFF
-                self.regs[rs_idx] = self.regs[rs_idx] & imm16
+            if opcode == 9:             # ANDI (zero-extended imm)
+                self.regs[rs_idx] = self.regs[rs_idx] & imm8_raw
                 return []
 
-            if opcode == 10:            # ORI (sign-extended imm)
-                imm16 = sext8(imm8_raw) & 0xFFFF
-                self.regs[rs_idx] = self.regs[rs_idx] | imm16
+            if opcode == 10:            # ORI (zero-extended imm)
+                self.regs[rs_idx] = self.regs[rs_idx] | imm8_raw
                 return []
 
             if opcode == 11:            # XORI (sign-extended imm)
@@ -407,8 +405,8 @@ class RISCYV02Sim:
                 self.t_bit = to_signed16(self.regs[rs_idx]) < sext8(imm8_raw)
                 return []
 
-            if opcode == 13:            # CLTUI (unsigned, sets T)
-                self.t_bit = self.regs[rs_idx] < (sext8(imm8_raw) & 0xFFFF)
+            if opcode == 13:            # CLTUI (unsigned, zero-extended imm)
+                self.t_bit = self.regs[rs_idx] < imm8_raw
                 return []
 
             if opcode == 14:            # BZ (×2 format: imm8 << 1)

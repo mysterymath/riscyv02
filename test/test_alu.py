@@ -96,7 +96,7 @@ async def test_addi_basic(dut):
 
 @cocotb.test()
 async def test_logic_imm(dut):
-    """ANDI, ORI, XORI with 8-bit sign-extended immediates."""
+    """ANDI, ORI, XORI with 8-bit immediates (ANDI/ORI zext, XORI sext)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -819,7 +819,7 @@ async def test_li_zero(dut):
 
 @cocotb.test()
 async def test_andi_all_ones(dut):
-    """ANDI R1, 0x0F: 0xABCD & 0x000F = 0x000D (sign-ext imm8)."""
+    """ANDI R1, 0x0F: 0xABCD & 0x000F = 0x000D (zext imm8)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -844,7 +844,7 @@ async def test_andi_all_ones(dut):
 
 @cocotb.test()
 async def test_ori_all_ones(dut):
-    """ORI R1, 0x0F: 0x1234 | 0x000F = 0x123F (sign-ext imm8)."""
+    """ORI R1, 0x0F: 0x1234 | 0x000F = 0x123F (zext imm8)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -869,7 +869,7 @@ async def test_ori_all_ones(dut):
 
 @cocotb.test()
 async def test_xori_all_ones(dut):
-    """XORI R1, 0x0F: 0x1234 ^ 0x000F = 0x123B (sign-ext imm8)."""
+    """XORI R1, 0x0F: 0x1234 ^ 0x000F = 0x123B (sext imm8)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -963,7 +963,7 @@ async def test_cltui_true(dut):
 
 @cocotb.test()
 async def test_cltui_false(dut):
-    """CLTUI: 0xFFFF <u sext(3)=3 -> T=0."""
+    """CLTUI: 0xFFFF <u zext(3)=3 -> T=0."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -1546,3 +1546,79 @@ async def test_rrt(dut):
     assert t2 == 0, f"RRT T: expected 0, got {t2}"
     assert v3 == 0x002A, f"RRT 0x0055 T=0: expected 0x002A, got {v3:#06x}"
     assert t3 == 1, f"RRT T: expected 1, got {t3}"
+
+
+@cocotb.test()
+async def test_andi_byte_mask(dut):
+    """ANDI R1, 0xFF: 0xABCD & zext(0xFF)=0x00FF = 0x00CD (byte mask)."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    a = Asm()
+    a.lw(1, 0x10)
+    a.andi(1, 0xFF)
+    a.sw(1, 0x40)
+    a.spin()
+    # Data setup
+    a.org(0x10)
+    a.db(0xCD, 0xAB)
+    # Clear output area
+    a.org(0x40)
+    a.dw(0x0000)
+
+    _load_program(dut, a.assemble())
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+    val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    assert val == 0x00CD, f"Expected 0x00CD, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_ori_high_bit(dut):
+    """ORI R1, 0x80: 0x1234 | zext(0x80)=0x0080 = 0x12B4 (no sign bleed)."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    a = Asm()
+    a.lw(1, 0x10)
+    a.ori(1, 0x80)
+    a.sw(1, 0x40)
+    a.spin()
+    # Data setup
+    a.org(0x10)
+    a.db(0x34, 0x12)
+    # Clear output area
+    a.org(0x40)
+    a.dw(0x0000)
+
+    _load_program(dut, a.assemble())
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+    val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    assert val == 0x12B4, f"Expected 0x12B4, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_cltui_large_imm(dut):
+    """CLTUI: 300 <u zext(200)=200 -> T=0 (clean unsigned compare)."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    a = Asm()
+    a.lw(1, 0x10)
+    a.cltui(1, 200)
+    a.read_t(2)
+    a.sw_s(2, 0x40)
+    a.spin()
+    # Data setup: 300 = 0x012C
+    a.org(0x10)
+    a.db(0x2C, 0x01)
+    # Clear output area
+    a.org(0x40)
+    a.dw(0x0000)
+
+    _load_program(dut, a.assemble())
+    await _reset(dut)
+    await ClockCycles(dut.clk, 300)
+    val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    assert val == 0x0000, f"Expected T=0, got {val:#06x}"
