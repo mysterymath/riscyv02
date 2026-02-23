@@ -181,41 +181,41 @@ All 61 instructions are fixed 16-bit (2 bytes). All immediates are sign-extended
 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
-| ADDI | Add immediate | rd += sext(imm8) | 2 | [1](#notes) |
 | ADD | Add | rd = rs1 + rs2 | 2 | |
+| ADDI | Add immediate | rd += sext(imm8) | 2 | [1](#notes) |
 | SUB | Subtract | rd = rs1 - rs2 | 2 | |
-| ANDI | And immediate | rd &= sext(imm8) | 2 | [2](#notes) |
-| ORI | Or immediate | rd \|= sext(imm8) | 2 | |
-| XORI | Xor immediate | rd ^= sext(imm8) | 2 | [3](#notes) |
 | AND | And | rd = rs1 & rs2 | 2 | |
+| ANDI | And immediate | rd &= sext(imm8) | 2 | [2](#notes) |
 | OR | Or | rd = rs1 \| rs2 | 2 | |
+| ORI | Or immediate | rd \|= sext(imm8) | 2 | |
 | XOR | Xor | rd = rs1 ^ rs2 | 2 | |
+| XORI | Xor immediate | rd ^= sext(imm8) | 2 | [3](#notes) |
 
 **Shifts**
 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
-| SLLI | Shift left immediate | rd <<= shamt | 2 | [28](#notes) |
-| SRLI | Shift right logical imm | rd >>= shamt (logical) | 2 | [28](#notes) |
-| SRAI | Shift right arith imm | rd >>= shamt (arithmetic) | 2 | [28](#notes) |
 | SLL | Shift left logical | rd = rs1 << rs2[3:0] | 2 | |
-| SRL | Shift right logical | rd = rs1 >> rs2[3:0] (logical) | 2 | |
-| SRA | Shift right arithmetic | rd = rs1 >> rs2[3:0] (arithmetic) | 2 | |
+| SLLI | Shift left immediate | rd <<= shamt | 2 | [28](#notes) |
 | SLLT | Shift left, link T | T = rd[15]; rd = {rd[14:0], 0} | 2 | [19](#notes) |
-| SRLT | Shift right, link T | T = rd[0]; rd = {0, rd[15:1]} | 2 | [19](#notes) |
 | RLT | Rotate left through T | T = rd[15]; rd = {rd[14:0], old_T} | 2 | [20](#notes) |
+| SRL | Shift right logical | rd = rs1 >> rs2[3:0] (logical) | 2 | |
+| SRLI | Shift right logical imm | rd >>= shamt (logical) | 2 | [28](#notes) |
+| SRLT | Shift right, link T | T = rd[0]; rd = {0, rd[15:1]} | 2 | [19](#notes) |
 | RRT | Rotate right through T | T = rd[0]; rd = {old_T, rd[15:1]} | 2 | [20](#notes) |
+| SRA | Shift right arithmetic | rd = rs1 >> rs2[3:0] (arithmetic) | 2 | |
+| SRAI | Shift right arith imm | rd >>= shamt (arithmetic) | 2 | [28](#notes) |
 
 **Comparisons**
 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
-| CLTI | Compare < immediate | T = (rs < sext(imm8)) signed | 2 | [4](#notes) |
-| CLTUI | Compare <u immediate | T = (rs <u sext(imm8)) unsigned | 2 | [5](#notes) |
-| CEQI | Compare == immediate | T = (rs == sext(imm8)) | 2 | |
 | CLT | Compare < | T = (rs1 < rs2) signed | 2 | [21](#notes) |
+| CLTI | Compare < immediate | T = (rs < sext(imm8)) signed | 2 | [4](#notes) |
 | CLTU | Compare <u | T = (rs1 <u rs2) unsigned | 2 | [21](#notes) |
+| CLTUI | Compare <u immediate | T = (rs <u sext(imm8)) unsigned | 2 | [5](#notes) |
 | CEQ | Compare == | T = (rs1 == rs2) | 2 | [21](#notes) |
+| CEQI | Compare == immediate | T = (rs == sext(imm8)) | 2 | |
 
 **Branches**
 
@@ -234,13 +234,13 @@ All 61 instructions are fixed 16-bit (2 bytes). All immediates are sign-extended
 | LUI | Load upper immediate | rd = imm8 << 8 | 2 | [13](#notes) |
 | AUIPC | Add upper imm to PC | rd = (PC+2) + (imm8 << 8) | 2 | [14](#notes) |
 | LW | Load word | rd = MEM16[R0 + sext(imm8)] | 4 | [9](#notes) |
-| LB | Load byte signed | rd = sext(MEM[R0 + sext(imm8)]) | 3 | [9](#notes) |
-| LBU | Load byte unsigned | rd = zext(MEM[R0 + sext(imm8)]) | 3 | [9](#notes) |
 | LWS | Load word (SP) | rd = MEM16[R7 + sext(imm8)] | 4 | [11](#notes) |
-| LBS | Load byte signed (SP) | rd = sext(MEM[R7 + sext(imm8)]) | 3 | [11](#notes) |
-| LBUS | Load byte unsigned (SP) | rd = zext(MEM[R7 + sext(imm8)]) | 3 | [11](#notes) |
 | LWR | Load word (register) | rd = MEM16[rs1] | 4 | [12](#notes) |
+| LB | Load byte signed | rd = sext(MEM[R0 + sext(imm8)]) | 3 | [9](#notes) |
+| LBS | Load byte signed (SP) | rd = sext(MEM[R7 + sext(imm8)]) | 3 | [11](#notes) |
 | LBR | Load byte signed (reg) | rd = sext(MEM[rs1]) | 3 | [12](#notes) |
+| LBU | Load byte unsigned | rd = zext(MEM[R0 + sext(imm8)]) | 3 | [9](#notes) |
+| LBUS | Load byte unsigned (SP) | rd = zext(MEM[R7 + sext(imm8)]) | 3 | [11](#notes) |
 | LBUR | Load byte unsigned (reg) | rd = zext(MEM[rs1]) | 3 | [12](#notes) |
 
 **Stores**
@@ -248,33 +248,33 @@ All 61 instructions are fixed 16-bit (2 bytes). All immediates are sign-extended
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
 | SW | Store word | MEM16[R0 + sext(imm8)] = rs | 4 | [10](#notes) |
-| SB | Store byte | MEM[R0 + sext(imm8)] = rs[7:0] | 3 | [10](#notes) |
 | SWS | Store word (SP) | MEM16[R7 + sext(imm8)] = rs | 4 | [11](#notes) |
-| SBS | Store byte (SP) | MEM[R7 + sext(imm8)] = rs[7:0] | 3 | [11](#notes) |
 | SWR | Store word (register) | MEM16[rs1] = rs2 | 4 | [12](#notes) |
+| SB | Store byte | MEM[R0 + sext(imm8)] = rs[7:0] | 3 | [10](#notes) |
+| SBS | Store byte (SP) | MEM[R7 + sext(imm8)] = rs[7:0] | 3 | [11](#notes) |
 | SBR | Store byte (register) | MEM[rs1] = rs2[7:0] | 3 | [12](#notes) |
 
 **Jumps & Calls**
 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
-| JR | Jump register | PC = rs + sext(imm8) | 3-4 | [15](#notes) |
-| JALR | Jump and link register | rs = PC+2; PC = rs + sext(imm8) | 4 | [16](#notes) |
 | J | Jump | PC += sext(imm10) << 1 | 3-4 | [17](#notes) |
+| JR | Jump register | PC = rs + sext(imm8) | 3-4 | [15](#notes) |
 | JAL | Jump and link | R6 = PC+2; PC += sext(imm10) << 1 | 4 | [18](#notes) |
+| JALR | Jump and link register | rs = PC+2; PC = rs + sext(imm8) | 4 | [16](#notes) |
 
 **System**
 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
-| SEI | Set interrupt disable | I = 1 | 2 | |
 | CLI | Clear interrupt disable | I = 0 | 2 | [22](#notes) |
+| SEI | Set interrupt disable | I = 1 | 2 | |
 | SRR | Status register read | rd = {12'b0, ESR, I, T} | 2 | [24](#notes) |
 | SRW | Status register write | ESR = rs[3:2]; {I, T} = rs[1:0] | 2 | [24](#notes) |
 | EPCR | Read EPC | rd = EPC | 2 | |
 | EPCW | Write EPC | EPC = rs | 2 | |
-| RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 2 | [23](#notes) |
 | INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 2 | [25](#notes) |
+| RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 2 | [23](#notes) |
 | WAI | Wait for interrupt | halt until interrupt | 2 / halt | [26](#notes) |
 | STP | Stop | halt permanently | 1 | [27](#notes) |
 
