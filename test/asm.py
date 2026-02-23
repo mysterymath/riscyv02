@@ -51,7 +51,7 @@ def _encode_r(opcode, funct2, rd, rs2, rs1):
          | ((rs1 & 0x7) << 5) | (opcode & 0x1F)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
-# SI-type: [dc:1 @ 15][funct3:3 @ 14:12][shamt:4 @ 11:8][rs/rd:3 @ 7:5][opcode:5 @ 4:0]
+# SI-type: [0:1 @ 15][funct3:3 @ 14:12][shamt:4 @ 11:8][rs/rd:3 @ 7:5][opcode:5 @ 4:0]
 def _encode_si(funct3, shamt, reg):
     insn = ((funct3 & 0x7) << 12) | ((shamt & 0xF) << 8) | ((reg & 0x7) << 5) | 30
     return (insn & 0xFF, (insn >> 8) & 0xFF)

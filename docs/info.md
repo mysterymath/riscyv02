@@ -335,7 +335,7 @@ All 61 instructions are fixed 16-bit. Three properties drive the encoding: the s
 | B | `[imm8:8\|0:2\|funct1:1\|opcode:5]` | 2 |
 | J | `[s:1\|imm[6:0]:7\|imm[8:7]:2\|funct1:1\|opcode:5]` | 2 |
 | R | `[funct2:2\|rd:3\|rs2:3\|rs1:3\|opcode:5]` | 16 |
-| SI | `[dc:1\|funct3:3\|shamt:4\|rs/rd:3\|opcode:5]` | 7 |
+| SI | `[0:1\|funct3:3\|shamt:4\|rs/rd:3\|opcode:5]` | 7 |
 | SYS | `[funct4:4\|0:4\|reg:3\|opcode:5]` | 10 |
 
 In R-type, rs2 is at [10:8] and rd at [13:11].
@@ -413,30 +413,29 @@ The 2-stage pipeline (Fetch and Execute) overlaps fetch of the next instruction 
 
 ### Cycle Counts (Throughput)
 
-The [instruction reference table](#instruction-reference) above gives cycle counts; this table breaks down how those cycles are spent in the pipeline. Throughput measured from one instruction boundary (SYNC) to the next:
+Throughput is measured from one instruction boundary (SYNC) to the next. Three factors determine the count:
 
-| Instruction | Cycles | Notes |
+1. **Fetch floor (2 cycles):** fetching the next instruction always takes 2 cycles (lo byte, hi byte). Execute overlaps with fetch, so any instruction with 2 or fewer execute cycles is fetch-limited at 2.
+2. **Bus contention (+1 per byte transferred):** memory loads/stores take the bus from fetch to transfer data. The 2 address-compute cycles (E_EXEC_LO, E_EXEC_HI) are hidden behind the fetch, but each bus transfer cycle adds 1 to the total.
+3. **Redirect penalty (execute exposed):** taken branches and jumps flush the speculative fetch, so execute cycles are no longer hidden. Total = execute cycles + 2 fresh fetch cycles.
+
+| Instruction | Cycles | Why |
 |---|---|---|
-| NOP/AUIPC/LUI/LI/ADD/SUB/AND/OR/XOR/SLL/SRL/SRA/ADDI/ANDI/ORI/XORI/CLTI/CLTUI/CEQI/CLT/CLTU/CEQ/SLLI/SRLI/SRAI/SLLT/SRLT/RLT/RRT | 2 | 1 execute + 1 overlapped fetch |
-| SEI/CLI/SRR/SRW | 2 | 1 execute + 1 overlapped fetch |
-| BZ/BNZ/BT/BF (not taken) | 2 | 1 execute + 1 overlapped fetch |
-| BZ/BNZ/BT/BF (taken, same page) | 3 | 1 execute + 2 fetch after redirect |
-| BZ/BNZ/BT/BF (taken, page crossing) | 4 | 2 execute + 2 fetch after redirect |
-| LB/LBU/LBS/LBUS/LBR/LBUR | 3 | 2 address + 1 byte read (sign/zero-extend at E_MEM_LO) |
-| SB/SBS/SBR | 3 | 2 address + 1 byte written |
-| LW/SW/LWS/SWS/LWR/SWR | 4 | 2 address + 2 bytes transferred |
-| JR (same page) | 3 | 1 execute + 2 fetch after redirect |
-| JR (page crossing) / JALR | 4 | 2 execute + 2 fetch after redirect |
-| J (same page) | 3 | 1 execute + 2 fetch after redirect |
-| J (page crossing) / JAL | 4 | 2 execute + 2 fetch after redirect |
-| RETI | 2 | Instantaneous dispatch + 2 fetch (overlapped) |
-| INT (BRK) | 2 | Instantaneous dispatch + 2 fetch (overlapped) |
-| WAI (wake) | 2 | 1 execute + 1 overlapped fetch |
-| WAI (halt) | -- | Halted until interrupt arrives |
-| STP | 1 | 1 execute then halt |
-| EPCR/EPCW | 2 | 1 execute + 1 overlapped fetch |
-| IRQ entry | 2 | Instantaneous dispatch + 2 fetch |
-| NMI entry | 2 | Instantaneous dispatch + 2 fetch |
+| ALU / shifts / compares | 2 | Fetch-limited (execute hidden) |
+| SEI / CLI / SRR / SRW / EPCR / EPCW | 2 | Fetch-limited (execute hidden) |
+| Branch not taken | 2 | Fetch-limited (execute hidden) |
+| Branch taken, same page | 3 | Redirect: 1 execute + 2 fetch |
+| Branch taken, page crossing | 4 | Redirect: 2 execute + 2 fetch |
+| Byte load / store | 3 | Fetch floor + 1 bus transfer |
+| Word load / store | 4 | Fetch floor + 2 bus transfers |
+| J same page | 3 | Redirect: 1 execute + 2 fetch |
+| J page crossing / JAL | 4 | Redirect: 2 execute + 2 fetch |
+| JR same page | 3 | Redirect: 1 execute + 2 fetch |
+| JR page crossing / JALR | 4 | Redirect: 2 execute + 2 fetch |
+| RETI / INT / IRQ / NMI | 2 | Redirect at dispatch: 0 execute + 2 fetch |
+| WAI (wake) | 2 | Fetch-limited (execute hidden) |
+| WAI (halt) | -- | Halted until interrupt |
+| STP | 1 | Enters halt (no fetch) |
 
 ### Self-Modifying Code
 
