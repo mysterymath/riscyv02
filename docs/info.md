@@ -1839,179 +1839,47 @@ Computed by `transistor_count.py` from each build's `stat.json`.
 
 Transistor counts are exact: standard cell counts from the PDK's CDL SPICE netlist (one M-line = one MOSFET), SRAM counts from the circuit design above using textbook CMOS. The 8T cell count is definitional. No SRAM macro exists at this size for IHP sg13g2 — the smallest available (64×32, 2048 bits) is 16× larger than needed. This is a paper design representing what a custom chip would use.
 
-## SRAM PCB Interface Design
+## Demo Board Firmware
 
-TT IHP has no usable SRAM IP at this scale, so program/data memory needs an external SRAM chip. This section describes a complete PCB interface connecting the RISCY-V02 CPU to an IS61C256AL-10 32Kx8 asynchronous SRAM using the muxed bus protocol described in [Bus Protocol](#bus-protocol) above (address on clk LOW, data on clk HIGH).
+The TT demoboard's RP2350 (Raspberry Pi Pico 2) can emulate 64 KiB of SRAM and a simple UART peripheral entirely in software, removing the need for external memory hardware. The firmware lives in `firmware/` and uses both RP2350 cores: core 1 runs a tight bus-servicing loop that responds to the CPU's muxed bus protocol, while core 0 bridges a memory-mapped UART peripheral to the demoboard's USB serial port.
 
-### Components
+### Memory Map
 
-| Ref | Part | Qty | Purpose |
-|-----|------|-----|---------|
-| U1 | 74HCT573 | 1 | Address latch, low byte (AB[7:0]) |
-| U2 | 74HCT573 | 1 | Address latch, high byte (AB[15:8]) |
-| U3 | 74LVC245 | 1 | Data bus transceiver (level shift 5V<->3.3V) |
-| U4 | 74HCT00 | 1 | Quad NAND — all glue logic |
-| U5 | IS61C256AL-10TL | 1 | 32Kx8 SRAM |
-| | 100nF caps | 5 | Decoupling, one per IC |
+| Address | R/W | Function |
+|---------|-----|----------|
+| `0x0000`–`0xFEFF` | R/W | 64 KiB SRAM (byte-addressable) |
+| `0xFF00` | W | UART TX — written byte is sent over USB serial |
+| `0xFF01` | R | UART RX — reads the next byte received from USB serial |
+| `0xFF02` | R | UART status — bit 0: TX ready, bit 1: RX data available |
 
-74HCT (5V, VIH=2.0V) accepts 3.3V TT outputs as valid HIGH. 74LVC245 (3.3V, 5V-tolerant) bridges the voltage domains on the data bus.
+The SRAM region covers the full 64 KiB address space except for the UART window at `0xFF00`–`0xFF02`. Reads from `0xFF00` and writes to `0xFF01`/`0xFF02` are don't-care (the firmware ignores them).
 
-### Glue Logic (U4: 74HCT00, quad NAND)
+### Bus Servicing (Core 1)
 
-All control signals derived from `clk` and `uo_out[0]` (RWB during data phase):
+Core 1 watches the project clock and services each bus cycle according to the [Bus Protocol](#bus-protocol) described above. During the address phase (clk LOW), it reads AB[7:0] from `uo_out` and AB[15:8] from `uio`. During the data phase (clk HIGH), it checks RWB (`uo_out[0]`): on a read, it drives `uio` with the byte from the SRAM array (or the UART register); on a write, it captures `uio` into the SRAM array (or the UART TX register).
 
-```
-Gate A:  !clk        = NAND(clk, clk)           → address latch LE
-Gate B:  OE (SRAM)   = NAND(clk, uo_out[0])     → SRAM OE
-Gate C:  !uo_out[0]  = NAND(uo_out[0], uo_out[0])  (inverter)
-Gate D:  WE (SRAM)   = NAND(clk, !uo_out[0])    → SRAM WE
-```
+The bus loop must complete within one half-period. At 1 MHz this is comfortable; higher clock speeds require tighter code (the RP2350 runs at 150 MHz by default, giving ~75 cycles per half-period at 1 MHz).
 
-| Phase | clk | uo_out[0] | OE | WE | SRAM state |
-|-------|-----|-----------|----|----|------------|
-| Addr  | 0   | AB[0]     | 1  | 1  | High-Z (NAND(0,x)=1 always) |
-| Read  | 1   | RWB=1     | 0  | 1  | Read (drives I/O) |
-| Write | 1   | RWB=0     | 1  | 0  | Write (accepts I/O) |
+> **Status:** The bus-servicing loop is currently a placeholder (`tight_loop_contents`). The protocol and memory map are defined but the GPIO bit-banging implementation is not yet written.
 
-### Connections
+### UART Bridge (Core 0)
 
-#### Address Latches (U1, U2: 74HCT573)
+Core 0 runs the standard Pico SDK USB serial stack and bridges it to the memory-mapped UART peripheral. When the CPU writes to `UART_TX_DATA` (`0xFF00`), core 1 hands the byte to core 0, which sends it over USB. When a byte arrives over USB, core 0 buffers it so the CPU can read it from `UART_RX_DATA` (`0xFF01`). The status register at `0xFF02` lets the CPU poll for TX readiness and RX data availability without side effects.
 
-74HCT573: transparent when LE=HIGH, latches on LE falling edge.
+### Building and Flashing
+
+Prerequisites: CMake, Ninja, and the [Pico SDK](https://github.com/raspberrypi/pico-sdk) (v2.2.0). If `PICO_SDK_PATH` is not set, the build system fetches the SDK automatically.
 
 ```
-U1 (low byte):                    U2 (high byte):
-  D[7:0]  ← uo_out[7:0]            D[7:0]  ← uio[7:0]
-  Q[7:0]  → SRAM A0-A7              Q[6:0]  → SRAM A8-A14
-  LE      ← !clk (Gate A)           Q[7]      (unused)
-  OE      ← GND (always enabled)    LE      ← !clk (Gate A)
-  VCC     ← 5V                      OE      ← GND (always enabled)
-                                     VCC     ← 5V
+cd firmware
+cmake -B build -G Ninja
+cmake --build build
 ```
 
-LE = !clk: transparent during clk LOW (address phase), latches at posedge
-(start of data phase). Address is held stable on SRAM throughout data phase.
+Flash `build/riscyv02_firmware.uf2` by holding BOOTSEL while plugging in the Pico 2, then dragging the file to the USB mass-storage device that appears.
 
-#### Data Bus Transceiver (U3: 74LVC245)
+### Startup Sequence
 
-```
-U3 (74LVC245, powered at 3.3V):
-  A[7:0]  ↔ SRAM I/O[7:0]       (5V side, 5V-tolerant inputs)
-  B[7:0]  ↔ uio[7:0]            (3.3V side, directly to TT chip)
-  DIR     ← SRAM OE (Gate B)    (see below)
-  OE      ← !clk (Gate A)       (enable only during data phase)
-  VCC     ← 3.3V
-```
+The firmware initializes GPIO, selects the RISCY-V02 project on the TT mux, sets `ui_in` to `0x07` (IRQB=1, NMIB=1, RDY=1 — all inactive), resets the project, launches the bus-servicing loop on core 1, and starts the project clock at 1 MHz via PWM. Once running, it prints a banner to USB serial and enters the UART bridge loop.
 
-DIR = Gate B output: reads → A-to-B (SRAM drives), writes → B-to-A (TT drives). The active-low OE disables the buffer during address phase, preventing contention.
-
-#### SRAM (U5: IS61C256AL-10TL)
-
-```
-  A0-A7   ← U1 Q[7:0]    (latched low address byte)
-  A8-A14  ← U2 Q[6:0]    (latched high address byte)
-  I/O0-7  ↔ U3 A[7:0]    (data bus via level-shifting transceiver)
-  CE      ← GND           (always selected)
-  OE      ← Gate B        (NAND(clk, uo_out[0]))
-  WE      ← Gate D        (NAND(clk, !uo_out[0]))
-  VCC     ← 5V
-  GND     ← GND
-```
-
-CE tied LOW: tAA starts as soon as the address latch updates, maximizing read margin.
-
-### Timing Analysis
-
-#### Read Cycle
-
-```
-    negedge           posedge           negedge
-       │  addr phase    │  data phase     │
-  clk  ┘────────────────┐────────────────┘
-       │                │                │
-  addr ──╱XXXX valid XXXX╲── latched ────── (held by U1/U2)
-       │    │            │                │
-       │    ├─ tAA(10ns) ─→ data valid    │
-       │                │                │
-  OE   ────── HIGH ──────╲── LOW ─────────╱
-       │                │ tDOE(6ns)→valid │
-       │                │                │
-  SRAM ──── High-Z ─────╱── driving ─────╲
-  I/O  │                │      ↓         │
-       │                │  CPU samples   │
-```
-
-tAA (10ns) starts when the address latches update during the address phase. If the half-period is long enough, tAA is satisfied before data phase starts. The secondary constraint tDOE (6ns from OE LOW) determines earliest data-valid within the data phase.
-
-#### Write Cycle
-
-```
-    negedge           posedge           negedge
-       │  addr phase    │  data phase     │
-  clk  ┘────────────────┐────────────────┘
-       │                │                │
-  addr ──╱XXXX valid XXXX╲── latched ────── (held)
-       │                │ ├── tAW(9ns) ──→│ WE↑
-       │                │                │
-  WE   ────── HIGH ──────╲── LOW ─────────╱
-       │                │←── tPWE(8ns) ──→│
-       │                │                │
-  DIN  ────── X ─────────╱── valid ──────╲
-       │                │ ├── tSD(7ns) ──→│ WE↑
-       │                │            tHD=0│
-```
-
-Write terminates at negedge clk (WE rises). Key constraints: tAW=9ns (address setup, satisfied by latch), tSD=7ns (data setup), tPWE=8ns (WE pulse = half-period), tHD/tHA=0ns (no hold).
-
-#### Practical Clock Speed
-
-The TT IHP mux/demux adds ~10ns to each of the output and input paths (sky130 measured ~20ns round-trip; IHP not yet available). Read is the bottleneck: tAA + TT_output + TT_input ≈ 30ns, so full period > 60ns (~16 MHz). **Recommended starting clock: 4 MHz** (~10× margin). Tune up empirically.
-
-### Voltage Level Summary
-
-| Signal | Source | Voltage | Destination | Threshold | OK? |
-|--------|--------|---------|-------------|-----------|-----|
-| Address (uo_out, uio) | TT (3.3V) | 3.3V | 74HCT573 (5V) | VIH=2.0V | Yes |
-| Latched addr | 74HCT573 (5V) | 5V | SRAM (5V) | VIH=2.2V | Yes |
-| Write data (uio) | TT (3.3V) | 3.3V | 74LVC245 B-side | native | Yes |
-| Write data to SRAM | 74LVC245 A-side (3.3V) | 3.3V | SRAM (5V) | VIH=2.2V | Yes |
-| Read data from SRAM | SRAM (5V) | 5V | 74LVC245 A-side | 5V-tolerant | Yes |
-| Read data to TT | 74LVC245 B-side (3.3V) | 3.3V | TT (3.3V) | native | Yes |
-| clk, uo_out[0] | TT (3.3V) | 3.3V | 74HCT00 (5V) | VIH=2.0V | Yes |
-| OE, WE | 74HCT00 (5V) | 5V | SRAM (5V) | VIH=2.2V | Yes |
-| !clk (LE) | 74HCT00 (5V) | 5V | 74HCT573 (5V) | VIH=3.15V | Yes |
-| !clk (buffer OE) | 74HCT00 (5V) | 5V | 74LVC245 OE | 5V-tolerant | Yes |
-
-No signal path puts 5V into a 3.3V-only input. The 74LVC245 bridges the voltage domains; all other 3.3V→5V paths work because 3.3V exceeds the HCT threshold of 2.0V.
-
-### Schematic (text)
-
-```
-                     TT IHP Board                         PCB
-                 ┌─────────────────┐
-                 │   RISCY-V02     │
-                 │                 │         ┌──────────┐
-  uo_out[7:0] ──┤──────────────────┼────D───→│ U1       │    ┌──────────────┐
-                 │                 │    !clk─→│ 74HCT573 │──Q→│ A0-A7        │
-                 │                 │         └──────────┘    │              │
-   uio[7:0] ──┬─┤──────────────────┼────D───→│ U2       │──Q→│ A8-A14       │
-              │ │                 │    !clk─→│ 74HCT573 │    │              │
-              │ │                 │         └──────────┘    │  IS61C256AL  │
-              │ │                 │                          │  (U5)        │
-              │ │                 │   ┌──────────┐          │              │
-              └─┤──────────────────┼─B─┤ U3       ├─A──────→│ I/O0-I/O7    │
-                │                 │   │ 74LVC245 │          │              │
-                │                 │   └──────────┘    GND──→│ CE           │
-                │                 │         ┌─────┐         │              │
-         clk ──┤──────────────────┼────┐    │ U4  │    ┌───→│ OE           │
-                │                 │    ├───→│NAND │────┘    │              │
-  uo_out[0] ──┤──────────────────┼──┬─┘   │(x4) │────────→│ WE           │
-                │                 │  │      │HCT00│         │              │
-                 └─────────────────┘  │      └──┬──┘         └──────────────┘
-                                      │         │
-                                      └─→!clk───→ U1.LE, U2.LE, U3.OE
-```
-
-### SRAM Hold Time Requirements
-
-All hold times are zero (tHA=0, tHD=0). No hold violations are possible; all timing constraints are setup-like, solvable by slowing the clock.
+To load a program, write the binary image into the `mem[]` array before releasing reset — either by compiling it into the firmware as a C array, or by adding a serial upload protocol to the core 0 loop.
