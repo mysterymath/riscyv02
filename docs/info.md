@@ -332,11 +332,11 @@ All 61 instructions are fixed 16-bit. Three properties drive the encoding: the s
 | Format | Layout (MSB→LSB) | Used |
 |---|---|---|
 | I | `[imm8:8\|rs/rd:3\|opcode:5]` | 24 |
-| B | `[imm8:8\|funct3:3\|opcode:5]` | 2 |
-| J | `[s:1\|imm[6:0]:7\|imm[8:7]:2\|fn1:1\|opcode:5]` | 2 |
-| R | `[fn2:2\|rd:3\|rs2:3\|rs1:3\|opcode:5]` | 16 |
+| B | `[imm8:8\|0:2\|funct1:1\|opcode:5]` | 2 |
+| J | `[s:1\|imm[6:0]:7\|imm[8:7]:2\|funct1:1\|opcode:5]` | 2 |
+| R | `[funct2:2\|rd:3\|rs2:3\|rs1:3\|opcode:5]` | 16 |
 | SI | `[dc:1\|funct3:3\|shamt:4\|rs/rd:3\|opcode:5]` | 7 |
-| SYS | `[sub:8\|reg:3\|opcode:5]` | 10 |
+| SYS | `[funct8:8\|reg:3\|opcode:5]` | 10 |
 
 In R-type, rs2 is at [10:8] and rd at [13:11].
 
@@ -369,15 +369,15 @@ In R-type, rs2 is at [10:8] and rd at [13:11].
 10110 (22)  LUI
 10111 (23)  AUIPC
 
---- B-type (opcode 24, funct3 at [7:5]) ---
+--- B-type (opcode 24, funct1 at [5]) ---
 11000.000   BT
 11000.001   BF
 
---- J-type (opcode 25, fn1 at [5]) ---
+--- J-type (opcode 25, funct1 at [5]) ---
 11001.0     J
 11001.1     JAL
 
---- R-type (opcodes 26-29, fn2 at [15:14]) ---
+--- R-type (opcodes 26-29, funct2 at [15:14]) ---
 Opcode 26 (R-ALU1): 00=ADD, 01=SUB, 10=AND, 11=OR
 Opcode 27 (R-ALU2): 00=XOR, 01=SLL, 10=SRL, 11=SRA
 Opcode 28 (R-MEM):  00=LWR, 01=LBR, 10=LBUR, 11=SWR
@@ -392,17 +392,17 @@ funct3=101  RLT
 funct3=110  SRLT
 funct3=111  RRT
 
---- SYS-type (opcode 31, sub8 at [15:8]) ---
-sub8=0x01   SEI
-sub8=0x02   CLI
-sub8=0x03   RETI
-sub8=0x05   WAI
-sub8=0x07   STP
-sub8=0x08   SRW     (reg at [7:5])
-sub8=0x10   EPCR    (reg at [7:5])
-sub8=0x18   EPCW    (reg at [7:5])
-sub8=0x28   SRR     (reg at [7:5])
-sub8=0xC0+  INT     (vec 0-2 at [7:6]; vec 3 = NOP)
+--- SYS-type (opcode 31, funct8 at [15:8]) ---
+funct8=0x01   SEI
+funct8=0x02   CLI
+funct8=0x03   RETI
+funct8=0x05   WAI
+funct8=0x07   STP
+funct8=0x08   SRW     (reg at [7:5])
+funct8=0x10   EPCR    (reg at [7:5])
+funct8=0x18   EPCW    (reg at [7:5])
+funct8=0x28   SRR     (reg at [7:5])
+funct8=0xC0+  INT     (vec 0-2 at [7:6]; vec 3 = NOP)
 
 All other encodings execute as NOP (2-cycle no-op).
 ```

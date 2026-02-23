@@ -252,7 +252,7 @@ class RISCYV02Sim:
             )
             return
 
-        # RETI (opcode 31, sub8=0x03): instantaneous redirect
+        # RETI (opcode 31, funct8=0x03): instantaneous redirect
         if opcode == 31 and ((ir >> 8) & 0xFF) == 0x03:
             self.i_bit = bool(self.esr & 2)
             self.t_bit = bool(self.esr & 1)
@@ -477,16 +477,18 @@ class RISCYV02Sim:
         # B-type (opcode 24): BT, BF
         # =================================================================
         if opcode == 24:
-            funct3 = (ir >> 5) & 7
+            funct1 = (ir >> 5) & 1
             imm8_raw = (ir >> 8) & 0xFF
-            if funct3 == 0:             # BT
+            if (ir >> 6) & 3:           # [7:6] must be 0; else NOP
+                return []
+            if funct1 == 0:             # BT
                 if self.t_bit:
                     target = (next_pc + sext8(imm8_raw) * 2) & 0xFFFF
                     self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
                     self.pc = target
                     self._redirect = True
                 return []
-            if funct3 == 1:             # BF
+            if funct1 == 1:             # BF
                 if not self.t_bit:
                     target = (next_pc + sext8(imm8_raw) * 2) & 0xFFFF
                     self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
@@ -520,7 +522,7 @@ class RISCYV02Sim:
 
         # =================================================================
         # R-type (opcodes 26-29)
-        # [fn2:2 @ 15:14][rd:3 @ 13:11][rs2:3 @ 10:8][rs1:3 @ 7:5]
+        # [funct2:2 @ 15:14][rd:3 @ 13:11][rs2:3 @ 10:8][rs1:3 @ 7:5]
         # =================================================================
         if 26 <= opcode <= 29:
             funct2 = (ir >> 14) & 3
@@ -623,50 +625,50 @@ class RISCYV02Sim:
 
         # =================================================================
         # System (opcode 31)
-        # [sub8:8 @ 15:8][reg:3 @ 7:5]
+        # [funct8:8 @ 15:8][reg:3 @ 7:5]
         # =================================================================
         if opcode == 31:
-            sub8 = (ir >> 8) & 0xFF
+            funct8 = (ir >> 8) & 0xFF
             reg_idx = (ir >> 5) & 7
 
-            if sub8 == 0x01:            # SEI
+            if funct8 == 0x01:            # SEI
                 self.i_bit = True
                 return []
 
-            if sub8 == 0x02:            # CLI
+            if funct8 == 0x02:            # CLI
                 self.i_bit = False
                 return []
 
-            # RETI (sub8==0x03) handled at dispatch — never reaches _execute
+            # RETI (funct8==0x03) handled at dispatch — never reaches _execute
 
-            if sub8 == 0x05:            # WAI
+            if funct8 == 0x05:            # WAI
                 self.waiting = True
                 return []
 
-            if sub8 == 0x07:            # STP
+            if funct8 == 0x07:            # STP
                 self.stopped = True
                 return []
 
-            if sub8 == 0x10:            # EPCR rd
+            if funct8 == 0x10:            # EPCR rd
                 self.regs[reg_idx] = self.epc
                 return []
 
-            if sub8 == 0x18:            # EPCW rs
+            if funct8 == 0x18:            # EPCW rs
                 self.epc = self.regs[reg_idx]
                 return []
 
-            if sub8 == 0x28:            # SRR rd
+            if funct8 == 0x28:            # SRR rd
                 self.regs[reg_idx] = (self.esr << 2) | (int(self.i_bit) << 1) | int(self.t_bit)
                 return []
 
-            if sub8 == 0x08:            # SRW rs
+            if funct8 == 0x08:            # SRW rs
                 val = self.regs[reg_idx]
                 self.i_bit = bool(val & 2)
                 self.t_bit = bool(val & 1)
                 self.esr = (val >> 2) & 3
                 return []
 
-            # INT (sub8[7:6]=11) handled at dispatch — never reaches _execute
+            # INT (funct8[7:6]=11) handled at dispatch — never reaches _execute
 
         # Unknown instruction — treat as 2-cycle NOP
         return []

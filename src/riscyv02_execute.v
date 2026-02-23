@@ -36,11 +36,11 @@
 //
 //   Format  Layout (MSB to LSB)                              Instructions
 //   I       [imm8:8|rs/rd:3|opcode:5]                        24 (incl LUI,AUIPC)
-//   B       [imm8:8|funct3:3|opcode:5]                       BT, BF
-//   J       [s:1|imm[6:0]:7|imm[8:7]:2|fn1:1|opcode:5]      J, JAL
-//   R       [fn2:2|rd:3|rs2:3|rs1:3|opcode:5]                R,R,R(8) + R,R(8)
+//   B       [imm8:8|0:2|funct1:1|opcode:5]                   BT, BF
+//   J       [s:1|imm[6:0]:7|imm[8:7]:2|funct1:1|opcode:5]   J, JAL
+//   R       [funct2:2|rd:3|rs2:3|rs1:3|opcode:5]             R,R,R(8) + R,R(8)
 //   SI      [0:1|funct3:3|shamt:4|rs/rd:3|opcode:5]          SLLI,SRLI,SRAI,SLLT,SRLT,RLT,RRT
-//   SYS     [sub:8|reg:3|opcode:5]                           11 system insns
+//   SYS     [funct8:8|reg:3|opcode:5]                        11 system insns
 //
 // ADDI has opcode 0 so that 0x0000 = ADDI R0, 0 = NOP.
 // T flag: single-bit condition flag set by comparisons (CLTI, CLTUI, CEQI,
@@ -99,7 +99,7 @@ module riscyv02_execute (
   // Named instruction fields (pure aliases — zero synthesis cost)
   // -------------------------------------------------------------------------
   wire [4:0] opcode      = ir[4:0];
-  wire [1:0] fn2         = ir[15:14];
+  wire [1:0] funct2         = ir[15:14];
   wire [7:0] imm8        = ir[15:8];
   wire [2:0] rs1_rd      = ir[7:5];     // I/SI/SYS register field
   wire [2:0] rs2         = ir[10:8];    // R-type second source
@@ -127,26 +127,26 @@ module riscyv02_execute (
   wire is_lui   = opcode == 5'd22;
   wire is_auipc = opcode == 5'd23;
 
-  // --- B-type (opcode 24, funct3 at [7:5]) ---
-  // BT/BF polarity: ir[5] (0=BT, 1=BF); only funct3=0,1 defined
+  // --- B-type (opcode 24, funct1 at [5]) ---
+  // BT/BF polarity: ir[5] (0=BT, 1=BF); [7:6] pinned to 0
   wire is_t_branch = opcode == 5'd24 && ir[7:6] == 2'b00;
 
-  // --- J-type (opcode 25, fn1 at [5]) ---
+  // --- J-type (opcode 25, funct1 at [5]) ---
   // J/JAL polarity: ir[5] (0=J, 1=JAL)
   wire is_jump_imm = opcode == 5'd25;
   wire is_jal      = opcode == 5'd25 && ir[5];
 
-  // --- R-type (opcodes 26-29, fn2 at [15:14]) ---
+  // --- R-type (opcodes 26-29, funct2 at [15:14]) ---
   wire is_alu1     = opcode == 5'd26;                    // ADD/SUB/AND/OR
   wire is_alu2     = opcode == 5'd27;                    // XOR/SLL/SRL/SRA
-  wire is_alu_rrr  = is_alu1 || (is_alu2 && fn2 == 2'd0);  // ADD..OR + XOR
-  wire is_shift_rr = is_alu2 && |fn2;                    // SLL/SRL/SRA
+  wire is_alu_rrr  = is_alu1 || (is_alu2 && funct2 == 2'd0);  // ADD..OR + XOR
+  wire is_shift_rr = is_alu2 && |funct2;                    // SLL/SRL/SRA
   wire is_rrr      = is_alu1 || is_alu2;                 // opcodes 26-27
 
-  // R-type comparisons (opcode 29, fn2 1-3)
-  wire is_clt  = opcode == 5'd29 && fn2 == 2'd1;
-  wire is_cltu = opcode == 5'd29 && fn2 == 2'd2;
-  wire is_ceq  = opcode == 5'd29 && fn2 == 2'd3;
+  // R-type comparisons (opcode 29, funct2 1-3)
+  wire is_clt  = opcode == 5'd29 && funct2 == 2'd1;
+  wire is_cltu = opcode == 5'd29 && funct2 == 2'd2;
+  wire is_ceq  = opcode == 5'd29 && funct2 == 2'd3;
 
   // --- SI-type (opcode 30, funct3 at [14:12]: [14]=T, [13]=right, [12]=mode) ---
   // ir[15] must be 0; ir[15]=1 decodes as 2-cycle NOP (no duplicate encodings).
@@ -160,10 +160,10 @@ module riscyv02_execute (
   wire is_si_t_right  = is_si_t && ir[13];
   wire is_si_t_rotate = is_si_t && ir[12];
 
-  // R-type shifts (opcode 27, fn2 1-3)
-  wire is_sll = is_alu2 && fn2 == 2'd1;
-  wire is_srl = is_alu2 && fn2 == 2'd2;
-  wire is_sra = is_alu2 && fn2 == 2'd3;
+  // R-type shifts (opcode 27, funct2 1-3)
+  wire is_sll = is_alu2 && funct2 == 2'd1;
+  wire is_srl = is_alu2 && funct2 == 2'd2;
+  wire is_sra = is_alu2 && funct2 == 2'd3;
 
   // --- System (opcode 31) ---
   wire is_sei  = opcode == 5'd31 && imm8 == 8'h01;
@@ -184,19 +184,19 @@ module riscyv02_execute (
   wire is_r9_store = opcode == 5'd5  || opcode == 5'd6;    // SW/SB
   wire is_sp_load  = opcode >= 5'd17 && opcode <= 5'd19;   // LWS/LBS/LBUS
   wire is_sp_store = opcode == 5'd20 || opcode == 5'd21;   // SWS/SBS
-  wire is_rr_load  = opcode == 5'd28 && fn2 != 2'd3;       // LWR/LBR/LBUR
-  wire is_rr_store = (opcode == 5'd28 && fn2 == 2'd3) || (opcode == 5'd29 && fn2 == 2'd0); // SWR/SBR
+  wire is_rr_load  = opcode == 5'd28 && funct2 != 2'd3;       // LWR/LBR/LBUR
+  wire is_rr_store = (opcode == 5'd28 && funct2 == 2'd3) || (opcode == 5'd29 && funct2 == 2'd0); // SWR/SBR
   wire is_rr_mem   = is_rr_load || is_rr_store;
 
   // Combined memory properties for E_MEM and r_hi
   wire mem_is_store      = is_r9_store || is_rr_store || is_sp_store;
   wire mem_is_byte_load  = (opcode == 5'd3  || opcode == 5'd4)    // LB/LBU
                         || (opcode == 5'd18 || opcode == 5'd19)   // LBS/LBUS
-                        || (opcode == 5'd28 && (fn2 == 2'd1 || fn2 == 2'd2)); // LBR/LBUR
+                        || (opcode == 5'd28 && (funct2 == 2'd1 || funct2 == 2'd2)); // LBR/LBUR
   wire mem_is_byte_store = opcode == 5'd6 || opcode == 5'd21     // SB/SBS
-                        || (opcode == 5'd29 && fn2 == 2'd0);     // SBR
+                        || (opcode == 5'd29 && funct2 == 2'd0);     // SBR
   wire mem_is_lbu        = opcode == 5'd4 || opcode == 5'd19     // LBU/LBUS
-                        || (opcode == 5'd28 && fn2 == 2'd2);     // LBUR
+                        || (opcode == 5'd28 && funct2 == 2'd2);     // LBUR
 
   // I-type ALU write group (LI/LUI routed through ALU as ADD 0)
   wire is_i_alu_wr = is_addi || is_andi || is_ori || is_xori || is_li || is_lui;
@@ -363,8 +363,8 @@ module riscyv02_execute (
 
   // alu_op: pure instruction function (same in LO and HI)
   always @(*) begin
-    if (is_alu1)                                                alu_op = {1'b0, fn2};
-    else if ((is_alu2 && fn2 == 2'd0) || is_ceqi || is_ceq
+    if (is_alu1)                                                alu_op = {1'b0, funct2};
+    else if ((is_alu2 && funct2 == 2'd0) || is_ceqi || is_ceq
           || is_xori)                                           alu_op = 3'd4;  // XOR
     else if (is_clti || is_cltui || is_clt || is_cltu)          alu_op = 3'd1;  // SUB
     else if (is_andi)                                           alu_op = 3'd2;  // AND

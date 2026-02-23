@@ -13,11 +13,11 @@
 #   Format  Layout (MSB→LSB)                                   Used by
 #   ──────  ─────────────────────────────────────────────────   ────────────────
 #   I       [imm8:8|rs/rd:3|opcode:5]                          24 instructions
-#   B       [imm8:8|funct3:3|opcode:5]                         BT, BF
-#   J       [s:1|imm[6:0]:7|imm[8:7]:2|fn1:1|opcode:5]        J, JAL
-#   R       [fn2:2|rd:3|rs2:3|rs1:3|opcode:5]                  R,R,R + R,R
+#   B       [imm8:8|0:2|funct1:1|opcode:5]                     BT, BF
+#   J       [s:1|imm[6:0]:7|imm[8:7]:2|funct1:1|opcode:5]     J, JAL
+#   R       [funct2:2|rd:3|rs2:3|rs1:3|opcode:5]               R,R,R + R,R
 #   SI      [0:1|funct3:3|shamt:4|rs/rd:3|opcode:5]            SLLI,SRLI,SRAI,SLLT,SRLT,RLT,RRT
-#   SYS     [sub:8|reg:3|opcode:5]                             11 system insns
+#   SYS     [funct8:8|reg:3|opcode:5]                          11 system insns
 
 __all__ = ['Asm']
 
@@ -31,12 +31,12 @@ def _encode_i(opcode, imm8, reg):
     insn = ((imm8 & 0xFF) << 8) | ((reg & 0x7) << 5) | (opcode & 0x1F)
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
-# B-type: [imm8:8 @ 15:8][funct3:3 @ 7:5][opcode:5 @ 4:0]  opcode=24
-def _encode_b(funct3, imm8):
-    insn = ((imm8 & 0xFF) << 8) | ((funct3 & 0x7) << 5) | 24
+# B-type: [imm8:8 @ 15:8][0:2 @ 7:6][funct1:1 @ 5][opcode:5 @ 4:0]  opcode=24
+def _encode_b(funct1, imm8):
+    insn = ((imm8 & 0xFF) << 8) | ((funct1 & 0x1) << 5) | 24
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
-# J-type: [s:1 @ 15][imm[6:0]:7 @ 14:8][imm[8:7]:2 @ 7:6][fn1:1 @ 5][opcode:5 @ 4:0]
+# J-type: [s:1 @ 15][imm[6:0]:7 @ 14:8][imm[8:7]:2 @ 7:6][funct1:1 @ 5][opcode:5 @ 4:0]
 def _encode_j(funct1, imm10):
     imm10 &= 0x3FF
     sign = (imm10 >> 9) & 1
@@ -45,7 +45,7 @@ def _encode_j(funct1, imm10):
     insn = (sign << 15) | (imm_lo << 8) | (imm_hi << 6) | ((funct1 & 1) << 5) | 25
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
-# R-type: [fn2:2 @ 15:14][rd:3 @ 13:11][rs2:3 @ 10:8][rs1:3 @ 7:5][opcode:5 @ 4:0]
+# R-type: [funct2:2 @ 15:14][rd:3 @ 13:11][rs2:3 @ 10:8][rs1:3 @ 7:5][opcode:5 @ 4:0]
 def _encode_r(opcode, funct2, rd, rs2, rs1):
     insn = ((funct2 & 0x3) << 14) | ((rd & 0x7) << 11) | ((rs2 & 0x7) << 8) \
          | ((rs1 & 0x7) << 5) | (opcode & 0x1F)
@@ -56,9 +56,9 @@ def _encode_si(funct3, shamt, reg):
     insn = ((funct3 & 0x7) << 12) | ((shamt & 0xF) << 8) | ((reg & 0x7) << 5) | 30
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
-# SYS-type: [sub:8 @ 15:8][reg:3 @ 7:5][opcode:5 @ 4:0]  opcode=31
-def _encode_sys(sub8, reg=0):
-    insn = ((sub8 & 0xFF) << 8) | ((reg & 0x7) << 5) | 31
+# SYS-type: [funct8:8 @ 15:8][reg:3 @ 7:5][opcode:5 @ 4:0]  opcode=31
+def _encode_sys(funct8, reg=0):
+    insn = ((funct8 & 0xFF) << 8) | ((reg & 0x7) << 5) | 31
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
@@ -259,7 +259,7 @@ def _encode_rrt(rd):  return _encode_si(0b111, 0, rd)
 # System (opcode 31)
 # ---------------------------------------------------------------------------
 
-# sub8 assignments:
+# funct8 assignments:
 #   0x01=SEI, 0x02=CLI, 0x03=RETI, 0x05=WAI, 0x07=STP
 #   0x08=SRW, 0x10=EPCR, 0x18=EPCW, 0x28=SRR
 #   0xC0+ = INT (ir[15:14]=11, vector at ir[7:6])
