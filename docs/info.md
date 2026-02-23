@@ -2,7 +2,7 @@
 
 RISCY-V02 is a 16-bit RISC processor that is logically pin-compatible with the
 WDC 65C02. Adjusted for lack of a usable SRAM IP on TT IHP, the design fits
-roughtly within the same transistor count (~13K) as an off-the-shelf model of
+roughly within the same transistor count (~13K) as an off-the-shelf model of
 the 6502 on the same process. This is comparable to the 11K of a 65C02, so
 we're in the right ballpark; hand layout would of course do much better.
 
@@ -14,15 +14,14 @@ In comparison to the 6502, it provides:
 | 2-cycle 16-bit arithmetic | 2/3-cycle 8-bit arithmetic |
 | 2-cycle variable-width shifts (arithmetic or logical) | 2-3 cycle 1-bit logical shifts |
 | 2 cycle interrupt entry/exit | 7-cycle interrupt entry, 6 cycle exit |
-| 2 cycle interrupt entry/exit | 7-cycle interrupt entry, 6 cycle exit |
-| 3-5 cycle calls, 3 cycle returns | 6-cycle calls/returns |
+| 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
 | 16,682 transistors (TT IHP) | 13,176 transistors (TT IHP) |
 | 13,298 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
-retrocomputing scene: that the 6502 was a "local optima" in the design speace
+retrocomputing scene: that the 6502 was a "local optima" in the design space
 of processors in its transistor budget. This never sat right with me, because
 it implies that we haven't learned anything about how to make CPUs in the
 intervening 40 years, and yet its design is full of things now generally
@@ -44,7 +43,7 @@ negedge, and its write output at some point after the following posedge. Both
 are largely expected to be latched at the following negedge.
 
 Accordingly, we adjust the timing so that the pins are exposed in two phases:
-address in data. At negedge, the address pins are exposed for the system to
+address and data. At negedge, the address pins are exposed for the system to
 latch on the following posedge. Then, the pins are muxed over to expose the
 control outputs and the data (read or write), to be latched on the following
 negedge. Control inputs stay consistent between the two phases.
@@ -70,7 +69,7 @@ negedge. Control inputs stay consistent between the two phases.
 
 - **8x 16-bit general-purpose registers**: R0-R7 (3-bit encoding)
 - **16-bit program counter**
-- **T flag**: single-bit condition flag, set by comparisons (CLT, CLTU, CEQ, CLTI, CLTUI, CEQI), tested by BT/BF branches
+- **T flag**: single-bit condition flag, set by comparisons (CLT, CLTU, CEQ, CLTI, CLTUI, CEQI), shift-through-T instructions (SLLT, SRLT, RLT, RRT), and SRW; tested by BT/BF branches
 - **I flag**: interrupt disable (1 = disabled)
 - **ESR**: 2-bit exception status register {I, T}, saved on interrupt entry, restored by RETI
 - **EPC**: 16-bit exception PC, saved on interrupt entry
@@ -110,7 +109,7 @@ the subsequent I=1 masks the IRQ. NMI's state is sampled on negedge.
 NMI overwrites EPC and ESR unconditionally, so if an NMI interrupts an IRQ
 handler before it saves EPC/ESR (via EPCR/SRR), the IRQ's return state is lost.
 NMI handlers typically reset, halt, or spin. This is typical of modern RISC
-CPUs: NMI is intended for fatal hardware falt handling.
+CPUs: NMI is intended for fatal hardware fault handling.
 
 **Interrupt latency:** 2 cycles from instruction completion to first handler
 instruction fetch (instantaneous dispatch + 2-cycle vector fetch). NMI edge
@@ -149,7 +148,7 @@ INT encoding format, software can also trigger IRQ/NMI vectors directly.
 1. Restore {I, T} from ESR
 2. Jump to EPC
 
-**Exception state:** EPC is a standalone 16-bit register holding the clean return address. ESR is a 2-bit register holding {I, T} at the time of interrupt entry. Neither is directly addressable through normal register fields. EPC is accessible through EPCR/EPCW; ESR is accessible through SRR/SRW (which read/write the live SR = {I, T}, including ESR on interrupt entry). All GP registers (R0-R7) are directly accessible in interrupt context -- there is no register banking.
+**Exception state:** EPC is a standalone 16-bit register holding the clean return address. ESR is a 2-bit register holding {I, T} at the time of interrupt entry. Neither is directly addressable through normal register fields. EPC is accessible through EPCR/EPCW. SRR/SRW read/write the live {I, T} flags; ESR is saved/restored automatically during interrupt entry and RETI. All GP registers (R0-R7) are directly accessible in interrupt context -- there is no register banking.
 
 ### Register Naming Convention
 
