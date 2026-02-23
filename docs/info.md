@@ -201,9 +201,9 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 | ADDI | Add immediate | rd += sext(imm8) | 2 | |
 | SUB | Subtract | rd = rs1 - rs2 | 2 | |
 | AND | And | rd = rs1 & rs2 | 2 | |
-| ANDI | And immediate | rd &= zext(imm8) | 2 | [3](#notes) |
+| ANDI | And immediate | rd &= zext(imm8) | 2 | |
 | OR | Or | rd = rs1 \| rs2 | 2 | |
-| ORI | Or immediate | rd \|= zext(imm8) | 2 | [3](#notes) |
+| ORI | Or immediate | rd \|= zext(imm8) | 2 | |
 | XOR | Xor | rd = rs1 ^ rs2 | 2 | |
 | XORI | Xor immediate | rd ^= sext(imm8) | 2 | |
 
@@ -296,8 +296,6 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 
 ### Notes
 
-<a id="notes"></a>
-
 1. **BZ/BNZ/BT/BF** — Range -256 to +254 bytes. BZ/BNZ test full 16-bit register. Not-taken: 2cy, taken same-page: 3cy, page-crossing: 4cy.
 
 2. **LW/LWS/LWR/SW/SWS/SWR** — Word transfers low byte first.
@@ -317,14 +315,12 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 ### Idioms
 
 - **NOP** — `ADDI R0, 0` (encoding `0x0000`).
-- **16-bit constant** — `LUI rd, hi; ADDI rd, lo`. When `lo` has bit 7 set, use `hi+1` (same as RISC-V).
-- **Bitwise NOT** — `XORI rd, -1` inverts all 16 bits.
-- **Compare and branch** — `CLTI rs, val; BT target`. Inverse: `BF target` (branch if ≥).
-- **Countdown loop** — `ADDI rd, -1; BNZ rd, loop`.
-- **Read T flag** — `SRR rd; ANDI rd, 1`.
-- **PC-relative data** — `AUIPC rd, hi; LW rd, lo` (or SW/JR).
-- **Far call** — `AUIPC rd, hi; JALR rd, lo`. Return: `JR R6, 0`.
-- **Save/restore interrupt state** — Entry: `SRR rd`. Exit: `SRW rd` before RETI. EPCR/EPCW for return address.
+- **Load 16-bit immediate** — `LUI rd, hi(imm16); ADDI rd, lo(imm16)`. When `lo` has bit 7 set, use `hi+1` (same as RISC-V).
+- **Bitwise NOT** — `XORI rd, -1` (`XORI` sign extends `imm8`)
+- **T flag to boolean** — `SRR rd; ANDI rd, 1`.
+- **PC-relative data** — `AUIPC rd, hi(imm16); LW rd, lo(imm16)` (or SW/JR). See above for 16-bit immediate handling.
+- **Far call** — `LUI rd, hi(imm16); JALR rd, lo(imm16)`. Return: `JR R6, 0`. Alternatively, `AUIPC` for PC-relative addressing.
+- **Nested interrupts** — Stack EPC and the upper two bits of SRR (ESR), then restore them on entry.
 - **Software breakpoint** — `INT 1` (BRK): handler at $0004.
 
 ## Instruction Encoding
@@ -371,7 +367,7 @@ In R-type, rs2 is at [10:8] and rd at [13:11].
 10100 (20)  SWS     mem16[R7 + sext(imm8)] = rs
 10101 (21)  SBS     mem[R7 + sext(imm8)] = rs[7:0]
 10110 (22)  LUI     rd = imm8 << 8
-10111 (23)  AUIPC   rd = pc + (imm8 << 8)
+10111 (23)  AUIPC   rd = (pc+2) + (imm8 << 8)
 
 --- B-type (opcode 24, funct3 at [7:5]) ---
 11000.000   BT      if T == 1, pc += sext(imm8) << 1
