@@ -175,6 +175,22 @@ R6 is a normal GPR — callee-saved, and interrupt handlers that use it must sav
 
 All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by default; ANDI, ORI, and CLTUI zero-extend instead. PC-relative offsets (branches, J, JAL, AUIPC) are all relative to PC+2 (address of next instruction); the assembler's encoded immediate accounts for this. "Page crossing" means the upper byte of the target address differs from PC+2.
 
+**Effect column notation:**
+
+| Notation | Meaning |
+|---|---|
+| rd, rs | Destination/source register |
+| rs1, rs2 | Source registers (R-type) |
+| immN | N-bit immediate from instruction |
+| shamt | Shift amount (4-bit immediate) |
+| sext() | Sign-extend to 16 bits |
+| zext() | Zero-extend to 16 bits |
+| MEM[] | Byte memory access |
+| MEM16[] | Word (16-bit) memory access |
+| <s | Signed less-than |
+| {a, b} | Bit concatenation |
+| [n:m] | Bit slice (MSB:LSB) |
+
 ### Instruction Reference
 
 **Arithmetic & Logic**
@@ -210,10 +226,10 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
-| CLT | Compare < | T = (rs1 < rs2) signed | 2 | |
-| CLTI | Compare < immediate | T = (rs < sext(imm8)) signed | 2 | |
-| CLTU | Compare <u | T = (rs1 <u rs2) unsigned | 2 | |
-| CLTUI | Compare <u immediate | T = (rs <u zext(imm8)) unsigned | 2 | |
+| CLT | Compare <s | T = (rs1 <s rs2) | 2 | |
+| CLTI | Compare <s immediate | T = (rs <s sext(imm8)) | 2 | |
+| CLTU | Compare < | T = (rs1 < rs2) | 2 | |
+| CLTUI | Compare < immediate | T = (rs < zext(imm8)) | 2 | |
 | CEQ | Compare == | T = (rs1 == rs2) | 2 | |
 | CEQI | Compare == immediate | T = (rs == sext(imm8)) | 2 | |
 
@@ -350,8 +366,8 @@ In R-type, rs2 is at [10:8] and rd at [13:11].
 01001 (9)   ANDI    rd = rd & zext(imm8)
 01010 (10)  ORI     rd = rd | zext(imm8)
 01011 (11)  XORI    rd = rd ^ sext(imm8)
-01100 (12)  CLTI    T = (rs < sext(imm8))             (signed)
-01101 (13)  CLTUI   T = (rs <u zext(imm8))            (unsigned)
+01100 (12)  CLTI    T = (rs <s sext(imm8))
+01101 (13)  CLTUI   T = (rs < zext(imm8))
 01110 (14)  BZ      if rs == 0, pc += sext(imm8) << 1
 01111 (15)  BNZ     if rs != 0, pc += sext(imm8) << 1
 10000 (16)  CEQI    T = (rs == sext(imm8))
