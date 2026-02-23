@@ -17,7 +17,7 @@
 #   J       [s:1|imm[6:0]:7|imm[8:7]:2|funct1:1|opcode:5]     J, JAL
 #   R       [funct2:2|rd:3|rs2:3|rs1:3|opcode:5]               R,R,R + R,R
 #   SI      [0:1|funct3:3|shamt:4|rs/rd:3|opcode:5]            SLLI,SRLI,SRAI,SLLT,SRLT,RLT,RRT
-#   SYS     [funct8:8|reg:3|opcode:5]                          11 system insns
+#   SYS     [funct4:4|0:4|reg:3|opcode:5]                      11 system insns
 
 __all__ = ['Asm']
 
@@ -56,9 +56,9 @@ def _encode_si(funct3, shamt, reg):
     insn = ((funct3 & 0x7) << 12) | ((shamt & 0xF) << 8) | ((reg & 0x7) << 5) | 30
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
-# SYS-type: [funct8:8 @ 15:8][reg:3 @ 7:5][opcode:5 @ 4:0]  opcode=31
-def _encode_sys(funct8, reg=0):
-    insn = ((funct8 & 0xFF) << 8) | ((reg & 0x7) << 5) | 31
+# SYS-type: [funct4:4 @ 15:12][0:4 @ 11:8][reg:3 @ 7:5][opcode:5 @ 4:0]  opcode=31
+def _encode_sys(funct4, reg=0):
+    insn = ((funct4 & 0xF) << 12) | ((reg & 0x7) << 5) | 31
     return (insn & 0xFF, (insn >> 8) & 0xFF)
 
 
@@ -259,37 +259,37 @@ def _encode_rrt(rd):  return _encode_si(0b111, 0, rd)
 # System (opcode 31)
 # ---------------------------------------------------------------------------
 
-# funct8 assignments:
-#   0x01=SEI, 0x02=CLI, 0x03=RETI, 0x05=WAI, 0x07=STP
-#   0x08=SRW, 0x10=EPCR, 0x18=EPCW, 0x28=SRR
-#   0xC0+ = INT (ir[15:14]=11, vector at ir[7:6])
+# funct4 assignments (ir[15:12]):
+#   0=SEI, 1=CLI, 2=WAI, 3=STP
+#   4=EPCR, 5=EPCW, 6=SRR, 7=SRW
+#   8=RETI, 12+=INT (ir[15:14]=11, vector at ir[7:6])
 
-def _encode_sei():  return _encode_sys(0x01)
-def _encode_cli():  return _encode_sys(0x02)
-def _encode_reti(): return _encode_sys(0x03)
-def _encode_wai():  return _encode_sys(0x05)
-def _encode_stp():  return _encode_sys(0x07)
+def _encode_sei():  return _encode_sys(0)
+def _encode_cli():  return _encode_sys(1)
+def _encode_reti(): return _encode_sys(8)
+def _encode_wai():  return _encode_sys(2)
+def _encode_stp():  return _encode_sys(3)
 
 def _encode_epcr(rd):
     """EPCR Rd: copy EPC to Rd."""
-    return _encode_sys(0x10, rd)
+    return _encode_sys(4, rd)
 
 def _encode_epcw(rs):
     """EPCW Rs: copy Rs to EPC."""
-    return _encode_sys(0x18, rs)
+    return _encode_sys(5, rs)
 
 def _encode_srr(rd):
     """SRR Rd: rd = {12'b0, ESR[1:0], I, T}."""
-    return _encode_sys(0x28, rd)
+    return _encode_sys(6, rd)
 
 def _encode_srw(rs):
     """SRW Rs: ESR = rs[3:2], {I, T} = rs[1:0]."""
-    return _encode_sys(0x08, rs)
+    return _encode_sys(7, rs)
 
 def _encode_brk():
     """BRK: INT with vector 1 → handler at $0004.
     ir[7:6]=01 for vector 1, so reg field [7:5]=010=2."""
-    return _encode_sys(0xC0, 2)
+    return _encode_sys(12, 2)
 
 def _encode_nop():
     """NOP = ADDI R0, 0 = 0x0000."""

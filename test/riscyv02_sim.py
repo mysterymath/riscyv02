@@ -152,7 +152,7 @@ class RISCYV02Sim:
             # cpu_clk domain (E_EXEC_LO → E_IDLE), so the fetch unit gets
             # one more negedge (F_LO → F_HI) before cpu_clk stops.
             # RDY=0 blocks the ICG immediately — no extra cycle.
-            if (self.stopped or self.waiting) and self._bus_idx < len(self._bus_seq):
+            if (self.stopped or self.waiting) and rdy and self._bus_idx < len(self._bus_seq):
                 self.current_sync = False
                 addr, rwb, dout = self._bus_seq[self._bus_idx]
                 self.current_addr = addr & 0xFFFF
@@ -252,8 +252,8 @@ class RISCYV02Sim:
             )
             return
 
-        # RETI (opcode 31, funct8=0x03): instantaneous redirect
-        if opcode == 31 and ((ir >> 8) & 0xFF) == 0x03:
+        # RETI (opcode 31, funct4=8): instantaneous redirect
+        if opcode == 31 and ((ir >> 12) & 0xF) == 8:
             self.i_bit = bool(self.esr & 2)
             self.t_bit = bool(self.esr & 1)
             self.pc = self.epc & 0xFFFE
@@ -625,50 +625,49 @@ class RISCYV02Sim:
 
         # =================================================================
         # System (opcode 31)
-        # [funct8:8 @ 15:8][reg:3 @ 7:5]
+        # [funct4:4 @ 15:12][reg:3 @ 7:5]
         # =================================================================
         if opcode == 31:
-            funct8 = (ir >> 8) & 0xFF
+            funct4 = (ir >> 12) & 0xF
             reg_idx = (ir >> 5) & 7
 
-            if funct8 == 0x01:            # SEI
+            if funct4 == 0:               # SEI
                 self.i_bit = True
                 return []
 
-            if funct8 == 0x02:            # CLI
+            if funct4 == 1:               # CLI
                 self.i_bit = False
                 return []
 
-            # RETI (funct8==0x03) handled at dispatch — never reaches _execute
-
-            if funct8 == 0x05:            # WAI
+            if funct4 == 2:               # WAI
                 self.waiting = True
                 return []
 
-            if funct8 == 0x07:            # STP
+            if funct4 == 3:               # STP
                 self.stopped = True
                 return []
 
-            if funct8 == 0x10:            # EPCR rd
+            if funct4 == 4:               # EPCR rd
                 self.regs[reg_idx] = self.epc
                 return []
 
-            if funct8 == 0x18:            # EPCW rs
+            if funct4 == 5:               # EPCW rs
                 self.epc = self.regs[reg_idx]
                 return []
 
-            if funct8 == 0x28:            # SRR rd
+            if funct4 == 6:               # SRR rd
                 self.regs[reg_idx] = (self.esr << 2) | (int(self.i_bit) << 1) | int(self.t_bit)
                 return []
 
-            if funct8 == 0x08:            # SRW rs
+            if funct4 == 7:               # SRW rs
                 val = self.regs[reg_idx]
                 self.i_bit = bool(val & 2)
                 self.t_bit = bool(val & 1)
                 self.esr = (val >> 2) & 3
                 return []
 
-            # INT (funct8[7:6]=11) handled at dispatch — never reaches _execute
+            # RETI (funct4==8) handled at dispatch — never reaches _execute
+            # INT (funct4>=12) handled at dispatch — never reaches _execute
 
         # Unknown instruction — treat as 2-cycle NOP
         return []

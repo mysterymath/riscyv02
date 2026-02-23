@@ -11,7 +11,7 @@
 // All instruction state is held in a single 16-bit ir register containing the
 // raw instruction word.
 // All decode properties are derived from named instruction fields (opcode, funct3,
-// imm8, etc.) and format-level group signals.
+// funct4, imm8, etc.) and format-level group signals.
 //
 // All instructions dispatch to E_EXEC_LO, then optionally continue to
 // E_EXEC_HI (two-cycle ops). Memory instructions proceed from E_EXEC_HI
@@ -40,7 +40,7 @@
 //   J       [s:1|imm[6:0]:7|imm[8:7]:2|funct1:1|opcode:5]   J, JAL
 //   R       [funct2:2|rd:3|rs2:3|rs1:3|opcode:5]             R,R,R(8) + R,R(8)
 //   SI      [0:1|funct3:3|shamt:4|rs/rd:3|opcode:5]          SLLI,SRLI,SRAI,SLLT,SRLT,RLT,RRT
-//   SYS     [funct8:8|reg:3|opcode:5]                        11 system insns
+//   SYS     [funct4:4|0:4|reg:3|opcode:5]                    11 system insns
 //
 // ADDI has opcode 0 so that 0x0000 = ADDI R0, 0 = NOP.
 // T flag: single-bit condition flag set by comparisons (CLTI, CLTUI, CEQI,
@@ -165,15 +165,15 @@ module riscyv02_execute (
   wire is_srl = is_alu2 && funct2 == 2'd2;
   wire is_sra = is_alu2 && funct2 == 2'd3;
 
-  // --- System (opcode 31) ---
-  wire is_sei  = opcode == 5'd31 && imm8 == 8'h01;
-  wire is_cli  = opcode == 5'd31 && imm8 == 8'h02;
-  wire is_wai  = opcode == 5'd31 && imm8 == 8'h05;
-  wire is_stp  = opcode == 5'd31 && imm8 == 8'h07;
-  wire is_srw  = opcode == 5'd31 && imm8 == 8'h08;
-  wire is_epcr = opcode == 5'd31 && imm8 == 8'h10;
-  wire is_epcw = opcode == 5'd31 && imm8 == 8'h18;
-  wire is_srr  = opcode == 5'd31 && imm8 == 8'h28;
+  // --- System (opcode 31, funct4 at [15:12]) ---
+  wire is_sei  = opcode == 5'd31 && ir[15:12] == 4'd0;
+  wire is_cli  = opcode == 5'd31 && ir[15:12] == 4'd1;
+  wire is_wai  = opcode == 5'd31 && ir[15:12] == 4'd2;
+  wire is_stp  = opcode == 5'd31 && ir[15:12] == 4'd3;
+  wire is_epcr = opcode == 5'd31 && ir[15:12] == 4'd4;
+  wire is_epcw = opcode == 5'd31 && ir[15:12] == 4'd5;
+  wire is_srr  = opcode == 5'd31 && ir[15:12] == 4'd6;
+  wire is_srw  = opcode == 5'd31 && ir[15:12] == 4'd7;
 
   // --- Behavioral groups ---
 
@@ -434,7 +434,7 @@ module riscyv02_execute (
   wire take_irq = fsm_ready && !irqb && !insn_i_bit && !take_nmi;
   assign ir_accept = fsm_ready && ir_valid && !take_nmi && !take_irq && !jump;
   wire soft_int_disp = ir_accept && fetch_opcode == 5'd31 && fetch_ir[15:14] == 2'b11;
-  wire reti_disp     = ir_accept && fetch_opcode == 5'd31 && fetch_ir[15:8] == 8'h03;
+  wire reti_disp     = ir_accept && fetch_opcode == 5'd31 && fetch_ir[15:12] == 4'd8;
   assign waiting = (state == E_IDLE) && is_wai;
   assign stopped = (state == E_IDLE) && is_stp;
 

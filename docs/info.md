@@ -17,8 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 16,854 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,470 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 16,826 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,442 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -336,7 +336,7 @@ All 61 instructions are fixed 16-bit. Three properties drive the encoding: the s
 | J | `[s:1\|imm[6:0]:7\|imm[8:7]:2\|funct1:1\|opcode:5]` | 2 |
 | R | `[funct2:2\|rd:3\|rs2:3\|rs1:3\|opcode:5]` | 16 |
 | SI | `[dc:1\|funct3:3\|shamt:4\|rs/rd:3\|opcode:5]` | 7 |
-| SYS | `[funct8:8\|reg:3\|opcode:5]` | 10 |
+| SYS | `[funct4:4\|0:4\|reg:3\|opcode:5]` | 10 |
 
 In R-type, rs2 is at [10:8] and rd at [13:11].
 
@@ -392,17 +392,17 @@ funct3=101  RLT
 funct3=110  SRLT
 funct3=111  RRT
 
---- SYS-type (opcode 31, funct8 at [15:8]) ---
-funct8=0x01   SEI
-funct8=0x02   CLI
-funct8=0x03   RETI
-funct8=0x05   WAI
-funct8=0x07   STP
-funct8=0x08   SRW     (reg at [7:5])
-funct8=0x10   EPCR    (reg at [7:5])
-funct8=0x18   EPCW    (reg at [7:5])
-funct8=0x28   SRR     (reg at [7:5])
-funct8=0xC0+  INT     (vec 0-2 at [7:6]; vec 3 = NOP)
+--- SYS-type (opcode 31, funct4 at [15:12]) ---
+funct4=0   SEI
+funct4=1   CLI
+funct4=2   WAI
+funct4=3   STP
+funct4=4   EPCR    (reg at [7:5])
+funct4=5   EPCW    (reg at [7:5])
+funct4=6   SRR     (reg at [7:5])
+funct4=7   SRW     (reg at [7:5])
+funct4=8   RETI
+funct4=12+ INT     (vec 0-2 at [7:6]; vec 3 = NOP)
 
 All other encodings execute as NOP (2-cycle no-op).
 ```

@@ -70,6 +70,13 @@ set clocks [get_clocks $clock_port]
 
 set_input_delay $input_delay_value -clock $clocks $all_inputs_wo_clk_rst
 
+# Control inputs (IRQB, NMIB, RDY, SOB): driven by bus peripherals on
+# negedge.  Both CPUs capture at negedge → negedge-to-negedge
+# (full-period) setup relationship.
+set_input_delay $input_delay_value -clock $clocks -clock_fall \
+    [get_ports {ui_in[0] ui_in[1] ui_in[2] ui_in[3] \
+                ui_in[4] ui_in[5] ui_in[6] ui_in[7]}]
+
 # -----------------------------------------------------------------------
 # Output delays — dual-edge constraints for muxed bus
 # -----------------------------------------------------------------------
