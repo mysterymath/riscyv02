@@ -105,7 +105,7 @@ def _encode_jr(rs, imm):
     return _encode_i(7, imm, rs)
 
 def _encode_jalr(rs, imm):
-    """JALR: rs=pc+2; pc = rs + sext(imm). Byte offset, no shift."""
+    """JALR: R6=pc+2; pc = rs + sext(imm). Byte offset, no shift."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_i(8, imm, rs)
 

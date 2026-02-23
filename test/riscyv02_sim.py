@@ -381,9 +381,9 @@ class RISCYV02Sim:
                 self._redirect = True
                 return []
 
-            if opcode == 8:             # JALR (link to rs)
+            if opcode == 8:             # JALR (link to R6)
                 old_rs = self.regs[rs_idx]
-                self.regs[rs_idx] = next_pc
+                self.regs[6] = next_pc
                 self.pc = (old_rs + sext8(imm8_raw)) & 0xFFFE
                 self._redirect = True
                 return []

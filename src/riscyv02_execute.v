@@ -268,8 +268,8 @@ module riscyv02_execute (
   // w_sel: write port register select (3-bit GP only)
   reg [2:0] w_sel_mux;
   always @(*) begin
-    if (is_jal)
-      w_sel_mux = LINK_REG;                                    // JAL → R6
+    if (is_jal || is_jalr)
+      w_sel_mux = LINK_REG;                                    // JAL/JALR → R6
     else if (is_rrr || is_rr_load)
       w_sel_mux = rd_r;                                        // R-type: rd at [13:11]
     else

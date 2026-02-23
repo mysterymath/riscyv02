@@ -145,7 +145,7 @@ async def test_slli_self(dut):
 
 @cocotb.test()
 async def test_jalr_link_overlap(dut):
-    """JALR R6: jump target register == link register. Safe (lo/hi split)."""
+    """JALR R6: source reg == link reg R6. Reads R6 for target, then overwrites with link."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
     # R6 = 0x0040. JALR R6, 0 → jump to 0x0040, save return addr to R6.

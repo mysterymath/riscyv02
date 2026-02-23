@@ -118,7 +118,7 @@ async def test_j_jal(dut):
 
 @cocotb.test()
 async def test_jalr(dut):
-    """JALR: jump to rs+off, save return addr in rs."""
+    """JALR: jump to rs+off, save return addr in R6."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -126,7 +126,7 @@ async def test_jalr(dut):
     a.lw(1, 0x30)
     a.jalr(1, 0)
     a.org(0x0040)
-    a.sw(1, 0x50)
+    a.sw(6, 0x50)
     a.spin()
     a.org(0x0030)
     a.db(0x40, 0x00)

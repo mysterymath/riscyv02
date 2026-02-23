@@ -17,8 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 16,554 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,170 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 16,754 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,370 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -214,11 +214,11 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 | SLL | Shift left logical | rd = rs1 << rs2[3:0] | 2 | |
 | SLLI | Shift left immediate | rd <<= shamt | 2 | |
 | SLLT | Shift left, link T | T = rd[15]; rd = {rd[14:0], 0} | 2 | |
-| RLT | Rotate left through T | T = rd[15]; rd = {rd[14:0], old_T} | 2 | [5](#notes) |
+| RLT | Rotate left through T | T = rd[15]; rd = {rd[14:0], old_T} | 2 | [4](#notes) |
 | SRL | Shift right logical | rd = rs1 >> rs2[3:0] (logical) | 2 | |
 | SRLI | Shift right logical imm | rd >>= shamt (logical) | 2 | |
 | SRLT | Shift right, link T | T = rd[0]; rd = {0, rd[15:1]} | 2 | |
-| RRT | Rotate right through T | T = rd[0]; rd = {old_T, rd[15:1]} | 2 | [5](#notes) |
+| RRT | Rotate right through T | T = rd[0]; rd = {old_T, rd[15:1]} | 2 | [4](#notes) |
 | SRA | Shift right arithmetic | rd = rs1 >> rs2[3:0] (arithmetic) | 2 | |
 | SRAI | Shift right arith imm | rd >>= shamt (arithmetic) | 2 | |
 
@@ -277,22 +277,22 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 | J | Jump | PC += sext(imm10) << 1 | 3-4 | [3](#notes) |
 | JR | Jump register | PC = rs + sext(imm8) | 3-4 | [3](#notes) |
 | JAL | Jump and link | R6 = PC+2; PC += sext(imm10) << 1 | 4 | |
-| JALR | Jump and link register | rs = PC+2; PC = rs + sext(imm8) | 4 | [4](#notes) |
+| JALR | Jump and link register | R6 = PC+2; PC = rs + sext(imm8) | 4 | |
 
 **System**
 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
-| CLI | Clear interrupt disable | I = 0 | 2 | [6](#notes) |
+| CLI | Clear interrupt disable | I = 0 | 2 | [5](#notes) |
 | SEI | Set interrupt disable | I = 1 | 2 | |
-| SRR | Status register read | rd = {12'b0, ESR, I, T} | 2 | [8](#notes) |
-| SRW | Status register write | ESR = rs[3:2]; {I, T} = rs[1:0] | 2 | [8](#notes) |
+| SRR | Status register read | rd = {12'b0, ESR, I, T} | 2 | [7](#notes) |
+| SRW | Status register write | ESR = rs[3:2]; {I, T} = rs[1:0] | 2 | [7](#notes) |
 | EPCR | Read EPC | rd = EPC | 2 | |
 | EPCW | Write EPC | EPC = rs | 2 | |
-| INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 2 | [9](#notes) |
-| RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 2 | [7](#notes) |
-| WAI | Wait for interrupt | halt until interrupt | 2 / halt | [10](#notes) |
-| STP | Stop | halt permanently | 1 | [11](#notes) |
+| INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 2 | [8](#notes) |
+| RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 2 | [6](#notes) |
+| WAI | Wait for interrupt | halt until interrupt | 2 / halt | [9](#notes) |
+| STP | Stop | halt permanently | 1 | [10](#notes) |
 
 ### Notes
 
@@ -304,21 +304,19 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 
 3. **J/JR** — Same-page: 3cy, page-crossing: 4cy. J range: -1024 to +1022 bytes.
 
-4. **JALR** — Single register field is both jump base and link destination.
+4. **RLT/RRT** — 17-bit rotate through T (6502 ROL/ROR equivalent).
 
-5. **RLT/RRT** — 17-bit rotate through T (6502 ROL/ROR equivalent).
+5. **CLI** — Pending IRQ taken at next dispatch boundary.
 
-6. **CLI** — Pending IRQ taken at next dispatch boundary.
+6. **RETI** — Immediate IRQ if I restored to 0.
 
-7. **RETI** — Immediate IRQ if I restored to 0.
+7. **SRR/SRW** — Pack ESR alongside live flags. SRW forwards immediately.
 
-8. **SRR/SRW** — Pack ESR alongside live flags. SRW forwards immediately.
+8. **INT** — Unconditional (ignores I).
 
-9. **INT** — Unconditional (ignores I).
+9. **WAI** — PC past WAI before halt. I=1: wake without handler entry.
 
-10. **WAI** — PC past WAI before halt. I=1: wake without handler entry.
-
-11. **STP** — Reset only. WAI/STP halt via clock gating.
+10. **STP** — Reset only. WAI/STP halt via clock gating.
 
 ### Idioms
 
@@ -329,7 +327,7 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 - **Countdown loop** — `ADDI rd, -1; BNZ rd, loop`.
 - **Read T flag** — `SRR rd; ANDI rd, 1`.
 - **PC-relative data** — `AUIPC rd, hi; LW rd, lo` (or SW/JR).
-- **Far call** — `AUIPC R6, hi; JALR R6, lo`. Return: `JR R6, 0`.
+- **Far call** — `AUIPC rd, hi; JALR rd, lo`. Return: `JR R6, 0`.
 - **Save/restore interrupt state** — Entry: `SRR rd`. Exit: `SRW rd` before RETI. EPCR/EPCW for return address.
 - **Software breakpoint** — `INT 1` (BRK): handler at $0004.
 
@@ -362,7 +360,7 @@ In R-type, rs2 is at [10:8] and rd at [13:11].
 00101 (5)   SW      mem16[R0 + sext(imm8)] = rs
 00110 (6)   SB      mem[R0 + sext(imm8)] = rs[7:0]
 00111 (7)   JR      pc = rs + sext(imm8)
-01000 (8)   JALR    rs = pc+2; pc = rs + sext(imm8)
+01000 (8)   JALR    R6 = pc+2; pc = rs + sext(imm8)
 01001 (9)   ANDI    rd = rd & zext(imm8)
 01010 (10)  ORI     rd = rd | zext(imm8)
 01011 (11)  XORI    rd = rd ^ sext(imm8)
