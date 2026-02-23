@@ -17,8 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 16,682 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,298 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 16,492 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,108 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -108,6 +108,8 @@ the subsequent I=1 masks the IRQ. NMI's state is sampled on negedge.
 **Warning:** Unlike the 6502, RETI from an NMI handler is undefined behavior.
 NMI overwrites EPC and ESR unconditionally, so if an NMI interrupts an IRQ
 handler before it saves EPC/ESR (via EPCR/SRR), the IRQ's return state is lost.
+SRR/SRW include ESR in bits [3:2], so a single SRR/SRW pair saves and restores
+everything needed for interrupt nesting.
 NMI handlers typically reset, halt, or spin. This is typical of modern RISC
 CPUs: NMI is intended for fatal hardware fault handling.
 
@@ -148,7 +150,7 @@ INT encoding format, software can also trigger IRQ/NMI vectors directly.
 1. Restore {I, T} from ESR
 2. Jump to EPC
 
-**Exception state:** EPC is a standalone 16-bit register holding the clean return address. ESR is a 2-bit register holding {I, T} at the time of interrupt entry. Neither is directly addressable through normal register fields. EPC is accessible through EPCR/EPCW. SRR/SRW read/write the live {I, T} flags; ESR is saved/restored automatically during interrupt entry and RETI. All GP registers (R0-R7) are directly accessible in interrupt context -- there is no register banking.
+**Exception state:** EPC is a standalone 16-bit register holding the clean return address. ESR is a 2-bit register holding {I, T} at the time of interrupt entry. Neither is directly addressable through normal register fields. EPC is accessible through EPCR/EPCW. SRR reads `{12'b0, ESR[1:0], I, T}` and SRW writes `ESR = rs[3:2], {I, T} = rs[1:0]`, providing direct access to both live flags and saved exception state in a single instruction. All GP registers (R0-R7) are directly accessible in interrupt context -- there is no register banking.
 
 ### Register Naming Convention
 
@@ -241,10 +243,10 @@ sub8=0x02   CLI     I = 0
 sub8=0x03   RETI    {I, T} = ESR; pc = EPC
 sub8=0x05   WAI     halt until interrupt
 sub8=0x07   STP     halt permanently (reset only)
-sub8=0x08   SRW     {I, T} = rs[1:0]           (reg at [7:5])
+sub8=0x08   SRW     ESR=rs[3:2], {I,T}=rs[1:0] (reg at [7:5])
 sub8=0x10   EPCR    rd = EPC                    (reg at [7:5])
 sub8=0x18   EPCW    EPC = rs                    (reg at [7:5])
-sub8=0x28   SRR     rd = {14'b0, I, T}          (reg at [7:5])
+sub8=0x28   SRR     rd = {12'b0, ESR, I, T}     (reg at [7:5])
 sub8=0xC0+  INT     ESR={I,T}; EPC=pc+2; I=1; pc=(vec+1)*2  (vec at [7:6])
 
 All other encodings execute as NOP (2-cycle no-op).
@@ -442,10 +444,10 @@ Restores flags from ESR and returns. If ESR restores I=0 and IRQB is asserted, t
 
 #### EPCR -- `rd = EPC` -- 2 cycles
 #### EPCW -- `EPC = rs` -- 2 cycles
-#### SRR -- `rd = {14'b0, I, T}` -- 2 cycles
-#### SRW -- `{I, T} = rs[1:0]` -- 2 cycles (both flags forwarded immediately)
+#### SRR -- `rd = {12'b0, ESR[1:0], I, T}` -- 2 cycles
+#### SRW -- `ESR = rs[3:2], {I, T} = rs[1:0]` -- 2 cycles (all flags forwarded immediately)
 
-Pair SRR/SRW to save/restore interrupt context. EPCR/EPCW access the return address only; the saved {I, T} flags are in ESR.
+SRR/SRW pack the saved exception state (ESR) alongside the live flags into a single register. On handler entry, `SRR rd` captures everything; before RETI, `SRW rd` restores it. EPCR/EPCW access the return address separately. The `read_t` pseudo (`SRR rd; ANDI rd, 1`) correctly masks ESR bits.
 
 #### INT -- Software Interrupt
 

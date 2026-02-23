@@ -652,13 +652,14 @@ class RISCYV02Sim:
                 return []
 
             if sub8 == 0x28:            # SRR rd
-                self.regs[reg_idx] = (int(self.i_bit) << 1) | int(self.t_bit)
+                self.regs[reg_idx] = (self.esr << 2) | (int(self.i_bit) << 1) | int(self.t_bit)
                 return []
 
             if sub8 == 0x08:            # SRW rs
                 val = self.regs[reg_idx]
                 self.i_bit = bool(val & 2)
                 self.t_bit = bool(val & 1)
+                self.esr = (val >> 2) & 3
                 return []
 
             # INT (sub8[7:6]=11) handled at dispatch — never reaches _execute

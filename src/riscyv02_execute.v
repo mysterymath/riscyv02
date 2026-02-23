@@ -326,7 +326,7 @@ module riscyv02_execute (
   // alu_a: 4-way LO (zero / flags / PC / reg), 3-way HI (zero / PC / reg)
   always @(*) begin
     if (alu_new_op) begin
-      if (is_srr)               alu_a = {6'b0, i_bit, t_bit};
+      if (is_srr)               alu_a = {4'b0, esr, i_bit, t_bit};
       else if (is_li || is_lui) alu_a = 8'd0;
       else if (is_pc_base)      alu_a = {pc[7:1], 1'b0};
       else if (is_epcr)         alu_a = epc[7:0];
@@ -595,6 +595,7 @@ module riscyv02_execute (
           if (is_srw) begin
             insn_i_bit = r1[1];
             next_t_bit = r1[0];
+            next_esr   = r1[3:2];
           end
           next_state = E_IDLE;
         end

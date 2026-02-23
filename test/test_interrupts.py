@@ -1065,3 +1065,90 @@ async def test_nmi_during_reti_redirect(dut):
     nmi = _read_ram(dut, 0x0060) | (_read_ram(dut, 0x0061) << 8)
     assert irq == 0x0044, f"IRQ handler didn't run! Got {irq:#06x}"
     assert nmi == 0x0033, f"NMI handler didn't run! Got {nmi:#06x}"
+
+
+@cocotb.test()
+async def test_srr_includes_esr(dut):
+    """SRR returns {ESR, I, T} in bits [3:0]; ESR reflects pre-IRQ {I=0, T=1}."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    # Set T=1 before IRQ entry so ESR captures {I=0, T=1} = 0b01.
+    # IRQ handler reads SRR and stores it.
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset → 0x0020
+    a.org(0x0006)
+    a.srr(1)                     # 0x0006: IRQ handler — SRR r1
+    a.sw(1, 0x40)                # 0x0008
+    a.spin()                     # 0x000A
+    a.org(0x0020)
+    a.cli()                      # 0x0020
+    a.ceqi(0, 0)                 # 0x0022: R0==0 → T=1
+    a.spin()                     # 0x0024
+    a.org(0x0040)
+    a.dw(0x0000)
+
+    _load_program(dut, a.assemble())
+    _set_ui(dut, rdy=True, irqb=True, nmib=True)
+    dut.ena.value = 1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 50)
+    _set_ui(dut, rdy=True, irqb=False, nmib=True)
+    await ClockCycles(dut.clk, 200)
+
+    val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    # ESR should be {I=0, T=1} = 0b01, live {I=1, T=1} → SRR = 0b01_1_1 = 0x07
+    # Wait — live I=1 (set by IRQ entry), live T=1 (set before IRQ).
+    # ESR = saved {I=0, T=1} = 0b01.
+    # SRR = {ESR, I, T} = {01, 1, 1} = 0b0111 = 0x07
+    assert val == 0x0007, f"SRR wrong! Expected 0x0007, got {val:#06x}"
+
+
+@cocotb.test()
+async def test_srw_restores_esr(dut):
+    """SRW writes ESR from rs[3:2]; RETI uses the modified ESR."""
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    # BRK from I=1, T=0 → ESR = {1,0} = 0b10.
+    # BRK handler uses SRW to set ESR={0,1}, I=0, T=1 (rs=0b0101=5),
+    # then RETI restores {I,T} from modified ESR → I=0, T=1.
+    # After RETI, SRR captures live {I=0, T=1} and ESR from new interrupt context.
+    # But we just need to verify RETI restored I=0, T=1 from the SRW-modified ESR.
+    # We verify by: after RETI, IRQ fires (since I=0) and handler stores marker.
+    a = Asm()
+    a.jr(7, 0x20)                # 0x0000: reset → 0x0020
+    a.org(0x0004)
+    a.jr(7, 0x30)                # 0x0004: BRK → 0x0030
+    a.org(0x0006)
+    a.jr(7, 0x40)                # 0x0006: IRQ → 0x0040
+    a.org(0x0020)
+    a.brk()                      # 0x0020: BRK (from I=1, T=0)
+    a.spin()                     # 0x0022: return here after RETI
+    # BRK handler: SRW sets ESR={0,1}=I=0,T=1, then RETI
+    a.org(0x0030)
+    a.li(1, 0x05)                # 0x0030: r1 = 0b0101 → ESR=01, I=0, T=1
+    a.srw(1)                     # 0x0032
+    a.reti()                     # 0x0034
+    # IRQ handler: store marker
+    a.org(0x0040)
+    a.li(1, 0x77)                # 0x0040
+    a.sw(1, 0x60)                # 0x0042
+    a.spin()                     # 0x0044
+    a.org(0x0060)
+    a.dw(0x0000)
+
+    _load_program(dut, a.assemble())
+    dut.ena.value = 1
+    dut.ui_in.value = 0x06       # IRQB asserted
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 300)
+
+    val = _read_ram(dut, 0x0060) | (_read_ram(dut, 0x0061) << 8)
+    # RETI restores {I,T} from ESR which SRW set to {0,1} → I=0, T=1.
+    # With I=0 and IRQB asserted, IRQ fires immediately → marker stored.
+    assert val == 0x0077, f"IRQ didn't fire after RETI with SRW-modified ESR! Got {val:#06x}"

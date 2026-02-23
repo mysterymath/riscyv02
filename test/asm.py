@@ -285,11 +285,11 @@ def _encode_epcw(rs):
     return _encode_sys(0x18, rs)
 
 def _encode_srr(rd):
-    """SRR Rd: rd = SR ({I, T})."""
+    """SRR Rd: rd = {12'b0, ESR[1:0], I, T}."""
     return _encode_sys(0x28, rd)
 
 def _encode_srw(rs):
-    """SRW Rs: SR = rs ({I, T})."""
+    """SRW Rs: ESR = rs[3:2], {I, T} = rs[1:0]."""
     return _encode_sys(0x08, rs)
 
 def _encode_brk():
