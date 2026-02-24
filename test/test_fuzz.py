@@ -101,8 +101,8 @@ def _dump_trace(dut, trace_buf):
 @cocotb.test()
 async def test_fuzz(dut):
     seed = int(os.environ.get('FUZZ_SEED', '0'))
-    n_cycles = int(os.environ.get('FUZZ_CYCLES', '5000'))
-    n_iters = int(os.environ.get('FUZZ_ITERS', '20'))
+    n_cycles = int(os.environ.get('FUZZ_CYCLES', '500'))
+    n_iters = int(os.environ.get('FUZZ_ITERS', '200'))
     skip_cycles = int(os.environ.get('FUZZ_SKIP', '0'))
 
     clock = Clock(dut.clk, 10, unit="us")

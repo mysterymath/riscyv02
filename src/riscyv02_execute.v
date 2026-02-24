@@ -64,6 +64,7 @@ module riscyv02_execute (
     output reg         nmi_ack,      // NMI acknowledged (registered, for clearing nmi_pending)
     output wire        waiting,      // WAI: halted until interrupt (gates cpu_clk)
     output wire        stopped,      // STP: halted permanently, only reset recovers
+    output reg         wai_woken,    // WAI wake committed (keeps cpu_clk running)
     // Fetch pipeline flush and next-instruction address
     output reg         fetch_flush,
     output wire [15:0] fetch_pc
@@ -437,6 +438,14 @@ module riscyv02_execute (
   assign ir_accept = fsm_ready && ir_valid && !take_nmi && !take_irq && !jump;
   assign waiting = (state == E_IDLE) && is_wai;
   assign stopped = (state == E_IDLE) && is_stp;
+
+  // WAI wake commitment: once WAI sees an interrupt on any gated clock edge,
+  // latch so cpu_rdy stays high until a new instruction replaces WAI in ir.
+  wire wake = nmi_pending || nmi_edge || !irqb;
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n)           wai_woken <= 1'b0;
+    else if (is_wai && wake) wai_woken <= 1'b1;
+    else if (!is_wai)     wai_woken <= 1'b0;
 
   // ==========================================================================
   // State-Property Block

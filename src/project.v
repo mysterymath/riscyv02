@@ -47,9 +47,9 @@ module tt_um_riscyv02 (
   wire rdy = ui_in[2];
 
   // Gated clock for CPU logic — freezes when RDY=0, waiting (WAI), or stopped (STP)
-  wire exec_waiting, exec_stopped;
+  wire exec_waiting, exec_stopped, exec_wai_woken;
   wire wake = nmi_pending || nmi_edge || !irqb;
-  wire cpu_rdy = rdy && !exec_stopped && (!exec_waiting || wake);
+  wire cpu_rdy = rdy && !exec_stopped && (!exec_waiting || wake || exec_wai_woken);
   wire cpu_clk;
   sg13g2_lgcp_1 u_cpu_icg (
     .CLK  (clk),
@@ -156,6 +156,7 @@ module tt_um_riscyv02 (
     .nmi_ack       (exec_nmi_ack),
     .waiting       (exec_waiting),
     .stopped       (exec_stopped),
+    .wai_woken     (exec_wai_woken),
     .fetch_flush   (flush),
     .fetch_pc      (fetch_pc)
   );
