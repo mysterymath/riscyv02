@@ -464,7 +464,7 @@ When `ui_in[2]` is low, the processor halts atomically: all CPU state freezes (P
 
 ### Single-Step and Wait-State Protocols
 
-To **single-step**, monitor SYNC during data phases and pull RDY low when it goes high. The CPU halts at the instruction boundary. Pulse RDY high for one clock cycle to advance one instruction, then pull it low again when SYNC reasserts.
+To **single-step**, monitor SYNC during data phases and pull RDY low when it goes high. The CPU halts at the instruction boundary. Leave RDY high while cycling the clock, then pull it low again when SYNC reasserts.
 
 For **wait states**, external logic decodes the address during the address phase and pulls RDY low before the data-phase clock edge if the access needs more time. When the memory is ready, RDY goes high and the CPU continues.
 
