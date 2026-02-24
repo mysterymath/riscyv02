@@ -164,15 +164,15 @@ def _encode_lbu_s(rd, imm):
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
     return _encode_i(19, imm, rd)
 
-def _encode_sw_s(rd, imm):
-    """SWS: mem16[R7 + sext(imm)] = rd. Base is R7 (SP)."""
+def _encode_sw_s(rs, imm):
+    """SWS: mem16[R7 + sext(imm)] = rs. Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_i(20, imm, rd)
+    return _encode_i(20, imm, rs)
 
-def _encode_sb_s(rd, imm):
-    """SBS: mem[R7 + sext(imm)] = rd[7:0]. Base is R7 (SP)."""
+def _encode_sb_s(rs, imm):
+    """SBS: mem[R7 + sext(imm)] = rs[7:0]. Base is R7 (SP)."""
     assert -128 <= imm <= 127, f"imm out of range: {imm}"
-    return _encode_i(21, imm, rd)
+    return _encode_i(21, imm, rs)
 
 def _encode_lui(rd, imm8):
     """LUI: rd = imm8 << 8. Upper byte load."""
@@ -380,8 +380,8 @@ class Asm:
     def lw_rr(self, rd, rs):    self._emit(_encode_lw_rr(rd, rs))
     def lb_rr(self, rd, rs):    self._emit(_encode_lb_rr(rd, rs))
     def lbu_rr(self, rd, rs):   self._emit(_encode_lbu_rr(rd, rs))
-    def sw_rr(self, rd, rs):    self._emit(_encode_sw_rr(rd, rs))
-    def sb_rr(self, rd, rs):    self._emit(_encode_sb_rr(rd, rs))
+    def sw_rr(self, rs2, rs1):  self._emit(_encode_sw_rr(rs2, rs1))
+    def sb_rr(self, rs2, rs1):  self._emit(_encode_sb_rr(rs2, rs1))
     # R-type comparisons
     def clt(self, rs1, rs2):    self._emit(_encode_clt(rs1, rs2))
     def cltu(self, rs1, rs2):   self._emit(_encode_cltu(rs1, rs2))
