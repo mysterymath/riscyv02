@@ -258,7 +258,7 @@ class RISCYV02Sim:
             self.t_bit = bool(self.esr & 1)
             self.pc = self.epc & 0xFFFE
             self._bus_seq = self._fetch_seq(self.pc)
-            self._interrupt_point = 0  # E_IDLE: interruptible every cycle
+            self._interrupt_point = 1  # one wasted fetch cycle, then IRQ can fire
             self.current_sync = True
             self.last_dispatch = (
                 f"INSN @0x{fetch_pc:04X} ir=0x{ir:04X} RETI"
@@ -586,14 +586,14 @@ class RISCYV02Sim:
             return []
 
         # =================================================================
-        # SI-type (opcode 30): funct3 at [14:12]
-        # [dc:1 @ 15][funct3:3 @ 14:12][shamt:4 @ 11:8][rs/rd:3 @ 7:5]
-        # funct3: [14]=T, [13]=right, [12]=mode
+        # SI-type (opcode 30): funct3 at [15:13]
+        # [funct3:3 @ 15:13][0:1 @ 12][shamt:4 @ 11:8][rs/rd:3 @ 7:5]
+        # funct3: [15]=T, [14]=right, [13]=mode
         # =================================================================
         if opcode == 30:
-            if ir & 0x8000:             # ir[15]=1: 2-cycle NOP
+            if ir & 0x1000:             # ir[12]=1: 2-cycle NOP
                 return []
-            funct3 = (ir >> 12) & 7
+            funct3 = (ir >> 13) & 7
             shamt = (ir >> 8) & 0xF
             rs_idx = (ir >> 5) & 7
             if funct3 < 4:              # Immediate shifts

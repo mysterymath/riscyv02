@@ -148,17 +148,17 @@ module riscyv02_execute (
   wire is_cltu = opcode == 5'd29 && funct2 == 2'd2;
   wire is_ceq  = opcode == 5'd29 && funct2 == 2'd3;
 
-  // --- SI-type (opcode 30, funct3 at [14:12]: [14]=T, [13]=right, [12]=mode) ---
-  // ir[15] must be 0; ir[15]=1 decodes as 2-cycle NOP (no duplicate encodings).
-  wire is_slli = opcode == 5'd30 && ir[15:12] == 4'd0;
-  wire is_srli = opcode == 5'd30 && ir[15:12] == 4'd2;
-  wire is_srai = opcode == 5'd30 && ir[15:12] == 4'd3;
+  // --- SI-type (opcode 30, funct3 at [15:13]: [15]=T, [14]=right, [13]=mode) ---
+  // ir[12] must be 0; ir[12]=1 decodes as 2-cycle NOP (no duplicate encodings).
+  wire is_slli = opcode == 5'd30 && ir[15:12] == 4'd0;   // 000_0
+  wire is_srli = opcode == 5'd30 && ir[15:12] == 4'd4;   // 010_0
+  wire is_srai = opcode == 5'd30 && ir[15:12] == 4'd6;   // 011_0
 
-  // SI-type shift/rotate through T (funct3[2]=1)
-  // 0_100=SLLT, 0_101=RLT, 0_110=SRLT, 0_111=RRT
-  wire is_si_t        = opcode == 5'd30 && ir[15:14] == 2'b01;
-  wire is_si_t_right  = is_si_t && ir[13];
-  wire is_si_t_rotate = is_si_t && ir[12];
+  // SI-type shift/rotate through T (funct3[2]=1, i.e. ir[15]=1)
+  // 100_0=SLLT, 101_0=RLT, 110_0=SRLT, 111_0=RRT
+  wire is_si_t        = opcode == 5'd30 && ir[15] && !ir[12];
+  wire is_si_t_right  = is_si_t && ir[14];
+  wire is_si_t_rotate = is_si_t && ir[13];
 
   // R-type shifts (opcode 27, funct2 1-3)
   wire is_sll = is_alu2 && funct2 == 2'd1;
@@ -579,7 +579,7 @@ module riscyv02_execute (
               w_we   = 1'b1;
             end
             if (is_si_t)
-              next_t_bit = ir[13] ? r1[0] : r1[15];
+              next_t_bit = ir[14] ? r1[0] : r1[15];
           end else if (is_pc_rel) begin
             if ((is_branch && (!(|r1) ^ opcode[0]))
              || (is_t_branch && (t_bit ^ ir[5]))

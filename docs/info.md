@@ -17,8 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 16,826 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,442 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 16,780 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,396 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -327,7 +327,7 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 
 This section documents the binary encoding for tools and hardware implementors.
 
-All 61 instructions are fixed 16-bit. Three properties drive the encoding: the sign bit is always ir[15], so sign extension runs in parallel with decode; the primary register field ir[7:5] is shared across I/SI/SYS/R-type formats, enabling a speculative register read before the opcode is fully decoded; and `0x0000` encodes ADDI R0, 0 (NOP). Immediates are sign-extended by default; ANDI, ORI, and CLTUI zero-extend instead.
+All 61 instructions are fixed 16-bit. Three properties drive the encoding: in formats with signed immediates (I, B, J) the sign bit is always ir[15], so sign extension runs in parallel with decode; the primary register field ir[7:5] is shared across I/SI/SYS/R-type formats, enabling a speculative register read before the opcode is fully decoded; and `0x0000` encodes ADDI R0, 0 (NOP). Immediates are sign-extended by default; ANDI, ORI, and CLTUI zero-extend instead.
 
 | Format | Layout (MSB→LSB) | Used |
 |---|---|---|
@@ -335,7 +335,7 @@ All 61 instructions are fixed 16-bit. Three properties drive the encoding: the s
 | B | `[imm8:8\|0:2\|funct1:1\|opcode:5]` | 2 |
 | J | `[s:1\|imm[6:0]:7\|imm[8:7]:2\|funct1:1\|opcode:5]` | 2 |
 | R | `[funct2:2\|rd:3\|rs2:3\|rs1:3\|opcode:5]` | 16 |
-| SI | `[0:1\|funct3:3\|shamt:4\|rs/rd:3\|opcode:5]` | 7 |
+| SI | `[funct3:3\|0:1\|shamt:4\|rs/rd:3\|opcode:5]` | 7 |
 | SYS | `[funct4:4\|0:4\|reg:3\|opcode:5]` | 10 |
 
 In R-type, rs2 is at [10:8] and rd at [13:11].
@@ -383,7 +383,7 @@ Opcode 27 (R-ALU2): 00=XOR, 01=SLL, 10=SRL, 11=SRA
 Opcode 28 (R-MEM):  00=LWR, 01=LBR, 10=LBUR, 11=SWR
 Opcode 29 (R-MISC): 00=SBR, 01=CLT, 10=CLTU, 11=CEQ
 
---- SI-type (opcode 30, funct3 at [14:12]: [14]=T, [13]=right, [12]=mode) ---
+--- SI-type (opcode 30, funct3 at [15:13]: [15]=T, [14]=right, [13]=mode) ---
 funct3=000  SLLI
 funct3=010  SRLI
 funct3=011  SRAI
