@@ -6,8 +6,10 @@
 # Runs random programs on both the RTL and a behavioral emulator,
 # comparing all output pins at every clock edge.
 
+import itertools
 import os
 import random
+import time
 from collections import deque
 
 import cocotb
@@ -109,8 +111,11 @@ async def test_fuzz(dut):
     cocotb.start_soon(clock.start())
 
     total_mismatches = 0
+    total_failures = 0
+    start_time = time.monotonic()
+    counter = itertools.count() if n_iters == 0 else range(n_iters)
 
-    for iteration in range(n_iters):
+    for iteration in counter:
         iter_seed = seed + iteration
         rng = random.Random(iter_seed)
 
@@ -235,10 +240,21 @@ async def test_fuzz(dut):
 
         if mismatches > 0:
             total_mismatches += mismatches
+            total_failures += 1
             dut._log.error(f"Iteration {iteration} (seed {iter_seed}):"
                            f" {mismatches} mismatches in {cycle + 1} cycles")
         else:
             dut._log.info(f"Iteration {iteration} (seed {iter_seed}):"
                           f" PASS ({n_cycles} cycles)")
 
-    assert total_mismatches == 0, f"Total mismatches: {total_mismatches}"
+        # Progress summary every 1000 iterations
+        done = iteration + 1
+        if done % 1000 == 0:
+            elapsed = time.monotonic() - start_time
+            rate = done / elapsed if elapsed > 0 else 0
+            dut._log.info(
+                f"Progress: {done} seeds tested, {total_failures} failures,"
+                f" {rate:.1f} seeds/sec")
+
+    if n_iters > 0:
+        assert total_mismatches == 0, f"Total mismatches: {total_mismatches}"
