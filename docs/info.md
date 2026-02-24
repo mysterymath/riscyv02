@@ -482,7 +482,7 @@ Side-by-side assembly for common routines. All cycle counts assume same-page bra
 void memcpy(void *dst, const void *src, size_t n);
 ```
 
-**6502** — arguments in zero page: src ($00), dst ($02), count ($04)
+**6502** — arguments in zero page: src ($00), dst ($02), count ($04). Based on [cc65](https://github.com/cc65/cc65)'s `memcpy.s` (Ullrich von Bassewitz; 2× unroll by Christian Krueger).
 
 ```
 memcpy:
@@ -490,6 +490,9 @@ memcpy:
     LDX count+1         ;  3 cy   2 B    ; full pages
     BEQ partial         ;  2 cy   2 B
 page:
+    LDA (src),Y         ;  5 cy   2 B
+    STA (dst),Y         ;  6 cy   2 B
+    INY                 ;  2 cy   1 B
     LDA (src),Y         ;  5 cy   2 B
     STA (dst),Y         ;  6 cy   2 B
     INY                 ;  2 cy   1 B
@@ -511,13 +514,13 @@ done:
     RTS                 ;  6 cy   1 B
 ```
 
-Inner loop (full pages): `LDA (src),Y` + `STA (dst),Y` + `INY` + `BNE` = **16 cy/byte**, 7 B
+Inner loop (full pages, 2× unrolled): 2×(`LDA` + `STA` + `INY`) + `BNE` = **14.5 cy/byte**, 12 B
 
 Page boundary: `INC` + `INC` + `DEX` + `BNE` = 15 cy / 256 bytes (0.06 cy/byte amortized)
 
 Tail loop (partial page): adds `DEX` for count = **18 cy/byte**, 8 B
 
-Total code: **28 bytes**
+Total code: **38 bytes**
 
 **RISCY-V02** — arguments in registers: R2 = dst, R3 = src, R4 = count
 
@@ -550,12 +553,12 @@ Total code: **28 bytes**
 
 | | 6502 | RISCY-V02 |
 |---|---|---|
-| Inner loop | 16 cy/byte | 8.5 cy/byte |
+| Inner loop | 14.5 cy/byte | 8.5 cy/byte |
 | Boundary overhead | 15 cy / 256 B | none |
 | Tail | 18 cy/byte | 6 cy (1 byte) |
-| Code size | 28 B | 28 B |
+| Code size | 38 B | 28 B |
 
-The 6502's `(indirect),Y` is powerful — pointer dereference plus index in one instruction — but the 8-bit index forces page-boundary handling. RISCY-V02's 16-bit pointers eliminate page handling, and word loads/stores copy two bytes per transaction, nearly halving throughput cost. Code size is identical: the 6502's compact 1-byte instructions (INY, DEX) compensate for page-crossing overhead.
+cc65 unrolls 2× in the full-page loop, amortizing the branch over two bytes. Despite this optimization, RISCY-V02's word loads/stores still copy at 59% of the cycle cost — the architectural advantage (16-bit data path, no page boundaries) dominates the loop-unrolling trick. The 6502 pays 10 extra bytes for the unroll and page-crossing logic.
 
 ### strcpy
 
@@ -563,7 +566,7 @@ The 6502's `(indirect),Y` is powerful — pointer dereference plus index in one 
 char *strcpy(char *dst, const char *src);
 ```
 
-**6502** — arguments in zero page: src ($00), dst ($02)
+**6502** — arguments in zero page: src ($00), dst ($02). Matches [cc65](https://github.com/cc65/cc65)'s `strcpy.s` (Ullrich von Bassewitz).
 
 ```
 strcpy:
@@ -638,42 +641,41 @@ Word loop: 23 cy / 2 chars = **11.5 cy/char**, 26 B. The null-byte detection (8 
 uint16_t mul(uint16_t a, uint16_t b);
 ```
 
-Both implementations use the same shift-and-add algorithm (GCC's `__mulsi3` pattern): shift the multiplier right one bit per iteration, conditionally add the multiplicand to the result, shift the multiplicand left, and exit early when the multiplier reaches zero.
+The 6502 uses cc65's right-shift algorithm: shift the multiplier right, conditionally add the multiplicand to an accumulator, then right-shift the entire 32-bit result. The accumulator and multiplier share a single shift chain, so only one set of shifts is needed per iteration. RISCY-V02 uses a left-shift variant with early exit, which is more natural when 16-bit operations are single instructions.
 
-**6502** — arguments in zero page: mult ($00), mcand ($02), result ($04)
+**6502** — arguments in zero page: mult ($00), mcand ($02), tmp ($04). Based on [cc65](https://github.com/cc65/cc65)'s `umul16x16r32.s` (Ullrich von Bassewitz). Result low 16 bits replace mult.
 
 ```
 multiply:
-    LDA #0              ;  2 cy   2 B
-    STA result          ;  3 cy   2 B
-    STA result+1        ;  3 cy   2 B
-loop:
-    LDA mult            ;  3 cy   2 B    ; early exit
-    ORA mult+1          ;  3 cy   2 B
-    BEQ done            ;  2 cy   2 B
-    LSR mult+1          ;  5 cy   2 B    ; shift out bit 0
+    LDA #0              ;  2 cy   2 B    ; A = accumulator low
+    STA tmp             ;  3 cy   2 B    ; tmp = accumulator high
+    LDY #16             ;  2 cy   2 B    ; bit counter
+    LSR mult+1          ;  5 cy   2 B    ; get first bit into carry
     ROR mult            ;  5 cy   2 B
-    BCC no_add          ;  2.5 cy 2 B
-    CLC                 ;  2 cy   1 B    ; result += mcand
-    LDA result          ;  3 cy   2 B
+loop:
+    BCC no_add          ;  3 cy   2 B    (taken, 2 cy not taken)
+    CLC                 ;  2 cy   1 B    ; accumulator += mcand
     ADC mcand           ;  3 cy   2 B
-    STA result          ;  3 cy   2 B
-    LDA result+1        ;  3 cy   2 B
-    ADC mcand+1         ;  3 cy   2 B
-    STA result+1        ;  3 cy   2 B
+    TAX                 ;  2 cy   1 B
+    LDA mcand+1         ;  3 cy   2 B
+    ADC tmp             ;  3 cy   2 B
+    STA tmp             ;  3 cy   2 B
+    TXA                 ;  2 cy   1 B
 no_add:
-    ASL mcand           ;  5 cy   2 B    ; mcand <<= 1
-    ROL mcand+1         ;  5 cy   2 B
-    BRA loop            ;  3 cy   2 B
-done:
+    ROR tmp             ;  5 cy   2 B    ; shift 32-bit result right
+    ROR A               ;  2 cy   1 B
+    ROR mult+1          ;  5 cy   2 B
+    ROR mult            ;  5 cy   2 B
+    DEY                 ;  2 cy   1 B
+    BNE loop            ;  3 cy   2 B
     RTS                 ;  6 cy   1 B
 ```
 
-Per iteration (no add): **34 cy** — `LDA`+`ORA`+`BEQ`+`LSR`+`ROR`+`BCC`(taken)+`ASL`+`ROL`+`BRA`
+Per iteration (no add): **25 cy** — `BCC`(taken)+4×`ROR`+`DEY`+`BNE`
 
-Per iteration (add): **54 cy** — adds `CLC` + 3×(`LDA`/`ADC`/`STA`) chain
+Per iteration (add): **42 cy** — adds `CLC`+`ADC`+`TAX`+`LDA`+`ADC`+`STA`+`TXA`
 
-Average: **44 cy/iter**. Total code: **36 bytes**
+Average: **33.5 cy/iter**. Total code: **34 bytes**
 
 **RISCY-V02** — arguments in registers: R2 = multiplier, R3 = multiplicand, result in R4
 
@@ -702,11 +704,11 @@ Average: **14.5 cy/iter**. Total code: **20 bytes**
 
 | | 6502 | RISCY-V02 |
 |---|---|---|
-| Per iteration (avg) | 44 cy | 14.5 cy |
-| 16 iterations (avg) | ~704 cy | ~232 cy |
-| Code size | 36 B | 20 B |
+| Per iteration (avg) | 33.5 cy | 14.5 cy |
+| 16 iterations (avg) | ~536 cy | ~232 cy |
+| Code size | 34 B | 20 B |
 
-The 3× speedup: 16-bit addition is one instruction vs seven, shifts are one vs two, and zero-test is one vs three. Every 16-bit operation the 6502 serializes byte-by-byte collapses to a single instruction. The 6502's 1-byte implied-operand instructions can't compensate for the sheer number of extra instructions needed to work in 8-bit halves.
+cc65's right-shift algorithm is optimal for 8-bit CPUs — the accumulator and multiplier share a single 32-bit shift chain (4 RORs), eliminating the separate multiplicand shift. No early-exit test is needed because the multiplier shift is folded into the result shift. RISCY-V02 is still 2.3× faster: 16-bit add, shift, and branch-on-zero each replace multi-instruction 6502 sequences, and the left-shift variant with early exit is natural when those operations are cheap.
 
 ### 16 ÷ 16 Unsigned Division
 
@@ -717,40 +719,41 @@ uint16_t udiv16(uint16_t dividend, uint16_t divisor);
 
 Both implementations use binary long division (restoring): shift the dividend left one bit at a time into a running remainder, trial-subtract the divisor, and shift the success/fail bit into the quotient.
 
-**6502** — arguments in zero page: dividend ($00), divisor ($02), remainder ($04)
+**6502** — arguments in zero page: dividend ($00), divisor ($02), rem ($04). Based on [cc65](https://github.com/cc65/cc65)'s `udiv.s` (Ullrich von Bassewitz). Quotient replaces dividend; remainder in rem. cc65 also has a 16÷8 fast path (not shown) that halves cycle count when the divisor fits in one byte.
 
 ```
 udiv16:
-    LDA #0              ;  2 cy   2 B
-    STA rem             ;  3 cy   2 B
-    STA rem+1           ;  3 cy   2 B
-    LDX #16             ;  2 cy   2 B
+    LDA #0              ;  2 cy   2 B    ; A = remainder low
+    STA rem+1           ;  3 cy   2 B    ; remainder high = 0
+    LDY #16             ;  2 cy   2 B    ; bit counter
 loop:
     ASL dividend        ;  5 cy   2 B    ; shift dividend left
     ROL dividend+1      ;  5 cy   2 B    ;   high bit → carry
-    ROL rem             ;  5 cy   2 B    ; shift into remainder
+    ROL A               ;  2 cy   1 B    ; shift into remainder
     ROL rem+1           ;  5 cy   2 B
-    SEC                 ;  2 cy   1 B    ; trial subtract
-    LDA rem             ;  3 cy   2 B
-    SBC divisor         ;  3 cy   2 B
-    TAY                 ;  2 cy   1 B    ; save low result
+    TAX                 ;  2 cy   1 B    ; save remainder low
+    CMP divisor         ;  3 cy   2 B    ; trial subtract (sets carry)
     LDA rem+1           ;  3 cy   2 B
-    SBC divisor+1       ;  3 cy   2 B
-    BCC no_sub          ;  2.5 cy 2 B    ; borrow → can't subtract
-    STA rem+1           ;  3 cy   2 B    ; commit subtraction
-    STY rem             ;  3 cy   2 B
+    SBC divisor+1       ;  3 cy   2 B    ; carry from CMP propagates
+    BCC no_sub          ;  3 cy   2 B    ; borrow → can't subtract
+    STA rem+1           ;  3 cy   2 B    ; commit high byte
+    TXA                 ;  2 cy   1 B
+    SBC divisor         ;  3 cy   2 B    ; commit low byte
+    TAX                 ;  2 cy   1 B
     INC dividend        ;  5 cy   2 B    ; set quotient bit
 no_sub:
-    DEX                 ;  2 cy   1 B
+    TXA                 ;  2 cy   1 B    ; A = remainder low
+    DEY                 ;  2 cy   1 B
     BNE loop            ;  3 cy   2 B
+    STA rem             ;  3 cy   2 B    ; store final remainder
     RTS                 ;  6 cy   1 B
 ```
 
-Per iteration (no sub): **44 cy** — `ASL`+`ROL`×3+`SEC`+`LDA`+`SBC`+`TAY`+`LDA`+`SBC`+`BCC`(taken)+`DEX`+`BNE`
+Per iteration (no sub): **38 cy** — `ASL`+`ROL`+`ROL A`+`ROL`+`TAX`+`CMP`+`LDA`+`SBC`+`BCC`(taken)+`TXA`+`DEY`+`BNE`
 
-Per iteration (sub): **54 cy** — adds `STA`+`STY`+`INC`
+Per iteration (sub): **52 cy** — adds `STA`+`TXA`+`SBC`+`TAX`+`INC`
 
-Average: **49 cy/iter**. Total code: **38 bytes**
+Average: **45 cy/iter**. Total code: **37 bytes**
 
 **RISCY-V02** — R2 = dividend (becomes quotient), R3 = divisor, R4 = remainder
 
@@ -779,11 +782,11 @@ Average: **17.5 cy/iter**. Total code: **22 bytes**
 
 | | 6502 | RISCY-V02 |
 |---|---|---|
-| Per iteration (avg) | 49 cy | 17.5 cy |
-| 16 iterations | ~784 cy | ~280 cy |
-| Code size | 38 B | 22 B |
+| Per iteration (avg) | 45 cy | 17.5 cy |
+| 16 iterations | ~720 cy | ~280 cy |
+| Code size | 37 B | 22 B |
 
-Same restoring division algorithm. The 2.8× speedup: 16-bit shifts are single instructions, trial subtraction compresses from 6 instructions to 2, and `SLLT`+`RLT` chain the dividend's high bit directly into the remainder without extracting T into a register. The 6502's `SEC`+`TAY` bookkeeping and byte-by-byte shift chains add up fast.
+Same restoring division algorithm. cc65 keeps the remainder low byte in A throughout the loop, avoiding memory round-trips, and uses `CMP` to set carry for the trial subtract (replacing `SEC`+`LDA`+`SBC`). The 2.6× speedup: RISCY-V02's 16-bit shifts are single instructions, and `CLTU`+`BT` replaces the multi-instruction trial-subtract-and-branch. `SLLT`+`RLT` chain the dividend's high bit directly into the remainder without a register save.
 
 ### CRC-8 (SMBUS)
 
