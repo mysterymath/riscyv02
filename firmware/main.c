@@ -1,8 +1,8 @@
 // RISCY-V02 demoboard firmware
 //
 // Emulates 64 KiB of SRAM and a simple UART peripheral on the TT demoboard's
-// RP2350.  Core 1 runs a tight bus-servicing loop; core 0 handles USB serial
-// I/O and the UART peripheral bridge.
+// RP2350.  Core 1 runs a bus-servicing loop that drives the project clock via
+// GPIO (no PWM); core 0 handles USB serial I/O and the UART peripheral bridge.
 //
 // Build:
 //   cmake -B build -G Ninja && cmake --build build
@@ -13,8 +13,6 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
-#include "hardware/pwm.h"
-#include "hardware/clocks.h"
 #include "tt_pins.h"
 
 // ---------------------------------------------------------------------------
@@ -109,51 +107,81 @@ static void tt_reset_project(void) {
     gpio_put(TT_GP_NPROJECTRST, 1);
 }
 
-// Start the project clock via PWM at the given frequency.
-static void tt_start_clock(uint32_t freq_hz) {
-    gpio_set_function(TT_GP_PROJCLK, GPIO_FUNC_PWM);
-    uint slice = pwm_gpio_to_slice_num(TT_GP_PROJCLK);
-    uint32_t sys_clk = clock_get_hz(clk_sys);
-    uint32_t divider16 = (sys_clk << 4) / (freq_hz * 2);  // 4.4 fixed point
-    uint32_t wrap = 1;  // Toggle every count → 50% duty
-    pwm_set_clkdiv_int_frac(slice, divider16 >> 4, divider16 & 0xF);
-    pwm_set_wrap(slice, wrap);
-    pwm_set_chan_level(slice, pwm_gpio_to_channel(TT_GP_PROJCLK), 1);
-    pwm_set_enabled(slice, true);
-}
-
-// Stop the project clock and hold it low.
-static void tt_stop_clock(void) {
-    uint slice = pwm_gpio_to_slice_num(TT_GP_PROJCLK);
-    pwm_set_enabled(slice, false);
-    gpio_set_function(TT_GP_PROJCLK, GPIO_FUNC_SIO);
-    gpio_set_dir(TT_GP_PROJCLK, GPIO_OUT);
-    gpio_put(TT_GP_PROJCLK, 0);
-}
-
 // ---------------------------------------------------------------------------
-// Core 1: bus-servicing loop
+// Core 1: bus-servicing loop (software-driven clock)
 //
-// The RISCY-V02 bus protocol alternates between two phases each clock edge:
-//   mux_sel=0 (clk HIGH→LOW): Address phase
-//     uo_out[7:0] = AB[7:0], uio[7:0] = AB[15:8] (all driven by ASIC)
-//   mux_sel=1 (clk LOW→HIGH): Data phase
+// Core 1 drives the project clock directly via GPIO, advancing the ASIC one
+// phase at a time.  This eliminates all timing pressure — each phase takes
+// as long as it needs, with zero bus contention and deterministic behavior.
+//
+// Bus protocol (one CPU cycle = one clk period):
+//   clk LOW  (mux_sel=0): Address phase
+//     uo_out[7:0] = AB[7:0], uio[7:0] = AB[15:8] (driven by ASIC)
+//   clk HIGH (mux_sel=1): Data phase
 //     uo_out[0] = RWB, uo_out[1] = SYNC
 //     uio[7:0] = D[7:0] (ASIC drives on write, RP2350 drives on read)
-//
-// We don't generate the clock here — PWM on GPIO 0 runs independently.
-// Instead we watch the clock pin and react to each phase.
 // ---------------------------------------------------------------------------
 
-// TODO: Implement the bus-servicing loop.  For now, this is a placeholder
-// that will be filled in once the basic project skeleton is working.
 static void core1_bus_service(void) {
-    while (true)
-        tight_loop_contents();
+    // Clock starts LOW (set by tt_init_gpio). uio starts as input.
+    while (true) {
+        // --- Address Phase (clk LOW, mux_sel=0) ---
+        // ASIC drives AB on uo_out[7:0] and uio[7:0].
+        // uio is already input (released at end of previous iteration).
+        uint32_t gpio = gpio_get_all();
+        uint16_t addr = ((uint16_t)tt_read_uio(gpio) << 8)
+                      | tt_read_uo_out(gpio);
+
+        // Speculatively prepare read data
+        uint8_t data;
+        if (addr == UART_RX_DATA)
+            data = uart_rx_buf;
+        else if (addr == UART_STATUS)
+            data = (multicore_fifo_wready() ? 0x01 : 0x00)
+                 | (uart_rx_ready           ? 0x02 : 0x00);
+        else
+            data = mem[addr];
+
+        // --- Posedge: latch address into demux, enter data phase ---
+        gpio_put(TT_GP_PROJCLK, 1);
+
+        // Data phase (clk HIGH, mux_sel=1).
+        // uo_out[0] = RWB, uio = D[7:0].
+        gpio = gpio_get_all();
+        if (tt_read_uo_out(gpio) & 0x01) {
+            // Read cycle (RWB=1): drive data onto uio
+            tt_write_uio(data);
+            tt_uio_set_dir(0xFF);
+            if (addr == UART_RX_DATA)
+                uart_rx_ready = false;
+        } else {
+            // Write cycle (RWB=0): capture data from uio
+            uint8_t wd = tt_read_uio(gpio);
+            if (addr == UART_TX_DATA) {
+                if (multicore_fifo_wready())
+                    multicore_fifo_push_blocking(wd);
+            } else {
+                mem[addr] = wd;
+            }
+        }
+
+        // --- Negedge: CPU latches read data, enter address phase ---
+        // Release uio BEFORE driving clk low (no bus contention).
+        tt_uio_set_dir(0x00);
+        gpio_put(TT_GP_PROJCLK, 0);
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Core 0: USB serial REPL and UART bridge
+// Core 0: program upload and UART bridge
+//
+// Upload protocol (over USB serial):
+//   1. Firmware prints banner + "Ready" prompt
+//   2. Host sends: 'L' <addr_lo> <addr_hi> <len_lo> <len_hi> <data...>
+//   3. Firmware loads data into mem[], prints "OK <len> bytes at <addr>"
+//   4. Repeat for additional segments
+//   5. Host sends: 'G' — firmware starts the CPU
+//   6. Host sends: 'R' — firmware stops the CPU, resets, re-enters upload
 // ---------------------------------------------------------------------------
 
 int main(void) {
@@ -162,7 +190,6 @@ int main(void) {
     tt_init_gpio();
 
     // TODO: Read project index from config or command line.
-    // For now, this must be set to the RISCY-V02 project index.
     uint16_t project_index = 0;
     tt_select_project(project_index);
 
@@ -171,26 +198,66 @@ int main(void) {
 
     tt_reset_project();
 
-    // Start bus servicing on core 1
-    multicore_launch_core1(core1_bus_service);
-
-    // Start project clock
-    // TODO: Make configurable.  1 MHz is conservative and easy to service.
-    tt_start_clock(1000000);
-
     printf("\nRISCY-V02 demoboard firmware\n");
     printf("Project index: %d\n", project_index);
-    printf("Clock: 1 MHz\n\n");
+    printf("Commands: L <addr16> <len16> <data...> | G (go) | R (reset)\n");
 
-    // Main loop: bridge UART peripheral to USB serial
     while (true) {
-        // USB → UART RX: buffer one byte for the CPU to read
-        int c = getchar_timeout_us(0);
-        if (c != PICO_ERROR_TIMEOUT && !uart_rx_ready) {
-            uart_rx_buf = (uint8_t)c;
-            uart_rx_ready = true;
+        printf("Ready\n");
+
+        // Upload loop: accept L/G commands until 'G' starts the CPU
+        bool running = false;
+        while (!running) {
+            int cmd = getchar();
+            switch (cmd) {
+            case 'L': {
+                uint16_t addr = (uint8_t)getchar();
+                addr |= (uint16_t)(uint8_t)getchar() << 8;
+                uint16_t len = (uint8_t)getchar();
+                len |= (uint16_t)(uint8_t)getchar() << 8;
+                for (uint16_t i = 0; i < len; i++)
+                    mem[addr + i] = (uint8_t)getchar();
+                printf("OK %u bytes at 0x%04X\n", len, addr);
+                break;
+            }
+            case 'G':
+                running = true;
+                break;
+            }
         }
 
-        tight_loop_contents();
+        // Launch core 1 — it drives the clock, so the CPU starts immediately
+        multicore_launch_core1(core1_bus_service);
+        printf("Running\n");
+
+        // UART bridge loop: core 0 handles USB ↔ UART
+        bool halted = false;
+        while (!halted) {
+            // UART TX: core 1 pushes bytes into the multicore FIFO
+            if (multicore_fifo_rvalid()) {
+                uint8_t tx = (uint8_t)multicore_fifo_pop_blocking();
+                putchar(tx);
+            }
+
+            // UART RX: buffer one byte from USB for the CPU to read
+            if (!uart_rx_ready) {
+                int c = getchar_timeout_us(0);
+                if (c != PICO_ERROR_TIMEOUT) {
+                    if (c == '\x12') {  // Ctrl-R: reset
+                        halted = true;
+                    } else {
+                        uart_rx_buf = (uint8_t)c;
+                        uart_rx_ready = true;
+                    }
+                }
+            }
+        }
+
+        // Stop core 1, reset project, re-enter upload loop
+        multicore_reset_core1();
+        gpio_put(TT_GP_PROJCLK, 0);
+        tt_uio_set_dir(0x00);
+        tt_reset_project();
+        printf("Reset\n");
     }
 }

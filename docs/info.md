@@ -535,17 +535,30 @@ The TT demoboard's RP2350 (Raspberry Pi Pico 2) can emulate 64 KiB of SRAM and a
 
 The SRAM region covers the full 64 KiB address space except for the UART window at `0xFF00`–`0xFF02`. Reads from `0xFF00` and writes to `0xFF01`/`0xFF02` are don't-care (the firmware ignores them).
 
-### Bus Servicing (Core 1)
+### Bus Servicing (Core 1) — Software-Driven Clock
 
-Core 1 watches the project clock and services each bus cycle according to the [Bus Protocol](#bus-protocol) described above. During the address phase (clk LOW), it reads AB[7:0] from `uo_out` and AB[15:8] from `uio`. During the data phase (clk HIGH), it checks RWB (`uo_out[0]`): on a read, it drives `uio` with the byte from the SRAM array (or the UART register); on a write, it captures `uio` into the SRAM array (or the UART TX register).
+Core 1 drives the project clock directly via GPIO (`gpio_put`), advancing the ASIC one phase at a time. This eliminates all timing pressure — each phase takes as long as it needs, with zero bus contention. The loop:
 
-The bus loop must complete within one half-period. At 1 MHz this is comfortable; higher clock speeds require tighter code (the RP2350 runs at 150 MHz by default, giving ~75 cycles per half-period at 1 MHz).
+1. **Address phase (clk LOW):** Read AB[7:0] from `uo_out` and AB[15:8] from `uio`. Speculatively prepare read data from the SRAM array or UART registers.
+2. **Posedge (`gpio_put(clk, 1)`):** The ASIC latches the address and enters data phase.
+3. **Data phase (clk HIGH):** Check RWB (`uo_out[0]`). On a read (RWB=1), drive `uio` with the prepared data byte. On a write (RWB=0), capture `uio` into the SRAM array or UART TX FIFO.
+4. **Release uio, then negedge (`gpio_put(clk, 0)`):** The ASIC latches read data and returns to address phase.
 
-> **Status:** The bus-servicing loop is currently a placeholder (`tight_loop_contents`). The protocol and memory map are defined but the GPIO bit-banging implementation is not yet written.
+Since the RP2350 *is* the memory system, a free-running PWM clock would create timing races. The software-driven clock is self-throttling, deterministic, and simpler to debug.
 
 ### UART Bridge (Core 0)
 
-Core 0 runs the standard Pico SDK USB serial stack and bridges it to the memory-mapped UART peripheral. When the CPU writes to `UART_TX_DATA` (`0xFF00`), core 1 hands the byte to core 0, which sends it over USB. When a byte arrives over USB, core 0 buffers it so the CPU can read it from `UART_RX_DATA` (`0xFF01`). The status register at `0xFF02` lets the CPU poll for TX readiness and RX data availability without side effects.
+Core 0 runs the standard Pico SDK USB serial stack and bridges it to the memory-mapped UART peripheral. TX bytes flow through the RP2350's hardware multicore FIFO: core 1 pushes bytes when the CPU writes to `UART_TX_DATA` (`0xFF00`), and core 0 pops them and sends them over USB. RX bytes are single-buffered: core 0 reads from USB into `uart_rx_buf`, and the CPU reads them from `UART_RX_DATA` (`0xFF01`). The status register at `0xFF02` lets the CPU poll for TX readiness (`multicore_fifo_wready`) and RX data availability without side effects.
+
+### Program Upload Protocol
+
+Before starting the CPU, the firmware accepts a binary upload over USB serial:
+
+1. Firmware prints a banner and `Ready` prompt.
+2. Host sends: `L` `<addr_lo>` `<addr_hi>` `<len_lo>` `<len_hi>` `<data...>` — loads `len` bytes into `mem[addr]`.
+3. Firmware prints `OK <len> bytes at 0x<addr>`. Repeat step 2 for additional segments (e.g., code at `0x0000`, vectors at `0x0008`).
+4. Host sends: `G` — firmware launches core 1 and enters the UART bridge loop. Prints `Running`.
+5. Host sends: Ctrl-R (`0x12`) during execution — firmware stops core 1, resets the project, prints `Reset`, and returns to step 1.
 
 ### Building and Flashing
 
@@ -561,6 +574,4 @@ Flash `build/riscyv02_firmware.uf2` by holding BOOTSEL while plugging in the Pic
 
 ### Startup Sequence
 
-The firmware initializes GPIO, selects the RISCY-V02 project on the TT mux, sets `ui_in` to `0x07` (IRQB=1, NMIB=1, RDY=1 — all inactive), resets the project, launches the bus-servicing loop on core 1, and starts the project clock at 1 MHz via PWM. Once running, it prints a banner to USB serial and enters the UART bridge loop.
-
-To load a program, write the binary image into the `mem[]` array before releasing reset — either by compiling it into the firmware as a C array, or by adding a serial upload protocol to the core 0 loop.
+The firmware initializes GPIO, selects the RISCY-V02 project on the TT mux, sets `ui_in` to `0x07` (IRQB=1, NMIB=1, RDY=1 — all inactive), resets the project, then enters the upload loop. Core 1 is launched only after receiving the `G` command, at which point it begins driving the clock and servicing the bus. No PWM is used — the clock is entirely software-driven.

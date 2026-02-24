@@ -36,7 +36,6 @@ add_executable(riscyv02_firmware main.c)
 target_link_libraries(riscyv02_firmware
     pico_stdlib
     pico_multicore
-    hardware_pwm
 )
 
 pico_enable_stdio_usb(riscyv02_firmware 1)
