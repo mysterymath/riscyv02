@@ -284,13 +284,13 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
 | CLI | Clear interrupt disable | I = 0 | 2 | [5](#notes) |
-| SEI | Set interrupt disable | I = 1 | 2 | |
+| SEI | Set interrupt disable | I = 1 | 2 | [5](#notes) |
 | SRR | Status register read | rd = {12'b0, ESR, I, T} | 2 | |
-| SRW | Status register write | ESR = rs[3:2]; {I, T} = rs[1:0] | 2 | |
+| SRW | Status register write | ESR = rs[3:2]; {I, T} = rs[1:0] | 2 | [5](#notes) |
 | EPCR | Read EPC | rd = EPC | 2 | |
 | EPCW | Write EPC | EPC = rs | 2 | |
-| INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 3 | [7](#notes) |
-| RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 3 | [6](#notes) |
+| INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 3 | [5](#notes), [7](#notes) |
+| RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 3 | [5](#notes), [6](#notes) |
 | WAI | Wait for interrupt | halt until interrupt | 2 / halt | [8](#notes) |
 | STP | Stop | halt until reset | 1 | |
 
@@ -304,9 +304,9 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 
 4. **RLT/RRT** — 17-bit rotate through T (6502 ROL/ROR equivalent).
 
-5. **CLI** — Pending IRQ taken at next dispatch boundary.
+5. **I-flag atomicity** — All instructions that modify I (CLI, SEI, SRW, INT, RETI) take effect atomically at the dispatch boundary. The new I value gates IRQ in the same combinational evaluation where the instruction completes, so there is no window where the old I is visible. CLI/RETI/SRW restoring I=0 can fire a pending IRQ on the same cycle; SEI/INT setting I=1 blocks it.
 
-6. **RETI** — If I restored to 0, pending IRQ fires same cycle RETI completes (via `insn_i_bit`).
+6. **RETI** — Restores both I and T from ESR. If ESR.I=0, see note 5.
 
 7. **INT** — Unconditional (ignores I).
 
