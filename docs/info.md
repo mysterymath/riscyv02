@@ -13,12 +13,12 @@ In comparison to the 6502, it provides:
 | 8x 16-bit registers | 3x 8-bit registers |
 | 2-cycle 16-bit arithmetic | 2/3-cycle 8-bit arithmetic |
 | 2-cycle variable-width shifts (arithmetic or logical) | 2-3 cycle 1-bit logical shifts |
-| 2 cycle interrupt entry/exit | 7-cycle interrupt entry, 6 cycle exit |
+| 2-cycle interrupt entry, 3-cycle exit | 7-cycle interrupt entry, 6 cycle exit |
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 16,780 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,396 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 16,950 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,566 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -114,7 +114,7 @@ NMI handlers typically reset, halt, or spin. This is typical of modern RISC
 CPUs: NMI is intended for fatal hardware fault handling.
 
 **Interrupt latency:** 2 cycles from instruction completion to first handler
-instruction fetch (instantaneous dispatch + 2-cycle vector fetch). NMI edge
+instruction fetch (dispatch-time redirect + 2-cycle vector fetch). NMI edge
 detection is combinational -- if the falling edge arrives on the same cycle
 that the FSM is ready, the NMI is taken immediately with no additional
 detection delay.
@@ -132,12 +132,12 @@ None — the TT demoboard's RP2350 provides SRAM emulation and I/O. No additiona
 
 ### Interrupt implementation
 
-**Dispatch:** All interrupt entry (IRQ, NMI, BRK) is handled at dispatch time
+**Dispatch:** Hardware interrupt entry (IRQ, NMI) is handled at dispatch time
 in a single cycle. When the FSM is ready (instruction completing or idle), the
 hardware saves EPC and ESR, sets I=1, and redirects the PC to the vector
-address. The 2-cycle vector fetch is the only latency. BRK (INT with vector 1)
-is handled identically at instruction dispatch. Since all three share the same
-INT encoding format, software can also trigger IRQ/NMI vectors directly.
+address. The 2-cycle vector fetch is the only latency. INT and RETI are normal
+1-execute-cycle instructions (like same-page JR): they dispatch to E_EXEC_LO,
+complete in one cycle, then the 2-cycle target fetch follows (3 cycles total).
 
 **Interrupt entry:**
 1. Complete the current instruction
@@ -289,8 +289,8 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 | SRW | Status register write | ESR = rs[3:2]; {I, T} = rs[1:0] | 2 | |
 | EPCR | Read EPC | rd = EPC | 2 | |
 | EPCW | Write EPC | EPC = rs | 2 | |
-| INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 2 | [7](#notes) |
-| RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 2 | [6](#notes) |
+| INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 3 | [7](#notes) |
+| RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 3 | [6](#notes) |
 | WAI | Wait for interrupt | halt until interrupt | 2 / halt | [8](#notes) |
 | STP | Stop | halt until reset | 1 | |
 
@@ -306,7 +306,7 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 
 5. **CLI** — Pending IRQ taken at next dispatch boundary.
 
-6. **RETI** — If I restored to 0, pending IRQ fires at RETI dispatch.
+6. **RETI** — If I restored to 0, pending IRQ fires same cycle RETI completes (via `insn_i_bit`).
 
 7. **INT** — Unconditional (ignores I).
 
@@ -432,7 +432,8 @@ Throughput is measured from one instruction boundary (SYNC) to the next. Three f
 | J page crossing / JAL | 4 | Redirect: 2 execute + 2 fetch |
 | JR same page | 3 | Redirect: 1 execute + 2 fetch |
 | JR page crossing / JALR | 4 | Redirect: 2 execute + 2 fetch |
-| RETI / INT / IRQ / NMI | 2 | Redirect at dispatch: 0 execute + 2 fetch |
+| IRQ / NMI | 2 | Redirect at dispatch: 0 execute + 2 fetch |
+| RETI / INT | 3 | Redirect: 1 execute + 2 fetch |
 | WAI (wake) | 2 | Fetch-limited (execute hidden) |
 | WAI (halt) | -- | Halted until interrupt |
 | STP | 1 | Enters halt (no fetch) |
@@ -954,7 +955,7 @@ A classic demo effect: an interrupt fires once per scanline to change the backgr
 Both CPUs must finish the current instruction before taking the interrupt. The average wait depends on the instruction mix of the interrupted code:
 
 - **6502:** Instructions take 2–7 cycles. Length-biased sampling across a typical game loop gives an average wait of **~1.5 cycles**. After the instruction completes, the hardware pushes PC and status to the stack and reads the IRQ vector: **7 cycles**.
-- **RISCY-V02:** Instructions take 2–4 cycles (pipeline-visible). Average wait: **~1 cycle**. After completion, EPC/ESR are saved and the PC is redirected in the same cycle (instantaneous dispatch), then the vector is fetched: **2 cycles**.
+- **RISCY-V02:** Instructions take 2–4 cycles (pipeline-visible). Average wait: **~1 cycle**. After completion, EPC/ESR are saved and the PC is redirected at dispatch (instantaneous), then the vector is fetched: **2 cycles**.
 
 **6502** — color byte at $02 (zero page), VIC-II at $D019/$D021
 
@@ -990,7 +991,7 @@ Every register the handler touches must be saved and restored. The handler needs
 Register saves go below the current SP without adjusting it. This is safe because RISCY-V02's IRQ entry sets I=1, masking further IRQs, and NMI handlers cannot return (RETI from NMI is undefined behavior per the architecture — NMI handlers reset, halt, or spin). Since nothing that could resume the handler will touch the stack, the space below SP is exclusively ours for the handler's lifetime.
 
 ```
-                                    ;  2 cy        entry: instantaneous dispatch + fetch vector
+                                    ;  2 cy        entry: dispatch + fetch vector
 irq_handler:
     SWS  R0, -4         ;  4 cy   2 B    save R0 below SP
     SWS  R5, -2         ;  4 cy   2 B    save R5 below SP
@@ -1003,7 +1004,7 @@ irq_handler:
     SB   R5, $19        ;  3 cy   2 B    $D019: ack raster interrupt
     LWS  R5, -2         ;  4 cy   2 B    restore R5
     LWS  R0, -4         ;  4 cy   2 B    restore R0
-    RETI                ;  2 cy   2 B
+    RETI                ;  3 cy   2 B
 ```
 
 | Phase | Cycles |
@@ -1013,8 +1014,8 @@ irq_handler:
 | Register save (`SWS`×2) | 8 |
 | Handler body | 18 |
 | Register restore (`LWS`×2) | 8 |
-| Exit (`RETI`+fetch) | 2 |
-| **Total** | **~39** |
+| Exit (`RETI`+fetch) | 3 |
+| **Total** | **~40** |
 
 Total code: **24 bytes**
 
@@ -1024,8 +1025,8 @@ Total code: **24 bytes**
 | Insn wait (avg) | ~1.5 cy | ~1 cy |
 | Save/restore | 7 cy | 16 cy |
 | Handler body | 18 cy | 18 cy |
-| Exit | 6 cy | 2 cy |
-| **Total** | **~39.5 cy** | **~39 cy** |
+| Exit | 6 cy | 3 cy |
+| **Total** | **~39.5 cy** | **~40 cy** |
 | Code size | 15 B | 24 B |
 
 Essentially a tie. The 6502's advantage — each instruction carries its own address, so the handler mixes zero-page and absolute accesses without base register setup — is offset by RISCY-V02's 2-cycle entry/exit vs 13. RISCY-V02 must reload R0 when switching memory regions and save/restore two registers (16 cy vs 7 cy), but the entry/exit savings compensate. For handlers with more useful work, the save/restore cost is fixed while body instructions are generally faster.

@@ -180,7 +180,7 @@ async def test_cycle_count_j(dut):
 
 @cocotb.test()
 async def test_cycle_count_reti(dut):
-    """RETI takes 2 cycles (instantaneous dispatch)."""
+    """RETI takes 3 cycles (1 execute + 2 fetch)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -215,8 +215,8 @@ async def test_cycle_count_reti(dut):
         if get_sync():
             break
 
-    dut._log.info(f"RETI: {cycles} cycles (expected 2)")
-    assert cycles == 2, f"RETI: expected 2 cycles, got {cycles}"
+    dut._log.info(f"RETI: {cycles} cycles (expected 3)")
+    assert cycles == 3, f"RETI: expected 3 cycles, got {cycles}"
 
 
 @cocotb.test()
@@ -302,7 +302,7 @@ async def test_cycle_count_stp(dut):
 
 @cocotb.test()
 async def test_cycle_count_brk(dut):
-    """BRK takes 2 cycles (instantaneous dispatch)."""
+    """BRK takes 3 cycles (1 execute + 2 fetch)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
@@ -334,8 +334,8 @@ async def test_cycle_count_brk(dut):
         if get_sync():
             break
 
-    dut._log.info(f"BRK: {cycles} cycles (expected 2)")
-    assert cycles == 2, f"BRK: expected 2 cycles, got {cycles}"
+    dut._log.info(f"BRK: {cycles} cycles (expected 3)")
+    assert cycles == 3, f"BRK: expected 3 cycles, got {cycles}"
 
 
 @cocotb.test()

@@ -217,6 +217,7 @@ class RISCYV02Sim:
 
         # Fetch ir before committing stores (not visible to next fetch),
         # then commit before execute (visible to loads).
+        # All instructions (including INT/RETI) go through _execute().
         fetch_pc = self.pc
         lo = self.ram[self.pc & 0xFFFF]
         hi = self.ram[(self.pc | 1) & 0xFFFF]
@@ -224,52 +225,14 @@ class RISCYV02Sim:
         self.pc = (self.pc + 2) & 0xFFFF
         self._commit_pending_stores()
 
-        # Dispatch: decode and handle instantaneous instructions (INT, RETI),
-        # then fall through to normal execute for everything else.
         opcode = ir & 0x1F
         next_pc = self.pc
         regs_before = list(self.regs)
 
-        # INT (opcode 31, ir[15:14]=11): instantaneous
-        if opcode == 31 and ((ir >> 14) & 3) == 3:
-            vector_idx = (ir >> 6) & 3
-            if vector_idx != 3:
-                # vec 0-2: save context and jump to vector
-                self.esr = (int(self.i_bit) << 1) | int(self.t_bit)
-                self.epc = self.pc
-                self.i_bit = True
-                self.pc = ((vector_idx + 1) & 3) << 1
-            # vec 3: NOP — PC stays at next instruction, flush + refetch
-            self._bus_seq = self._fetch_seq(self.pc)
-            self._interrupt_point = 0  # E_IDLE: interruptible every cycle
-            self.current_sync = True
-            self.last_dispatch = (
-                f"INSN @0x{fetch_pc:04X} ir=0x{ir:04X}"
-                f" {'INT' if vector_idx != 3 else 'NOP(INT3)'}"
-                f" regs={['%04X' % r for r in regs_before]}"
-                f" -> pc=0x{self.pc:04X}"
-                + (f" epc=0x{self.epc:04X}" if vector_idx != 3 else "")
-            )
-            return
-
-        # RETI (opcode 31, funct4=8): instantaneous redirect
-        if opcode == 31 and ((ir >> 12) & 0xF) == 8:
-            self.i_bit = bool(self.esr & 2)
-            self.t_bit = bool(self.esr & 1)
-            self.pc = self.epc & 0xFFFE
-            self._bus_seq = self._fetch_seq(self.pc)
-            self._interrupt_point = 1  # one wasted fetch cycle, then IRQ can fire
-            self.current_sync = True
-            self.last_dispatch = (
-                f"INSN @0x{fetch_pc:04X} ir=0x{ir:04X} RETI"
-                f" regs={['%04X' % r for r in regs_before]}"
-                f" -> pc=0x{self.pc:04X}"
-            )
-            return
-
         # Normal execute path
         self._redirect = False
         self._fast_redirect = False
+        self._1cycle_complete = False
         mem_entries = self._execute(ir)
         # Same-page redirect: 1 wasted fetch entry (3-cycle), else 2 (4-cycle)
         if self._fast_redirect:
@@ -281,7 +244,11 @@ class RISCYV02Sim:
             self._bus_seq = exec_entries + self._fetch_seq(self.pc)
         else:
             self._bus_seq = exec_entries
-        self._interrupt_point = len(exec_entries)
+        # E_EXEC_LO completions without redirect: interruptible after 1 bus cycle
+        if self._1cycle_complete and not self._redirect:
+            self._interrupt_point = 1
+        else:
+            self._interrupt_point = len(exec_entries)
         self.current_sync = True
 
         self.last_dispatch = (
@@ -666,8 +633,26 @@ class RISCYV02Sim:
                 self.esr = (val >> 2) & 3
                 return []
 
-            # RETI (funct4==8) handled at dispatch — never reaches _execute
-            # INT (funct4>=12) handled at dispatch — never reaches _execute
+            if funct4 == 8:               # RETI
+                self.i_bit = bool(self.esr & 2)
+                self.t_bit = bool(self.esr & 1)
+                self.pc = self.epc & 0xFFFE
+                self._redirect = True
+                self._fast_redirect = True
+                return []
+
+            if funct4 >= 12:              # INT (ir[15:14]==11)
+                vector_idx = (ir >> 6) & 3
+                if vector_idx != 3:
+                    self.esr = (int(self.i_bit) << 1) | int(self.t_bit)
+                    self.epc = self.pc
+                    self.i_bit = True
+                    self.pc = ((vector_idx + 1) & 3) << 1
+                    self._redirect = True
+                    self._fast_redirect = True
+                else:
+                    self._1cycle_complete = True
+                return []
 
         # Unknown instruction — treat as 2-cycle NOP
         return []

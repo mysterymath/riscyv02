@@ -174,6 +174,8 @@ module riscyv02_execute (
   wire is_epcw = opcode == 5'd31 && ir[15:12] == 4'd5;
   wire is_srr  = opcode == 5'd31 && ir[15:12] == 4'd6;
   wire is_srw  = opcode == 5'd31 && ir[15:12] == 4'd7;
+  wire is_reti = opcode == 5'd31 && ir[15:12] == 4'd8;
+  wire is_int  = opcode == 5'd31 && ir[15:14] == 2'b11;
 
   // --- Behavioral groups ---
 
@@ -433,8 +435,6 @@ module riscyv02_execute (
   wire take_nmi = fsm_ready && (nmi_pending || nmi_edge) && !nmi_ack;
   wire take_irq = fsm_ready && !irqb && !insn_i_bit && !take_nmi;
   assign ir_accept = fsm_ready && ir_valid && !take_nmi && !take_irq && !jump;
-  wire soft_int_disp = ir_accept && fetch_opcode == 5'd31 && fetch_ir[15:14] == 2'b11;
-  wire reti_disp     = ir_accept && fetch_opcode == 5'd31 && fetch_ir[15:12] == 4'd8;
   assign waiting = (state == E_IDLE) && is_wai;
   assign stopped = (state == E_IDLE) && is_stp;
 
@@ -510,9 +510,22 @@ module riscyv02_execute (
             next_pc         = {pc[15:8], alu_result[7:1]};
             insn_completing = 1'b1;
           end
+        end else if (is_int) begin
+          if (ir[7:6] != 2'b11) begin
+            next_epc   = {pc, 1'b0};
+            next_esr   = {i_bit, t_bit};
+            insn_i_bit = 1'b1;
+            next_pc    = {13'b0, ir[7:6] + 2'd1};
+            jump       = 1'b1;
+          end
+          insn_completing = 1'b1;
+        end else if (is_reti) begin
+          next_pc    = epc[15:1];
+          insn_i_bit = esr[1];
+          next_t_bit = esr[0];
+          jump       = 1'b1;
+          insn_completing = 1'b1;
         end
-
-        // State transition
         next_carry_r = alu_co;
         if (is_wai || is_stp)
           next_state = E_IDLE;
@@ -601,7 +614,6 @@ module riscyv02_execute (
           end
           next_state = E_IDLE;
         end
-        next_i_bit = insn_i_bit;
       end
 
       E_MEM_LO: begin
@@ -635,6 +647,8 @@ module riscyv02_execute (
       default: next_state = 3'bx;
     endcase
 
+    next_i_bit = insn_i_bit;
+
     // -----------------------------------------------------------------
     // Interrupt entry (overrides state machine)
     // -----------------------------------------------------------------
@@ -654,36 +668,16 @@ module riscyv02_execute (
       next_pc      = pc + 15'd1;
       next_ir      = fetch_ir;
       next_r2_hi_r = 1'b0;
-      if (soft_int_disp) begin
-        // Software INT: instantaneous
-        if (fetch_ir[7:6] != 2'b11) begin
-          // vec 0-2: save context and jump to vector
-          next_epc   = {pc + 15'd1, 1'b0};
-          next_esr   = {insn_i_bit, next_t_bit};
-          next_i_bit = 1'b1;
-          next_pc    = {13'b0, fetch_ir[7:6] + 2'd1};
-        end
-        // vec 3: NOP — next_pc stays as pc+1, no side effects
-        next_state = E_IDLE;
-      end else if (reti_disp) begin
-        // RETI: instantaneous (use next_epc for back-to-back EPCW+RETI)
-        next_pc    = next_epc[15:1];
-        next_i_bit = esr[1];
-        next_t_bit = esr[0];
-        next_state = E_IDLE;
-      end else begin
-        // Normal dispatch to execute phase
-        if (fetch_opcode >= 5'd2 && fetch_opcode <= 5'd6)        // LW..SB
-          next_r1_sel = 3'd0;                                      // R0 base
-        else if (fetch_opcode >= 5'd17 && fetch_opcode <= 5'd21)  // LWS..SBS
-          next_r1_sel = 3'd7;                                      // SP (R7)
-        else
-          next_r1_sel = fetch_ir[7:5];                             // Default: reg at [7:5]
-        next_state = E_EXEC_LO;
-      end
+      if (fetch_opcode >= 5'd2 && fetch_opcode <= 5'd6)
+        next_r1_sel = 3'd0;
+      else if (fetch_opcode >= 5'd17 && fetch_opcode <= 5'd21)
+        next_r1_sel = 3'd7;
+      else
+        next_r1_sel = fetch_ir[7:5];
+      next_state = E_EXEC_LO;
     end
 
-    fetch_flush = take_nmi || take_irq || jump || soft_int_disp || reti_disp;
+    fetch_flush = take_nmi || take_irq || jump;
   end
 
   // ==========================================================================
