@@ -227,6 +227,41 @@ async def test_stp(dut):
 
 
 @cocotb.test()
+async def test_nmib_low_during_reset_no_spurious_nmi(dut):
+    """Holding NMIB low throughout reset must not cause a spurious NMI.
+
+    nmib_prev resets to 1 (inactive).  If NMIB is already low when reset
+    releases, the edge detector would see a 1->0 transition that never
+    actually occurred on the pin.  The fix: reset nmib_prev to 0 (active),
+    which means "assume NMI was already asserted."  Trade-off: an NMI that
+    arrives on the exact cycle reset releases is missed (same as the 6502,
+    whose 7-cycle reset sequence clears any pending NMI).
+    """
+    clock = Clock(dut.clk, 10, unit="us")
+    cocotb.start_soon(clock.start())
+
+    a = Asm()
+    a.spin()                     # 0x0000: reset vector spin
+    a.org(0x0002)
+    a.li(1, 0x42)                # 0x0002: NMI handler
+    a.sw(1, 0x40)                # 0x0004
+    a.spin()                     # 0x0006
+    a.org(0x0040)
+    a.dw(0x0000)
+
+    _load_program(dut, a.assemble())
+    dut.ena.value = 1
+    dut.ui_in.value = 0x05  # RDY=1, NMIB=0 (asserted!), IRQB=1
+    dut.rst_n.value = 0
+    await ClockCycles(dut.clk, 20)
+    dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 100)
+
+    val = _read_ram(dut, 0x0040) | (_read_ram(dut, 0x0041) << 8)
+    assert val == 0x0000, f"Spurious NMI fired after reset! Got {val:#06x}"
+
+
+@cocotb.test()
 async def test_nmi(dut):
     """NMI fires on NMIB falling edge, even with I=1."""
     clock = Clock(dut.clk, 10, unit="us")

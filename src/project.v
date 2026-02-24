@@ -58,13 +58,19 @@ module tt_um_riscyv02 (
   );
 
   // -----------------------------------------------------------------------
-  // NMI edge detection — ungated clock so edges during RDY=0 are captured
+  // NMI edge detection — ungated clock so edges during RDY=0 are captured.
+  //
+  // nmib_prev resets to 0 (active), meaning "assume NMI was already
+  // asserted."  This prevents a spurious edge if NMIB is held low
+  // during reset.  Trade-off: an NMI arriving on the exact cycle reset
+  // releases is missed — same as the 6502, whose reset sequence clears
+  // any pending NMI.
   // -----------------------------------------------------------------------
   wire nmib = ui_in[1];  // Active-low non-maskable interrupt (edge-triggered)
 
   reg nmib_prev;
   always @(negedge clk or negedge rst_n)
-    if (!rst_n) nmib_prev <= 1'b1;
+    if (!rst_n) nmib_prev <= 1'b0;
     else        nmib_prev <= nmib;
 
   wire nmi_edge = nmib_prev && !nmib;

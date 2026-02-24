@@ -130,6 +130,7 @@ async def test_fuzz(dut):
         dut.rst_n.value = 0
         await ClockCycles(dut.clk, 20)
         dut.rst_n.value = 1
+        await FallingEdge(dut.clk)  # Let first post-reset negedge settle
 
         # Generate input sequence
         inputs = _gen_inputs(rng, n_cycles)
