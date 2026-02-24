@@ -130,27 +130,65 @@ Flash the [demo board firmware](#demo-board-firmware) onto the TT demoboard's RP
 
 None — the TT demoboard's RP2350 provides SRAM emulation and I/O. No additional PCB or components are needed.
 
-### Interrupt implementation
+## Demo Board Firmware
 
-**Dispatch:** Hardware interrupt entry (IRQ, NMI) is handled at dispatch time
-in a single cycle. When the FSM is ready (instruction completing or idle), the
-hardware saves EPC and ESR, sets I=1, and redirects the PC to the vector
-address. The 2-cycle vector fetch is the only latency. INT and RETI are normal
-1-execute-cycle instructions (like same-page JR): they dispatch to E_EXEC_LO,
-complete in one cycle, then the 2-cycle target fetch follows (3 cycles total).
+The TT demoboard's RP2350 (Raspberry Pi Pico 2) can emulate 64 KiB of SRAM and a simple UART peripheral entirely in software, removing the need for external memory hardware. The firmware lives in `firmware/` and uses both RP2350 cores: core 1 runs a tight bus-servicing loop that responds to the CPU's muxed bus protocol, while core 0 bridges a memory-mapped UART peripheral to the demoboard's USB serial port.
 
-**Interrupt entry:**
-1. Complete the current instruction
-2. Save ESR = {I, T} -- status flags at interrupt entry
-3. Save EPC = next_PC -- clean 16-bit return address
-4. Set I = 1 -- disable further interrupts
-5. Jump to vector entry
+### Building and Flashing
 
-**Interrupt return (RETI instruction):**
-1. Restore {I, T} from ESR
-2. Jump to EPC
+Prerequisites: CMake, Ninja, and the [Pico SDK](https://github.com/raspberrypi/pico-sdk) (v2.2.0). If `PICO_SDK_PATH` is not set, the build system fetches the SDK automatically.
 
-**Exception state:** EPC is a standalone 16-bit register holding the clean return address. ESR is a 2-bit register holding {I, T} at the time of interrupt entry. Neither is directly addressable through normal register fields. EPC is accessible through EPCR/EPCW. SRR reads `{12'b0, ESR[1:0], I, T}` and SRW writes `ESR = rs[3:2], {I, T} = rs[1:0]`, providing direct access to both live flags and saved exception state in a single instruction. All GP registers (R0-R7) are directly accessible in interrupt context -- there is no register banking.
+```
+cd firmware
+cmake -B build -G Ninja
+cmake --build build
+```
+
+Flash `build/riscyv02_firmware.uf2` by holding BOOTSEL while plugging in the Pico 2, then dragging the file to the USB mass-storage device that appears.
+
+### Program Upload Protocol
+
+Before starting the CPU, the firmware accepts a binary upload over USB serial:
+
+1. Firmware prints a banner and `Ready` prompt.
+2. Host sends: `L` `<addr_lo>` `<addr_hi>` `<len_lo>` `<len_hi>` `<data...>` — loads `len` bytes into `mem[addr]`.
+3. Firmware prints `OK <len> bytes at 0x<addr>`. Repeat step 2 for additional segments (e.g., code at `0x0000`, vectors at `0x0008`).
+4. Host sends: `G` — firmware launches core 1 and enters the UART bridge loop. Prints `Running`.
+5. Host sends: Ctrl-R (`0x12`) during execution — firmware stops core 1, resets the project, prints `Reset`, and returns to step 1.
+
+### Memory Map
+
+| Address | R/W | Function |
+|---------|-----|----------|
+| `0x0000`–`0xFEFF` | R/W | 64 KiB SRAM (byte-addressable) |
+| `0xFF00` | W | UART TX — written byte is sent over USB serial |
+| `0xFF01` | R | UART RX — reads the next byte received from USB serial |
+| `0xFF02` | R | UART status — bit 0: TX ready, bit 1: RX data available |
+
+The SRAM region covers the full 64 KiB address space except for the UART window at `0xFF00`–`0xFF02`. Reads from `0xFF00` and writes to `0xFF01`/`0xFF02` are don't-care (the firmware ignores them).
+
+### Startup Sequence
+
+The firmware initializes GPIO, selects the RISCY-V02 project on the TT mux, sets `ui_in` to `0x07` (IRQB=1, NMIB=1, RDY=1 — all inactive), resets the project, then enters the upload loop. Core 1 is launched only after receiving the `G` command, at which point it begins driving the clock and servicing the bus. No PWM is used — the clock is entirely software-driven.
+
+### Bus Servicing (Core 1) — Software-Driven Clock
+
+Core 1 drives the project clock directly via GPIO (`gpio_put`), advancing the ASIC one phase at a time. This eliminates all timing pressure — each phase takes as long as it needs, with zero bus contention. The loop:
+
+1. **Address phase (clk LOW):** Read AB[7:0] from `uo_out` and AB[15:8] from `uio`. Speculatively prepare read data from the SRAM array or UART registers.
+2. **Posedge (`gpio_put(clk, 1)`):** The ASIC latches the address and enters data phase.
+3. **Data phase (clk HIGH):** Check RWB (`uo_out[0]`). On a read (RWB=1), drive `uio` with the prepared data byte. On a write (RWB=0), capture `uio` into the SRAM array or UART TX FIFO.
+4. **Release uio, then negedge (`gpio_put(clk, 0)`):** The ASIC latches read data and returns to address phase.
+
+Since the RP2350 *is* the memory system, a free-running PWM clock would create timing races. The software-driven clock is self-throttling, deterministic, and simpler to debug.
+
+### UART Bridge (Core 0)
+
+Core 0 runs the standard Pico SDK USB serial stack and bridges it to the memory-mapped UART peripheral. TX bytes flow through the RP2350's hardware multicore FIFO: core 1 pushes bytes when the CPU writes to `UART_TX_DATA` (`0xFF00`), and core 0 pops them and sends them over USB. RX bytes are single-buffered: core 0 reads from USB into `uart_rx_buf`, and the CPU reads them from `UART_RX_DATA` (`0xFF01`). The status register at `0xFF02` lets the CPU poll for TX readiness (`multicore_fifo_wready`) and RX data availability without side effects.
+
+## Instruction Set
+
+All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by default; ANDI, ORI, and CLTUI zero-extend instead. PC-relative offsets (branches, J, JAL, AUIPC) are all relative to PC+2 (address of next instruction); the assembler's encoded immediate accounts for this. "Page crossing" means the upper byte of the target address differs from PC+2.
 
 ### Register Naming Convention
 
@@ -171,9 +209,7 @@ The 3/1/2 split (argument/temporary/callee-saved) among the six free registers f
 
 R6 is a normal GPR — callee-saved, and interrupt handlers that use it must save and restore it manually. The interrupt return address lives in EPC, not R6. R-type loads and stores bypass the R0 convention, allowing explicit selection of both data register and base with no offset.
 
-## Instruction Set
-
-All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by default; ANDI, ORI, and CLTUI zero-extend instead. PC-relative offsets (branches, J, JAL, AUIPC) are all relative to PC+2 (address of next instruction); the assembler's encoded immediate accounts for this. "Page crossing" means the upper byte of the target address differs from PC+2.
+### Instruction Reference
 
 **Effect column notation:**
 
@@ -190,8 +226,6 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 | <s | Signed less-than |
 | {a, b} | Bit concatenation |
 | [n:m] | Bit slice (MSB:LSB) |
-
-### Instruction Reference
 
 **Arithmetic & Logic**
 
@@ -323,6 +357,105 @@ All 61 instructions are fixed 16-bit (2 bytes). Immediates are sign-extended by 
 - **Nested interrupts** — Stack EPC and the upper two bits of SRR (ESR), then restore them on entry.
 - **Software breakpoint** — `INT 1` (BRK): handler at $0004.
 
+## Code Comparison: RISCY-V02 vs 6502
+
+Side-by-side assembly for common routines, comparing cycle counts and code sizes. The [full comparison with annotated assembly](https://github.com/mysterymath/riscyv02/blob/main/tt-ihp-riscyv02/docs/code-comparison.md) shows every instruction. 6502 library routines use [cc65](https://github.com/cc65/cc65) runtime implementations where applicable. All cycle counts assume same-page branches.
+
+| Routine | 6502 | RISCY-V02 | Speedup | 6502 Size | RISCY-V02 Size |
+|---|---|---|---|---|---|
+| memcpy | 14.5 cy/byte | 8.5 cy/byte | 1.7× | 38 B | 28 B |
+| strcpy | 18 cy/char | 13 cy/char | 1.4× | 18 B | 12 B |
+| 16×16 multiply | ~536 cy | ~232 cy | 2.3× | 34 B | 20 B |
+| 16÷16 division | ~720 cy | ~280 cy | 2.6× | 37 B | 22 B |
+| CRC-8 (SMBUS) | 101 cy/byte | 100 cy/byte | 1.0× | 22 B | 32 B |
+| CRC-16/CCITT | 227 cy/byte | 100 cy/byte | 2.3× | 43 B | 34 B |
+| Raster bar IRQ | ~39.5 cy | ~40 cy | 1.0× | 15 B | 24 B |
+| RC4 keystream | 61 cy/byte | 38 cy/byte | 1.6× | 34 B | 32 B |
+
+**32-bit arithmetic** (inline sequences, not calls):
+
+| Operation | 6502 Cycles | RISCY-V02 Cycles | Speedup | 6502 Size | RISCY-V02 Size |
+|---|---|---|---|---|---|
+| ADD / SUB | 38 | 9–10 | 3.8–4.2× | 25 B | 10 B |
+| AND / OR / XOR | 36 | 4 | 9.0× | 24 B | 4 B |
+| SLL / SRL (N=8) | 204 | 19 | 10.7× | 15 B | 26 B |
+| SRA (N=8) | 244 | 19 | 12.8× | 18 B | 26 B |
+
+**Packed BCD addition** (6502 has hardware decimal mode):
+
+| Width | 6502 Cycles | RISCY-V02 Cycles | Speedup | 6502 Size | RISCY-V02 Size |
+|---|---|---|---|---|---|
+| 2-digit (8-bit) | 9 | 28 | 0.3× | 5 B | 28 B |
+| 4-digit (16-bit) | 24 | 30 | 0.8× | 15 B | 30 B |
+| 8-digit (32-bit) | 42 | 68 | 0.6× | 25 B | 68 B |
+
+RISCY-V02 is faster at almost everything — the 16-bit data path eliminates byte-at-a-time serialization. The exceptions: CRC-8 and raster bar IRQ are ties (both dominated by 8-bit operations that map naturally to the 6502), and packed BCD is a clear 6502 win (hardware `SED` mode vs software nibble correction).
+
+## Pipeline and Timing
+
+The 2-stage pipeline (Fetch and Execute) overlaps fetch of the next instruction with execution of the current one. For sequential code and not-taken branches, the execute cost is completely hidden — throughput is limited by the 2-cycle fetch. Only taken branches and jumps pay execute cost directly, because the redirect flushes the speculative fetch.
+
+### Cycle Counts (Throughput)
+
+Throughput is measured from one instruction boundary (SYNC) to the next. Three factors determine the count:
+
+1. **Fetch floor (2 cycles):** fetching the next instruction always takes 2 cycles (lo byte, hi byte). Execute overlaps with fetch, so any instruction with 2 or fewer execute cycles is fetch-limited at 2.
+2. **Bus contention (+1 per byte transferred):** memory loads/stores take the bus from fetch to transfer data. The 2 address-compute cycles (E_EXEC_LO, E_EXEC_HI) are hidden behind the fetch, but each bus transfer cycle adds 1 to the total.
+3. **Redirect penalty (execute exposed):** taken branches and jumps flush the speculative fetch, so execute cycles are no longer hidden. Total = execute cycles + 2 fresh fetch cycles.
+
+| Instruction | Cycles | Why |
+|---|---|---|
+| ALU / shifts / compares | 2 | Fetch-limited (execute hidden) |
+| SEI / CLI / SRR / SRW / EPCR / EPCW | 2 | Fetch-limited (execute hidden) |
+| Branch not taken | 2 | Fetch-limited (execute hidden) |
+| Branch taken, same page | 3 | Redirect: 1 execute + 2 fetch |
+| Branch taken, page crossing | 4 | Redirect: 2 execute + 2 fetch |
+| Byte load / store | 3 | Fetch floor + 1 bus transfer |
+| Word load / store | 4 | Fetch floor + 2 bus transfers |
+| J same page | 3 | Redirect: 1 execute + 2 fetch |
+| J page crossing / JAL | 4 | Redirect: 2 execute + 2 fetch |
+| JR same page | 3 | Redirect: 1 execute + 2 fetch |
+| JR page crossing / JALR | 4 | Redirect: 2 execute + 2 fetch |
+| IRQ / NMI | 2 | Redirect at dispatch: 0 execute + 2 fetch |
+| RETI / INT | 3 | Redirect: 1 execute + 2 fetch |
+| WAI (wake) | 2 | Fetch-limited (execute hidden) |
+| WAI (halt) | -- | Halted until interrupt |
+| STP | 1 | Enters halt (no fetch) |
+
+### Self-Modifying Code
+
+Because the next instruction's fetch overlaps with the current instruction's execution, **a store is never visible to the immediately following instruction fetch**. The instruction two past the store sees the new value. To fence, insert any instruction between the store and the modified code:
+
+```
+SB [target]     ; store writes to 'target' address
+NOP             ; fence — target's fetch happens during NOP's execution
+target:         ; this instruction sees the stored value
+```
+
+A single fence instruction is always sufficient, including for word stores.
+
+## RDY and SYNC Signals
+
+These provide W65C02S-compatible hooks for wait-state insertion, DMA, and single-step debugging — any system that needs to stall the CPU or observe instruction boundaries can use the same techniques as existing 65C02 designs.
+
+### RDY (Ready Input)
+
+When `ui_in[2]` is low, the processor halts atomically: all CPU state freezes (PC, registers, pipeline, ALU carry), bus outputs remain stable, and the bus protocol mux continues toggling. The processor resumes on the next edge after RDY returns high. RDY halts on both reads and writes, matching W65C02S behavior.
+
+### SYNC (Instruction Boundary Output)
+
+`uo_out[1]` during the data phase is high for one cycle when a new instruction begins execution.
+
+### Single-Step and Wait-State Protocols
+
+To **single-step**, monitor SYNC during data phases and pull RDY low when it goes high. The CPU halts at the instruction boundary. Leave RDY high while cycling the clock, then pull it low again when SYNC reasserts.
+
+For **wait states**, external logic decodes the address during the address phase and pulls RDY low before the data-phase clock edge if the access needs more time. When the memory is ready, RDY goes high and the CPU continues.
+
+## Input Timing
+
+All inputs have a 4ns setup requirement before the capturing edge: RDY before posedge clk, data bus before negedge clk. Outputs are valid 4ns after their launching edge.
+
 ## Instruction Encoding
 
 This section documents the binary encoding for tools and hardware implementors.
@@ -407,104 +540,27 @@ funct4=12+ INT     (vec 0-2 at [7:6]; vec 3 = NOP)
 All other encodings execute as NOP (2-cycle no-op).
 ```
 
-## Pipeline and Timing
+## Interrupt Implementation
 
-The 2-stage pipeline (Fetch and Execute) overlaps fetch of the next instruction with execution of the current one. For sequential code and not-taken branches, the execute cost is completely hidden — throughput is limited by the 2-cycle fetch. Only taken branches and jumps pay execute cost directly, because the redirect flushes the speculative fetch.
+**Dispatch:** Hardware interrupt entry (IRQ, NMI) is handled at dispatch time
+in a single cycle. When the FSM is ready (instruction completing or idle), the
+hardware saves EPC and ESR, sets I=1, and redirects the PC to the vector
+address. The 2-cycle vector fetch is the only latency. INT and RETI are normal
+1-execute-cycle instructions (like same-page JR): they dispatch to E_EXEC_LO,
+complete in one cycle, then the 2-cycle target fetch follows (3 cycles total).
 
-### Cycle Counts (Throughput)
+**Interrupt entry:**
+1. Complete the current instruction
+2. Save ESR = {I, T} -- status flags at interrupt entry
+3. Save EPC = next_PC -- clean 16-bit return address
+4. Set I = 1 -- disable further interrupts
+5. Jump to vector entry
 
-Throughput is measured from one instruction boundary (SYNC) to the next. Three factors determine the count:
+**Interrupt return (RETI instruction):**
+1. Restore {I, T} from ESR
+2. Jump to EPC
 
-1. **Fetch floor (2 cycles):** fetching the next instruction always takes 2 cycles (lo byte, hi byte). Execute overlaps with fetch, so any instruction with 2 or fewer execute cycles is fetch-limited at 2.
-2. **Bus contention (+1 per byte transferred):** memory loads/stores take the bus from fetch to transfer data. The 2 address-compute cycles (E_EXEC_LO, E_EXEC_HI) are hidden behind the fetch, but each bus transfer cycle adds 1 to the total.
-3. **Redirect penalty (execute exposed):** taken branches and jumps flush the speculative fetch, so execute cycles are no longer hidden. Total = execute cycles + 2 fresh fetch cycles.
-
-| Instruction | Cycles | Why |
-|---|---|---|
-| ALU / shifts / compares | 2 | Fetch-limited (execute hidden) |
-| SEI / CLI / SRR / SRW / EPCR / EPCW | 2 | Fetch-limited (execute hidden) |
-| Branch not taken | 2 | Fetch-limited (execute hidden) |
-| Branch taken, same page | 3 | Redirect: 1 execute + 2 fetch |
-| Branch taken, page crossing | 4 | Redirect: 2 execute + 2 fetch |
-| Byte load / store | 3 | Fetch floor + 1 bus transfer |
-| Word load / store | 4 | Fetch floor + 2 bus transfers |
-| J same page | 3 | Redirect: 1 execute + 2 fetch |
-| J page crossing / JAL | 4 | Redirect: 2 execute + 2 fetch |
-| JR same page | 3 | Redirect: 1 execute + 2 fetch |
-| JR page crossing / JALR | 4 | Redirect: 2 execute + 2 fetch |
-| IRQ / NMI | 2 | Redirect at dispatch: 0 execute + 2 fetch |
-| RETI / INT | 3 | Redirect: 1 execute + 2 fetch |
-| WAI (wake) | 2 | Fetch-limited (execute hidden) |
-| WAI (halt) | -- | Halted until interrupt |
-| STP | 1 | Enters halt (no fetch) |
-
-### Self-Modifying Code
-
-Because the next instruction's fetch overlaps with the current instruction's execution, **a store is never visible to the immediately following instruction fetch**. The instruction two past the store sees the new value. To fence, insert any instruction between the store and the modified code:
-
-```
-SB [target]     ; store writes to 'target' address
-NOP             ; fence — target's fetch happens during NOP's execution
-target:         ; this instruction sees the stored value
-```
-
-A single fence instruction is always sufficient, including for word stores.
-
-## RDY and SYNC Signals
-
-These provide W65C02S-compatible hooks for wait-state insertion, DMA, and single-step debugging — any system that needs to stall the CPU or observe instruction boundaries can use the same techniques as existing 65C02 designs.
-
-### RDY (Ready Input)
-
-When `ui_in[2]` is low, the processor halts atomically: all CPU state freezes (PC, registers, pipeline, ALU carry), bus outputs remain stable, and the bus protocol mux continues toggling. The processor resumes on the next edge after RDY returns high. RDY halts on both reads and writes, matching W65C02S behavior.
-
-### SYNC (Instruction Boundary Output)
-
-`uo_out[1]` during the data phase is high for one cycle when a new instruction begins execution.
-
-### Single-Step and Wait-State Protocols
-
-To **single-step**, monitor SYNC during data phases and pull RDY low when it goes high. The CPU halts at the instruction boundary. Leave RDY high while cycling the clock, then pull it low again when SYNC reasserts.
-
-For **wait states**, external logic decodes the address during the address phase and pulls RDY low before the data-phase clock edge if the access needs more time. When the memory is ready, RDY goes high and the CPU continues.
-
-## Input Timing
-
-All inputs have a 4ns setup requirement before the capturing edge: RDY before posedge clk, data bus before negedge clk. Outputs are valid 4ns after their launching edge.
-
-## Code Comparison: RISCY-V02 vs 6502
-
-Side-by-side assembly for common routines, comparing cycle counts and code sizes. The [full comparison with annotated assembly](https://github.com/mysterymath/riscyv02/blob/main/tt-ihp-riscyv02/docs/code-comparison.md) shows every instruction. 6502 library routines use [cc65](https://github.com/cc65/cc65) runtime implementations where applicable. All cycle counts assume same-page branches.
-
-| Routine | 6502 | RISCY-V02 | Speedup | 6502 Size | RISCY-V02 Size |
-|---|---|---|---|---|---|
-| memcpy | 14.5 cy/byte | 8.5 cy/byte | 1.7× | 38 B | 28 B |
-| strcpy | 18 cy/char | 13 cy/char | 1.4× | 18 B | 12 B |
-| 16×16 multiply | ~536 cy | ~232 cy | 2.3× | 34 B | 20 B |
-| 16÷16 division | ~720 cy | ~280 cy | 2.6× | 37 B | 22 B |
-| CRC-8 (SMBUS) | 101 cy/byte | 100 cy/byte | 1.0× | 22 B | 32 B |
-| CRC-16/CCITT | 227 cy/byte | 100 cy/byte | 2.3× | 43 B | 34 B |
-| Raster bar IRQ | ~39.5 cy | ~40 cy | 1.0× | 15 B | 24 B |
-| RC4 keystream | 61 cy/byte | 38 cy/byte | 1.6× | 34 B | 32 B |
-
-**32-bit arithmetic** (inline sequences, not calls):
-
-| Operation | 6502 Cycles | RISCY-V02 Cycles | Speedup | 6502 Size | RISCY-V02 Size |
-|---|---|---|---|---|---|
-| ADD / SUB | 38 | 9–10 | 3.8–4.2× | 25 B | 10 B |
-| AND / OR / XOR | 36 | 4 | 9.0× | 24 B | 4 B |
-| SLL / SRL (N=8) | 204 | 19 | 10.7× | 15 B | 26 B |
-| SRA (N=8) | 244 | 19 | 12.8× | 18 B | 26 B |
-
-**Packed BCD addition** (6502 has hardware decimal mode):
-
-| Width | 6502 Cycles | RISCY-V02 Cycles | Speedup | 6502 Size | RISCY-V02 Size |
-|---|---|---|---|---|---|
-| 2-digit (8-bit) | 9 | 28 | 0.3× | 5 B | 28 B |
-| 4-digit (16-bit) | 24 | 30 | 0.8× | 15 B | 30 B |
-| 8-digit (32-bit) | 42 | 68 | 0.6× | 25 B | 68 B |
-
-RISCY-V02 is faster at almost everything — the 16-bit data path eliminates byte-at-a-time serialization. The exceptions: CRC-8 and raster bar IRQ are ties (both dominated by 8-bit operations that map naturally to the 6502), and packed BCD is a clear 6502 win (hardware `SED` mode vs software nibble correction).
+**Exception state:** EPC is a standalone 16-bit register holding the clean return address. ESR is a 2-bit register holding {I, T} at the time of interrupt entry. Neither is directly addressable through normal register fields. EPC is accessible through EPCR/EPCW. SRR reads `{12'b0, ESR[1:0], I, T}` and SRW writes `ESR = rs[3:2], {I, T} = rs[1:0]`, providing direct access to both live flags and saved exception state in a single instruction. All GP registers (R0-R7) are directly accessible in interrupt context -- there is no register banking.
 
 ## Register File SRAM Analysis
 
@@ -519,59 +575,3 @@ Standard cell synthesis implements the register file with latches (~20T each) an
 | **Total** | **1,500** |
 
 The SRAM-adjusted transistor count is computed by `transistor_count.py` from each build's `stat.json`.
-
-## Demo Board Firmware
-
-The TT demoboard's RP2350 (Raspberry Pi Pico 2) can emulate 64 KiB of SRAM and a simple UART peripheral entirely in software, removing the need for external memory hardware. The firmware lives in `firmware/` and uses both RP2350 cores: core 1 runs a tight bus-servicing loop that responds to the CPU's muxed bus protocol, while core 0 bridges a memory-mapped UART peripheral to the demoboard's USB serial port.
-
-### Memory Map
-
-| Address | R/W | Function |
-|---------|-----|----------|
-| `0x0000`–`0xFEFF` | R/W | 64 KiB SRAM (byte-addressable) |
-| `0xFF00` | W | UART TX — written byte is sent over USB serial |
-| `0xFF01` | R | UART RX — reads the next byte received from USB serial |
-| `0xFF02` | R | UART status — bit 0: TX ready, bit 1: RX data available |
-
-The SRAM region covers the full 64 KiB address space except for the UART window at `0xFF00`–`0xFF02`. Reads from `0xFF00` and writes to `0xFF01`/`0xFF02` are don't-care (the firmware ignores them).
-
-### Bus Servicing (Core 1) — Software-Driven Clock
-
-Core 1 drives the project clock directly via GPIO (`gpio_put`), advancing the ASIC one phase at a time. This eliminates all timing pressure — each phase takes as long as it needs, with zero bus contention. The loop:
-
-1. **Address phase (clk LOW):** Read AB[7:0] from `uo_out` and AB[15:8] from `uio`. Speculatively prepare read data from the SRAM array or UART registers.
-2. **Posedge (`gpio_put(clk, 1)`):** The ASIC latches the address and enters data phase.
-3. **Data phase (clk HIGH):** Check RWB (`uo_out[0]`). On a read (RWB=1), drive `uio` with the prepared data byte. On a write (RWB=0), capture `uio` into the SRAM array or UART TX FIFO.
-4. **Release uio, then negedge (`gpio_put(clk, 0)`):** The ASIC latches read data and returns to address phase.
-
-Since the RP2350 *is* the memory system, a free-running PWM clock would create timing races. The software-driven clock is self-throttling, deterministic, and simpler to debug.
-
-### UART Bridge (Core 0)
-
-Core 0 runs the standard Pico SDK USB serial stack and bridges it to the memory-mapped UART peripheral. TX bytes flow through the RP2350's hardware multicore FIFO: core 1 pushes bytes when the CPU writes to `UART_TX_DATA` (`0xFF00`), and core 0 pops them and sends them over USB. RX bytes are single-buffered: core 0 reads from USB into `uart_rx_buf`, and the CPU reads them from `UART_RX_DATA` (`0xFF01`). The status register at `0xFF02` lets the CPU poll for TX readiness (`multicore_fifo_wready`) and RX data availability without side effects.
-
-### Program Upload Protocol
-
-Before starting the CPU, the firmware accepts a binary upload over USB serial:
-
-1. Firmware prints a banner and `Ready` prompt.
-2. Host sends: `L` `<addr_lo>` `<addr_hi>` `<len_lo>` `<len_hi>` `<data...>` — loads `len` bytes into `mem[addr]`.
-3. Firmware prints `OK <len> bytes at 0x<addr>`. Repeat step 2 for additional segments (e.g., code at `0x0000`, vectors at `0x0008`).
-4. Host sends: `G` — firmware launches core 1 and enters the UART bridge loop. Prints `Running`.
-5. Host sends: Ctrl-R (`0x12`) during execution — firmware stops core 1, resets the project, prints `Reset`, and returns to step 1.
-
-### Building and Flashing
-
-Prerequisites: CMake, Ninja, and the [Pico SDK](https://github.com/raspberrypi/pico-sdk) (v2.2.0). If `PICO_SDK_PATH` is not set, the build system fetches the SDK automatically.
-
-```
-cd firmware
-cmake -B build -G Ninja
-cmake --build build
-```
-
-Flash `build/riscyv02_firmware.uf2` by holding BOOTSEL while plugging in the Pico 2, then dragging the file to the USB mass-storage device that appears.
-
-### Startup Sequence
-
-The firmware initializes GPIO, selects the RISCY-V02 project on the TT mux, sets `ui_in` to `0x07` (IRQB=1, NMIB=1, RDY=1 — all inactive), resets the project, then enters the upload loop. Core 1 is launched only after receiving the `G` command, at which point it begins driving the clock and servicing the bus. No PWM is used — the clock is entirely software-driven.
