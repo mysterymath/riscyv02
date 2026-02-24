@@ -1626,164 +1626,17 @@ The real question is whether BCD justifies the ~400 transistors the 6502 spends 
 
 ## Register File SRAM Analysis
 
-Standard cell synthesis implements the register file with latches (~20T each) and mux trees, but a real chip would use SRAM cells (~8T each) — the 8×16-bit 2R1W array is perfectly regular. This over-counting inflates the RISCY-V02 transistor count by ~2,000T and makes the comparison with the 6502 misleading. This section designs an equivalent 8T SRAM register file from first principles, counts every transistor, and computes the adjusted figures.
+Standard cell synthesis implements the register file with latches (~20T each) and mux trees, but a real chip would use SRAM cells (~8T each) — the 8×16-bit 2R1W array is perfectly regular. This over-counting inflates the RISCY-V02 transistor count by ~2,000T. The [full SRAM analysis](https://github.com/mysterymath/riscyv02/blob/main/tt-ihp-riscyv02/docs/sram-analysis.md) designs an equivalent 8T SRAM register file from first principles, explains how the cells and clock phases work, and counts every transistor. Summary:
 
-### Why This Discount Is Fair
-
-The discount applies only to **regular storage arrays** — identical bit cells in a grid with shared decode/sense logic. The same methodology applied to the 6502 yields zero discount: its registers (A, X, Y, SP) are asymmetric, each wired to different datapath elements, and would not use SRAM in any implementation.
-
-### Standard Cell Register File (Synthesized)
-
-The register file is a single Verilog module (`riscyv02_regfile`) marked `(* keep_hierarchy *)` so its cell counts appear as a sub-module in `stat.json`. It contains 20 leader latches (write staging), 128 follower latches (8 regs × 16 bits, the pure storage array), and combinational decode/mux trees. The `transistor_count.py` script reads the actual count from each build's `stat.json`.
-
-### 8T SRAM Register File Design
-
-#### Why 8T
-
-6T SRAM provides 1 port. Our register file requires 2 simultaneous reads (the ALU needs both operands in the same cycle). The minimum cell for 2 ports is 8T:
-
-- **6T** = 4T storage + 2T access = 1 port
-- **8T** = 4T storage + 2T RW access + 2T read-only = 2 ports (1RW + 1R)
-
-We time-share the RW port: reads during clk=1, writes at negedge. The R-only port provides the second simultaneous read. This matches our pipeline exactly.
-
-#### 8T Bit Cell
-
-```
-Storage:   P1 P2 N1 N2  (cross-coupled inverters)     = 4T
-RW port:   N3 N4        (access NMOS, gated by WL_rw)  = 2T
-R port:    N5 N6        (N5=access gated by WL_r,      = 2T
-                         N6=driver gated by QB)
-                                                       ────
-                                                         8T
-```
-
-The read-only port connects N6's gate to QB (complement of stored value), so the read bit line gives the non-inverted value Q — no output inversion needed.
-
-#### Storage Array
-
-8 rows x 16 columns = 128 cells x 8T = **1,024T**
-
-#### Write Path
-
-Writes occur during clk=0 through the RW port. Both bytes are written simultaneously (16-bit write port), requiring row decode, write enable, and data drivers.
-
-##### Row Decoder (w_sel -> 8 one-hot lines)
-
-A 3-to-8 decoder for all 8 rows using `w_sel[2:0]`:
-
-| Component | Count | Tx/each | Transistors |
-|---|---|---|---|
-| INV (complement w_sel[2:0]) | 3 | 2 | 6 |
-| AND3 (NAND3 + INV, one per row) | 8 | 8 | 64 |
-| **Subtotal** | | | **70** |
-
-##### Word Line Gating
-
-Each decoded row line is ANDed with w_we to produce the write word line. Both byte halves share one word line (no byte select):
-
-| Component | Purpose | Count | Tx/each | Transistors |
-|---|---|---|---|---|
-| AND2 | WL[i] = row[i] AND w_we | 8 | 6 | 48 |
-| **Subtotal** | | | | **48** |
-
-##### Write Drivers
-
-Generate complementary data for the bit lines. 16 data/complement pairs drive all 16 columns:
-
-| Component | Purpose | Count | Tx/each | Transistors |
-|---|---|---|---|---|
-| INV | ~w_data[i] (complement) | 16 | 2 | 32 |
-| **Subtotal** | | | | **32** |
-
-**Write decode + drivers total: 150T**
-
-##### Write Staging
-
-Both the standard cell regfile and the SRAM equivalent need write staging. The standard cell version uses leader latches (included in the module). The SRAM equivalent uses input latches to hold w_data/w_sel/w_we stable during the write pulse:
-
-| Component | Count | Tx/each | Transistors |
-|---|---|---|---|
-| Data latch (TG + inverter loop) | 16 | 6 | 96 |
-| Address latch | 3 | 6 | 18 |
-| Enable latch (with reset) | 1 | 8 | 8 |
-| **Subtotal** | | | **122** |
-
-**Write path total: 150 + 122 = 272T**
-
-#### Read Path 1 (RW Port, Differential)
-
-During clk=1, the RW port reads r1_sel. This is a 3-bit address selecting one of 8 GP rows. Differential bit lines (BL/BLB) give correct polarity directly. Full 16-bit output (no byte select).
-
-| Component | Purpose | Count | Tx/each | Transistors |
-|---|---|---|---|---|
-| INV | complement r1_sel[2:0] | 3 | 2 | 6 |
-| AND3 | row decode (one per row) | 8 | 8 | 64 |
-| PMOS | precharge BL[0..15] | 16 | 1 | 16 |
-| PMOS | precharge BLB[0..15] | 16 | 1 | 16 |
-| PMOS | equalize BL=BLB | 16 | 1 | 16 |
-| **Subtotal** | | | | **118** |
-
-For an 8-deep array the bit-line swing is large and fast — no sense amplifiers are needed.
-
-#### Read Path 2 (R-Only Port, Single-Ended)
-
-The 8T cell's dedicated read port: N5 (access, gated by read word line) in series with N6 (driver, gated by QB). Read bit line (RBL) is pulled high by a keeper; selected cell conditionally discharges it. Port 2 uses a 3-bit address. Full 16-bit output (no byte select).
-
-| Component | Purpose | Count | Tx/each | Transistors |
-|---|---|---|---|---|
-| INV | complement r2_sel inputs | 3 | 2 | 6 |
-| AND3 | row decode (one per row) | 8 | 8 | 64 |
-| PMOS | pull-up keeper RBL[0..15] | 16 | 1 | 16 |
-| **Subtotal** | | | | **86** |
-
-#### Grand Total
-
-| Component | Transistors | % |
-|---|---|---|
-| Storage array (128 x 8T) | 1,024 | 68.3% |
-| Write path (decode + drivers + staging) | 272 | 18.1% |
-| Read path 1 (RW, differential) | 118 | 7.9% |
-| Read path 2 (R, single-ended) | 86 | 5.7% |
-| **Total** | **1,500** | **100%** |
-
-#### Gate Transistor Counts Used
-
-All counts use standard CMOS complementary logic:
-
-| Gate | Transistors | Structure |
-|---|---|---|
-| INV | 2 | 1 PMOS + 1 NMOS |
-| NAND2 | 4 | 2P parallel + 2N series |
-| AND2 | 6 | NAND2 + INV |
-| NAND3 | 6 | 3P parallel + 3N series |
-| AND3 | 8 | NAND3 + INV |
-| MUX2 | 6 | 2 transmission gates + 1 INV |
-| PMOS (precharge/keeper) | 1 | single transistor |
-
-### Comparison
-
-| | Standard Cell | 8T SRAM |
-|---|---|---|
-| Write staging | 20 leader latches × 20T = 400 | 20 latches × 6T = 122 (TG-based) |
-| Storage | 128 follower latches × 20T = 2,560 | 128 cells × 8T = 1,024 |
-| Peripherals | decode + read mux trees | Decode + drivers = 354 |
-| **Total** | **(from synthesis)** | **1,500** |
-
-The SRAM saves on both storage (8T vs 20T per bit) and peripherals (word-line decode replaces 8:1 mux trees). Write staging is present in both implementations.
-
-### SRAM-Adjusted Figures
-
-Computed by `transistor_count.py` from each build's `stat.json`.
-
-| Metric | Value |
+| Component | Transistors |
 |---|---|
-| Register file (8T SRAM equivalent) | 1,500 |
-| Other values | (computed by `transistor_count.py`) |
+| Storage array (128 × 8T cells) | 1,024 |
+| Write path (decode + drivers + staging) | 272 |
+| Read path 1 (RW, differential) | 118 |
+| Read path 2 (R-only, single-ended) | 86 |
+| **Total** | **1,500** |
 
-### Methodology Notes
-
-Transistor counts are exact: standard cell counts from the PDK's CDL SPICE netlist (one M-line = one MOSFET), SRAM counts from the circuit design above using textbook CMOS. The 8T cell count is definitional. No SRAM macro exists at this size for IHP sg13g2 — the smallest available (64×32, 2048 bits) is 16× larger than needed. This is a paper design representing what a custom chip would use.
+The SRAM-adjusted transistor count is computed by `transistor_count.py` from each build's `stat.json`.
 
 ## Demo Board Firmware
 
