@@ -67,6 +67,21 @@ module tb ();
       .rst_n  (rst_n)
   );
 
+  // Testbench-local mux_sel replica (matches project.v dual-edge toggle).
+  // This avoids referencing user_project.mux_sel, which doesn't exist in
+  // the flat gate-level netlist.
+  reg ms_q;
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n)        ms_q <= 1'b0;
+    else if (!mux_sel) ms_q <= ~ms_q;
+
+  reg ms_q_d;
+  always @(negedge clk or negedge rst_n)
+    if (!rst_n)       ms_q_d <= 1'b0;
+    else if (mux_sel) ms_q_d <= ~ms_q_d;
+
+  wire mux_sel = ms_q ^ ms_q_d;
+
   // 64KB RAM — zero-initialized.  Program contents are written by cocotb
   // before reset, so the `initial` here is equivalent to flash being
   // blank at manufacturing.
@@ -97,7 +112,7 @@ module tb ();
   // where mux_sel hasn't yet toggled to data phase.
   // -----------------------------------------------------------------------
   always @(negedge clk) begin
-    if (rst_n && user_project.mux_sel && !uo_out[0])
+    if (rst_n && mux_sel && !uo_out[0])
       ram[addr] <= uio_out;
   end
 

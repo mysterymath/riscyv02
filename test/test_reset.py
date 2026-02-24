@@ -67,10 +67,10 @@ async def test_reset_pin_trace(dut):
         uo = _sig(dut.uo_out.value)
         uio = _sig(dut.uio_out.value)
         oe = _sig(dut.uio_oe.value)
-        ms = _sig(dut.user_project.mux_sel.value)
+        ms = _sig(dut.mux_sel.value)
         # Interpret based on mux_sel
         try:
-            ms_val = int(dut.user_project.mux_sel.value)
+            ms_val = int(dut.mux_sel.value)
             if ms_val == 0:
                 interp = f"ADDR AB={_sig16(dut.uio_out.value, dut.uo_out.value)}"
             else:
@@ -85,9 +85,9 @@ async def test_reset_pin_trace(dut):
         uo = _sig(dut.uo_out.value)
         uio = _sig(dut.uio_out.value)
         oe = _sig(dut.uio_oe.value)
-        ms = _sig(dut.user_project.mux_sel.value)
+        ms = _sig(dut.mux_sel.value)
         try:
-            ms_val = int(dut.user_project.mux_sel.value)
+            ms_val = int(dut.mux_sel.value)
             if ms_val == 0:
                 interp = f"ADDR AB={_sig16(dut.uio_out.value, dut.uo_out.value)}"
             else:
@@ -126,9 +126,9 @@ async def test_reset_with_nop_program(dut):
         uo = _sig(dut.uo_out.value)
         uio = _sig(dut.uio_out.value)
         oe = _sig(dut.uio_oe.value)
-        ms = _sig(dut.user_project.mux_sel.value)
+        ms = _sig(dut.mux_sel.value)
         try:
-            ms_val = int(dut.user_project.mux_sel.value)
+            ms_val = int(dut.mux_sel.value)
             if ms_val == 0:
                 interp = f"ADDR AB={_sig16(dut.uio_out.value, dut.uo_out.value)}"
             else:
@@ -143,9 +143,9 @@ async def test_reset_with_nop_program(dut):
         uo = _sig(dut.uo_out.value)
         uio = _sig(dut.uio_out.value)
         oe = _sig(dut.uio_oe.value)
-        ms = _sig(dut.user_project.mux_sel.value)
+        ms = _sig(dut.mux_sel.value)
         try:
-            ms_val = int(dut.user_project.mux_sel.value)
+            ms_val = int(dut.mux_sel.value)
             if ms_val == 0:
                 interp = f"ADDR AB={_sig16(dut.uio_out.value, dut.uo_out.value)}"
             else:
