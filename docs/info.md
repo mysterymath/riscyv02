@@ -156,6 +156,55 @@ Before starting the CPU, the firmware accepts a binary upload over USB serial:
 4. Host sends: `G` — firmware launches core 1 and enters the UART bridge loop. Prints `Running`.
 5. Host sends: Ctrl-R (`0x12`) during execution — firmware stops core 1, resets the project, prints `Reset`, and returns to step 1.
 
+### Programming Workflow
+
+The assembler is a Python API in `test/asm.py`. Write a Python script that imports `Asm`, builds a program, and calls `save_binary()` to produce a flat binary. Then use `firmware/upload.py` to upload and run it on the demo board.
+
+**Prerequisites:** `pip install pyserial`
+
+**Hello world example** (`hello.py`):
+
+```python
+#!/usr/bin/env python3
+"""Hello world for RISCY-V02."""
+import sys; sys.path.insert(0, 'test')
+from asm import Asm
+
+UART_TX = 0xFF00  # firmware UART TX register
+
+a = Asm()
+# R0 = UART base address
+a.lui(0, 0xFF)       # R0 = 0xFF00
+# Write 'H', 'i', '\n'
+for ch in b'Hi\n':
+    a.li(1, ch)       # R1 = character
+    a.sb(1, 0)        # MEM[R0 + 0] = R1 (UART TX)
+a.stp()               # halt
+
+a.save_binary('hello.bin')
+print(f"Wrote {max(a.prog.keys())+1} bytes to hello.bin")
+```
+
+**Build and upload:**
+
+```
+python hello.py                                    # produces hello.bin
+python firmware/upload.py /dev/ttyACM0 hello.bin   # upload and run
+```
+
+**Expected output:**
+
+```
+Uploading 16 bytes from hello.bin
+Ready
+OK 16 bytes at 0x0000
+Running
+--- Terminal mode (Ctrl-C to exit, Ctrl-R to reset) ---
+Hi
+```
+
+The upload script enters transparent terminal mode after launching, so any UART output from the program appears directly. Ctrl-C exits; Ctrl-R resets the board for re-upload without power cycling (`--reset` flag does this automatically before uploading).
+
 ### Memory Map
 
 | Address | R/W | Function |

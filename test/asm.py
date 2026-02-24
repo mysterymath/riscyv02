@@ -452,6 +452,38 @@ class Asm:
         """Self-loop: J -1."""
         self._emit(_spin())
 
+    # Output methods
+    def segments(self):
+        """Return [(start_addr, bytes), ...] of contiguous segments."""
+        mem = self.assemble()
+        if not mem:
+            return []
+        addrs = sorted(mem.keys())
+        segs = []
+        start = addrs[0]
+        data = [mem[start]]
+        for a in addrs[1:]:
+            if a == start + len(data):
+                data.append(mem[a])
+            else:
+                segs.append((start, bytes(data)))
+                start = a
+                data = [mem[a]]
+        segs.append((start, bytes(data)))
+        return segs
+
+    def save_binary(self, filename):
+        """Write flat binary (address 0 to max). Gaps are zero-filled."""
+        mem = self.assemble()
+        if not mem:
+            return
+        size = max(mem.keys()) + 1
+        buf = bytearray(size)
+        for addr, byte in mem.items():
+            buf[addr] = byte
+        with open(filename, 'wb') as f:
+            f.write(buf)
+
     # Assemble — resolve label fixups and return {addr: byte}
     def assemble(self):
         for fixup in self.fixups:
