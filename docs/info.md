@@ -476,7 +476,7 @@ All inputs have a 4ns setup requirement before the capturing edge: RDY before po
 
 Side-by-side assembly for common routines, comparing cycle counts and code sizes. The [full comparison with annotated assembly](https://github.com/mysterymath/riscyv02/blob/main/tt-ihp-riscyv02/docs/code-comparison.md) shows every instruction. 6502 library routines use [cc65](https://github.com/cc65/cc65) runtime implementations where applicable. All cycle counts assume same-page branches.
 
-| Routine | 6502 | RISCY-V02 | Speedup | 6502 Size | RV Size |
+| Routine | 6502 | RISCY-V02 | Speedup | 6502 Size | RISCY-V02 Size |
 |---|---|---|---|---|---|
 | memcpy | 14.5 cy/byte | 8.5 cy/byte | 1.7× | 38 B | 28 B |
 | strcpy | 18 cy/char | 13 cy/char | 1.4× | 18 B | 12 B |
@@ -489,7 +489,7 @@ Side-by-side assembly for common routines, comparing cycle counts and code sizes
 
 **32-bit arithmetic** (inline sequences, not calls):
 
-| Operation | 6502 Cycles | RV Cycles | Speedup | 6502 Size | RV Size |
+| Operation | 6502 Cycles | RISCY-V02 Cycles | Speedup | 6502 Size | RISCY-V02 Size |
 |---|---|---|---|---|---|
 | ADD / SUB | 38 | 9–10 | 3.8–4.2× | 25 B | 10 B |
 | AND / OR / XOR | 36 | 4 | 9.0× | 24 B | 4 B |
@@ -498,7 +498,7 @@ Side-by-side assembly for common routines, comparing cycle counts and code sizes
 
 **Packed BCD addition** (6502 has hardware decimal mode):
 
-| Width | 6502 Cycles | RV Cycles | Speedup | 6502 Size | RV Size |
+| Width | 6502 Cycles | RISCY-V02 Cycles | Speedup | 6502 Size | RISCY-V02 Size |
 |---|---|---|---|---|---|
 | 2-digit (8-bit) | 9 | 28 | 0.3× | 5 B | 28 B |
 | 4-digit (16-bit) | 24 | 30 | 0.8× | 15 B | 30 B |
