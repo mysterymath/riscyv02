@@ -6,17 +6,18 @@
  *
  * Bus timing (one CPU cycle = one clk period):
  *
- *   posedge clk — address phase (mux_sel=0):
+ *   posedge clk — address phase:
  *     addr register captures AB from {uio_out, uo_out}.
  *     SRAM read output (uio_in) settles to ram[addr].
  *
- *   negedge clk — data phase (mux_sel=1):
+ *   negedge clk — data phase:
  *     CPU reads uio_in (for fetches and loads).
  *     Writes are captured: if RWB==0 (uo_out[0]), ram[addr] <= uio_out.
  *
- * Write capture is gated on bus_running (set after the first posedge
- * following reset release).  Before then, the output mux is stuck in
- * address phase and uo_out carries AB[7:0], not RWB/SYNC.
+ * Write capture is gated on bus_running, a one-shot DFF that models the
+ * demux's startup requirement: after reset, the CPU's output mux is stuck
+ * in address phase until the first posedge.  Before then, uo_out carries
+ * AB[7:0], not RWB/SYNC, so the demux must suppress write capture.
  */
 
 `default_nettype none
@@ -62,21 +63,17 @@ module tb ();
       .rst_n  (rst_n)
   );
 
-  // Bus protocol running flag: set after the first posedge following reset.
-  // Before the first posedge, the output mux is stuck in address phase and
-  // uo_out carries AB[7:0] (not RWB/SYNC), so the write capture must be
-  // suppressed.  This replaces the old mux_sel replica, which referenced
-  // internal hierarchy incompatible with flat GL netlists.
+  // Bus startup guard: models the demux's write-suppression requirement.
+  //
+  // After reset, the CPU's output mux is stuck in address phase (mux_sel=0)
+  // until the first posedge starts the toggle.  Any negedge before that
+  // first posedge has uo_out = AB[7:0], not RWB — the demux must not
+  // interpret it as a write.  bus_running goes high after the first posedge
+  // and stays high, gating write capture below.
   reg bus_running;
   always @(posedge clk or negedge rst_n)
     if (!rst_n) bus_running <= 1'b0;
     else        bus_running <= 1'b1;
-
-  // mux_sel signal exposed for test_reset.py pin trace observation.
-  // Uses the same simple DFF: 0 at posedge (address sampled), 1 at negedge
-  // (data/status phase).  This matches the real mux_sel's steady-state
-  // behavior — after the first posedge, every negedge is data phase.
-  wire mux_sel = bus_running;
 
   // 64KB RAM — zero-initialized.  Program contents are written by cocotb
   // before reset, so the `initial` here is equivalent to flash being
@@ -102,9 +99,8 @@ module tb ();
   // Write capture: at negedge clk (data phase).
   //
   // At negedge the bus is in data phase: uo_out[0] = RWB, uio_out = data.
-  // RWB=0 means the CPU is writing.  Gated on bus_running to suppress the
-  // first negedge after reset where the output mux hasn't reached data
-  // phase yet (uo_out still carries address bits, not RWB).
+  // RWB=0 means the CPU is writing.  Gated on bus_running to suppress
+  // writes before the first posedge after reset (see bus startup guard).
   // -----------------------------------------------------------------------
   always @(negedge clk) begin
     if (bus_running && !uo_out[0])

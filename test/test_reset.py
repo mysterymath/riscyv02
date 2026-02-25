@@ -5,6 +5,10 @@
 #
 # Captures the exact value of every output pin at every clock edge after
 # reset release.  Uses string representation to preserve X/Z values.
+#
+# Bus phase is determined by edge type: posedge = address phase,
+# negedge = data phase.  This matches the CPU's mux_sel toggle without
+# requiring a testbench replica of that signal.
 
 import cocotb
 from cocotb.clock import Clock
@@ -27,6 +31,21 @@ def _sig16(hi, lo):
        'x' in ls.lower() or 'z' in ls.lower():
         return f"{hs}:{ls}"
     return f"0x{int(hi):02X}{int(lo):02X}"
+
+
+def _interp_addr(dut):
+    """Interpret pins as address phase."""
+    return f"ADDR AB={_sig16(dut.uio_out.value, dut.uo_out.value)}"
+
+
+def _interp_data(dut):
+    """Interpret pins as data phase."""
+    try:
+        rwb = int(dut.uo_out.value) & 1
+        sync = (int(dut.uo_out.value) >> 1) & 1
+        return f"DATA RWB={rwb} SYNC={sync} DO={_sig(dut.uio_out.value)}"
+    except (ValueError, TypeError):
+        return "DATA ???"
 
 
 @cocotb.test()
@@ -59,44 +78,23 @@ async def test_reset_pin_trace(dut):
     dut.rst_n.value = 1
 
     dut._log.info("=== Pin trace after reset release ===")
-    dut._log.info("Edge | uo_out   | uio_out  | uio_oe   | mux_sel | interpretation")
-    dut._log.info("-----|----------|----------|----------|---------|---------------")
+    dut._log.info("Edge | uo_out   | uio_out  | uio_oe   | phase | interpretation")
+    dut._log.info("-----|----------|----------|----------|-------|---------------")
 
     for cycle in range(30):
         await RisingEdge(dut.clk)
         uo = _sig(dut.uo_out.value)
         uio = _sig(dut.uio_out.value)
         oe = _sig(dut.uio_oe.value)
-        ms = _sig(dut.mux_sel.value)
-        # Interpret based on mux_sel
-        try:
-            ms_val = int(dut.mux_sel.value)
-            if ms_val == 0:
-                interp = f"ADDR AB={_sig16(dut.uio_out.value, dut.uo_out.value)}"
-            else:
-                rwb = int(dut.uo_out.value) & 1
-                sync = (int(dut.uo_out.value) >> 1) & 1
-                interp = f"DATA RWB={rwb} SYNC={sync} DO={uio}"
-        except (ValueError, TypeError):
-            interp = "???"
-        dut._log.info(f"  +{cycle:02d} | {uo:8s} | {uio:8s} | {oe:8s} | {ms:7s} | {interp}")
+        interp = _interp_addr(dut)
+        dut._log.info(f"  +{cycle:02d} | {uo:8s} | {uio:8s} | {oe:8s} | addr  | {interp}")
 
         await FallingEdge(dut.clk)
         uo = _sig(dut.uo_out.value)
         uio = _sig(dut.uio_out.value)
         oe = _sig(dut.uio_oe.value)
-        ms = _sig(dut.mux_sel.value)
-        try:
-            ms_val = int(dut.mux_sel.value)
-            if ms_val == 0:
-                interp = f"ADDR AB={_sig16(dut.uio_out.value, dut.uo_out.value)}"
-            else:
-                rwb = int(dut.uo_out.value) & 1
-                sync = (int(dut.uo_out.value) >> 1) & 1
-                interp = f"DATA RWB={rwb} SYNC={sync} DO={uio}"
-        except (ValueError, TypeError):
-            interp = "???"
-        dut._log.info(f"  -{cycle:02d} | {uo:8s} | {uio:8s} | {oe:8s} | {ms:7s} | {interp}")
+        interp = _interp_data(dut)
+        dut._log.info(f"  -{cycle:02d} | {uo:8s} | {uio:8s} | {oe:8s} | data  | {interp}")
 
 
 @cocotb.test()
@@ -118,40 +116,20 @@ async def test_reset_with_nop_program(dut):
     dut.rst_n.value = 1
 
     dut._log.info("=== Pin trace: all-NOP program ===")
-    dut._log.info("Edge | uo_out   | uio_out  | uio_oe   | mux_sel | interpretation")
-    dut._log.info("-----|----------|----------|----------|---------|---------------")
+    dut._log.info("Edge | uo_out   | uio_out  | uio_oe   | phase | interpretation")
+    dut._log.info("-----|----------|----------|----------|-------|---------------")
 
     for cycle in range(20):
         await RisingEdge(dut.clk)
         uo = _sig(dut.uo_out.value)
         uio = _sig(dut.uio_out.value)
         oe = _sig(dut.uio_oe.value)
-        ms = _sig(dut.mux_sel.value)
-        try:
-            ms_val = int(dut.mux_sel.value)
-            if ms_val == 0:
-                interp = f"ADDR AB={_sig16(dut.uio_out.value, dut.uo_out.value)}"
-            else:
-                rwb = int(dut.uo_out.value) & 1
-                sync = (int(dut.uo_out.value) >> 1) & 1
-                interp = f"DATA RWB={rwb} SYNC={sync} DO={uio}"
-        except (ValueError, TypeError):
-            interp = "???"
-        dut._log.info(f"  +{cycle:02d} | {uo:8s} | {uio:8s} | {oe:8s} | {ms:7s} | {interp}")
+        interp = _interp_addr(dut)
+        dut._log.info(f"  +{cycle:02d} | {uo:8s} | {uio:8s} | {oe:8s} | addr  | {interp}")
 
         await FallingEdge(dut.clk)
         uo = _sig(dut.uo_out.value)
         uio = _sig(dut.uio_out.value)
         oe = _sig(dut.uio_oe.value)
-        ms = _sig(dut.mux_sel.value)
-        try:
-            ms_val = int(dut.mux_sel.value)
-            if ms_val == 0:
-                interp = f"ADDR AB={_sig16(dut.uio_out.value, dut.uo_out.value)}"
-            else:
-                rwb = int(dut.uo_out.value) & 1
-                sync = (int(dut.uo_out.value) >> 1) & 1
-                interp = f"DATA RWB={rwb} SYNC={sync} DO={uio}"
-        except (ValueError, TypeError):
-            interp = "???"
-        dut._log.info(f"  -{cycle:02d} | {uo:8s} | {uio:8s} | {oe:8s} | {ms:7s} | {interp}")
+        interp = _interp_data(dut)
+        dut._log.info(f"  -{cycle:02d} | {uo:8s} | {uio:8s} | {oe:8s} | data  | {interp}")
