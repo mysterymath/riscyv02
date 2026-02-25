@@ -30,12 +30,49 @@ def _safe_int(value):
         return 0
 
 
-def _gen_inputs(rng, n_cycles):
+FUZZ_MODES = {
+    0: 'balanced',
+    1: 'nmi_stress',
+    2: 'irq_edge',
+    3: 'rdy_stress',
+    4: 'simultaneous',
+}
+
+
+def _gen_inputs(rng, n_cycles, mode):
     """Generate randomized control inputs for each cycle.
 
     Returns list of ui_in values. Bits: [2]=RDY, [1]=NMIB, [0]=IRQB.
     IRQB/NMIB are active-low.
+
+    Modes:
+      0 (balanced):     Gentle parameters — baseline coverage
+      1 (nmi_stress):   High NMI rate, 1-3 cycle cooldown
+      2 (irq_edge):     IRQ toggling every 2-4 cycles
+      3 (rdy_stress):   High RDY stall rate, stalls every few cycles
+      4 (simultaneous): All three cranked up
     """
+    if mode == 0:       # balanced
+        irq_rate, irq_hold = 0.03, (5, 20)
+        nmi_rate, nmi_cool = 0.005, 30
+        rdy_rate, rdy_hold = 0.02, (1, 5)
+    elif mode == 1:     # nmi_stress
+        irq_rate, irq_hold = 0.03, (5, 20)
+        nmi_rate, nmi_cool = 0.15, rng.randint(1, 3)
+        rdy_rate, rdy_hold = 0.02, (1, 5)
+    elif mode == 2:     # irq_edge
+        irq_rate, irq_hold = 0.25, (1, 4)
+        nmi_rate, nmi_cool = 0.005, 30
+        rdy_rate, rdy_hold = 0.02, (1, 5)
+    elif mode == 3:     # rdy_stress
+        irq_rate, irq_hold = 0.03, (5, 20)
+        nmi_rate, nmi_cool = 0.005, 30
+        rdy_rate, rdy_hold = 0.25, (1, 3)
+    else:               # simultaneous
+        irq_rate, irq_hold = 0.20, (1, 6)
+        nmi_rate, nmi_cool = 0.10, rng.randint(1, 3)
+        rdy_rate, rdy_hold = 0.20, (1, 3)
+
     inputs = []
     irqb = 1        # inactive
     nmib = 1        # inactive
@@ -46,33 +83,30 @@ def _gen_inputs(rng, n_cycles):
     nmi_cooldown = 0    # cooldown between NMI assertions
 
     for _ in range(n_cycles):
-        # IRQB: ~3% toggle rate, stays asserted 5-20 cycles
         if irq_counter > 0:
             irq_counter -= 1
             if irq_counter == 0:
                 irqb = 1
-        elif rng.random() < 0.03:
+        elif rng.random() < irq_rate:
             irqb = 0
-            irq_counter = rng.randint(5, 20)
+            irq_counter = rng.randint(*irq_hold)
 
-        # NMIB: ~0.5% assert with 30-cycle cooldown
         if nmi_cooldown > 0:
             nmi_cooldown -= 1
             nmib = 1
-        elif rng.random() < 0.005:
+        elif rng.random() < nmi_rate:
             nmib = 0
-            nmi_cooldown = 30
+            nmi_cooldown = nmi_cool
         else:
             nmib = 1
 
-        # RDY: ~2% deassert, hold 1-5 cycles
         if rdy_counter > 0:
             rdy_counter -= 1
             if rdy_counter == 0:
                 rdy = 1
-        elif rng.random() < 0.02:
+        elif rng.random() < rdy_rate:
             rdy = 0
-            rdy_counter = rng.randint(1, 5)
+            rdy_counter = rng.randint(*rdy_hold)
 
         inputs.append((rdy << 2) | (nmib << 1) | irqb)
 
@@ -106,18 +140,31 @@ async def test_fuzz(dut):
     n_cycles = int(os.environ.get('FUZZ_CYCLES', '500'))
     n_iters = int(os.environ.get('FUZZ_ITERS', '200'))
     skip_cycles = int(os.environ.get('FUZZ_SKIP', '0'))
+    forced_mode = os.environ.get('FUZZ_MODE', None)
+    if forced_mode is not None:
+        forced_mode = int(forced_mode)
 
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
     total_mismatches = 0
     total_failures = 0
+    mode_counts = [0] * len(FUZZ_MODES)
     start_time = time.monotonic()
     counter = itertools.count() if n_iters == 0 else range(n_iters)
 
     for iteration in counter:
         iter_seed = seed + iteration
         rng = random.Random(iter_seed)
+
+        # Pick mode: 50% balanced, 12.5% each stress mode
+        if forced_mode is not None:
+            mode = forced_mode
+        elif rng.random() < 0.5:
+            mode = 0
+        else:
+            mode = rng.randint(1, 4)
+        mode_counts[mode] += 1
 
         # Generate random 64K RAM
         ram = bytearray(rng.getrandbits(8) for _ in range(65536))
@@ -139,7 +186,7 @@ async def test_fuzz(dut):
         await FallingEdge(dut.clk)  # Let first post-reset negedge settle
 
         # Generate input sequence
-        inputs = _gen_inputs(rng, n_cycles)
+        inputs = _gen_inputs(rng, n_cycles, mode)
 
         mismatches = 0
         max_mismatches = 5
@@ -239,23 +286,27 @@ async def test_fuzz(dut):
                                f" {mismatches} mismatches, stopping early")
                 break
 
+        mode_name = FUZZ_MODES[mode]
         if mismatches > 0:
             total_mismatches += mismatches
             total_failures += 1
-            dut._log.error(f"Iteration {iteration} (seed {iter_seed}):"
-                           f" {mismatches} mismatches in {cycle + 1} cycles")
+            dut._log.error(f"Iteration {iteration} (seed {iter_seed},"
+                           f" {mode_name}): {mismatches} mismatches"
+                           f" in {cycle + 1} cycles")
         elif n_iters > 0:
-            dut._log.info(f"Iteration {iteration} (seed {iter_seed}):"
-                          f" PASS ({n_cycles} cycles)")
+            dut._log.info(f"Iteration {iteration} (seed {iter_seed},"
+                          f" {mode_name}): PASS ({n_cycles} cycles)")
 
         # Progress summary every 1000 iterations (always, for long runs)
         done = iteration + 1
         if done % 1000 == 0:
             elapsed = time.monotonic() - start_time
             rate = done / elapsed if elapsed > 0 else 0
+            mode_summary = " ".join(
+                f"{FUZZ_MODES[m]}={mode_counts[m]}" for m in sorted(FUZZ_MODES))
             dut._log.info(
                 f"Progress: {done} seeds tested, {total_failures} failures,"
-                f" {rate:.1f} seeds/sec")
+                f" {rate:.1f} seeds/sec [{mode_summary}]")
 
     if n_iters > 0:
         assert total_mismatches == 0, f"Total mismatches: {total_mismatches}"
