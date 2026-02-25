@@ -244,11 +244,11 @@ async def test_fuzz(dut):
             total_failures += 1
             dut._log.error(f"Iteration {iteration} (seed {iter_seed}):"
                            f" {mismatches} mismatches in {cycle + 1} cycles")
-        else:
+        elif n_iters > 0:
             dut._log.info(f"Iteration {iteration} (seed {iter_seed}):"
                           f" PASS ({n_cycles} cycles)")
 
-        # Progress summary every 1000 iterations
+        # Progress summary every 1000 iterations (always, for long runs)
         done = iteration + 1
         if done % 1000 == 0:
             elapsed = time.monotonic() - start_time
