@@ -17,8 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 16,870 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,486 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 19,686 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,448 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -613,7 +613,7 @@ complete in one cycle, then the 2-cycle target fetch follows (3 cycles total).
 
 ## Register File SRAM Analysis
 
-Standard cell synthesis implements the register file with latches (~20T each) and mux trees, but a real chip would use SRAM cells (~8T each) — the 8×16-bit 2R1W array is perfectly regular. This over-counting inflates the RISCY-V02 transistor count by ~2,000T. The [full SRAM analysis](https://github.com/mysterymath/riscyv02/blob/main/tt-ihp-riscyv02/docs/sram-analysis.md) designs an equivalent 8T SRAM register file from first principles, explains how the cells and clock phases work, and counts every transistor. Summary:
+Standard cell synthesis implements the register file with DFFs (~32T each) and mux trees, but a real chip would use SRAM cells (~8T each) — the 8×16-bit 2R1W array is perfectly regular. This over-counting inflates the RISCY-V02 transistor count by ~6,200T. The [full SRAM analysis](https://github.com/mysterymath/riscyv02/blob/main/tt-ihp-riscyv02/docs/sram-analysis.md) designs an equivalent 8T SRAM register file from first principles, explains how the cells and clock phases work, and counts every transistor. Summary:
 
 | Component | Transistors |
 |---|---|
