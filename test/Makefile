@@ -24,7 +24,7 @@ COMPILE_ARGS    += -DGL_TEST
 COMPILE_ARGS    += -DFUNCTIONAL
 COMPILE_ARGS    += -DSIM
 VERILOG_SOURCES += $(PDK_ROOT)/ihp-sg13g2/libs.ref/sg13g2_io/verilog/sg13g2_io.v
-VERILOG_SOURCES += $(PDK_ROOT)/ihp-sg13g2/libs.ref/sg13g2_stdcell/verilog/sg13g2_stdcell.v
+VERILOG_SOURCES += $(SIM_BUILD)/sg13g2_stdcell_func.v
 
 # this gets copied in by the GDS action workflow
 VERILOG_SOURCES += $(PWD)/gate_level_netlist.v
@@ -43,6 +43,12 @@ COCOTB_TEST_MODULES = test_reset,test_memory,test_alu,test_control,test_interrup
 
 # include cocotb's make rules to take care of the simulator setup
 include $(shell cocotb-config --makefiles)/Makefile.sim
+
+# Patched stdcell models: Icarus doesn't drive $setuphold delayed outputs,
+# so we add 'assign delayed_X = X;' for functional GL simulation.
+$(SIM_BUILD)/sg13g2_stdcell_func.v: $(PDK_ROOT)/ihp-sg13g2/libs.ref/sg13g2_stdcell/verilog/sg13g2_stdcell.v patch_stdcell.py
+	@mkdir -p $(dir $@)
+	python3 patch_stdcell.py < $< > $@
 
 PROJECT_DIR = $(CURDIR)/..
 CLOCK_PERIOD ?= 14

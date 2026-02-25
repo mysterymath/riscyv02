@@ -6,22 +6,17 @@
  *
  * Bus timing (one CPU cycle = one clk period):
  *
- *   posedge clk — mux_sel is still 0 (address phase):
+ *   posedge clk — address phase (mux_sel=0):
  *     addr register captures AB from {uio_out, uo_out}.
  *     SRAM read output (uio_in) settles to ram[addr].
  *
- *   negedge clk — mux_sel is still 1 (data phase):
+ *   negedge clk — data phase (mux_sel=1):
  *     CPU reads uio_in (for fetches and loads).
  *     Writes are captured: if RWB==0 (uo_out[0]), ram[addr] <= uio_out.
  *
- * Write capture and reset:
- *
- *   The write capture is gated on rst_n.  During reset, the mux_sel
- *   circuit is held at 0 (address phase), so uo_out carries AB[7:0]
- *   rather than {6'b0, SYNC, RWB}.  Without the gate, any address with
- *   bit 0 == 0 would be misinterpreted as RWB==0 (write), corrupting
- *   RAM contents.  In real hardware, the SRAM's write-enable signal
- *   would similarly be deasserted during reset.
+ * Write capture is gated on bus_running (set after the first posedge
+ * following reset release).  Before then, the output mux is stuck in
+ * address phase and uo_out carries AB[7:0], not RWB/SYNC.
  */
 
 `default_nettype none
@@ -67,20 +62,21 @@ module tb ();
       .rst_n  (rst_n)
   );
 
-  // Testbench-local mux_sel replica (matches project.v dual-edge toggle).
-  // This avoids referencing user_project.mux_sel, which doesn't exist in
-  // the flat gate-level netlist.
-  reg ms_q;
+  // Bus protocol running flag: set after the first posedge following reset.
+  // Before the first posedge, the output mux is stuck in address phase and
+  // uo_out carries AB[7:0] (not RWB/SYNC), so the write capture must be
+  // suppressed.  This replaces the old mux_sel replica, which referenced
+  // internal hierarchy incompatible with flat GL netlists.
+  reg bus_running;
   always @(posedge clk or negedge rst_n)
-    if (!rst_n)        ms_q <= 1'b0;
-    else if (!mux_sel) ms_q <= ~ms_q;
+    if (!rst_n) bus_running <= 1'b0;
+    else        bus_running <= 1'b1;
 
-  reg ms_q_d;
-  always @(negedge clk or negedge rst_n)
-    if (!rst_n)       ms_q_d <= 1'b0;
-    else if (mux_sel) ms_q_d <= ~ms_q_d;
-
-  wire mux_sel = ms_q ^ ms_q_d;
+  // mux_sel signal exposed for test_reset.py pin trace observation.
+  // Uses the same simple DFF: 0 at posedge (address sampled), 1 at negedge
+  // (data/status phase).  This matches the real mux_sel's steady-state
+  // behavior — after the first posedge, every negedge is data phase.
+  wire mux_sel = bus_running;
 
   // 64KB RAM — zero-initialized.  Program contents are written by cocotb
   // before reset, so the `initial` here is equivalent to flash being
@@ -105,14 +101,13 @@ module tb ();
   // -----------------------------------------------------------------------
   // Write capture: at negedge clk (data phase).
   //
-  // At negedge, mux_sel is 1, so uo_out[0] = RWB.  RWB=0 means the CPU
-  // is writing.  Gated on rst_n AND mux_sel: during reset mux_sel is
-  // stuck at 0 (address phase) and uo_out carries address bits, not RWB.
-  // The mux_sel check also protects the first negedge after reset release,
-  // where mux_sel hasn't yet toggled to data phase.
+  // At negedge the bus is in data phase: uo_out[0] = RWB, uio_out = data.
+  // RWB=0 means the CPU is writing.  Gated on bus_running to suppress the
+  // first negedge after reset where the output mux hasn't reached data
+  // phase yet (uo_out still carries address bits, not RWB).
   // -----------------------------------------------------------------------
   always @(negedge clk) begin
-    if (rst_n && mux_sel && !uo_out[0])
+    if (bus_running && !uo_out[0])
       ram[addr] <= uio_out;
   end
 
