@@ -48,36 +48,6 @@ latch on the following posedge. Then, the pins are muxed over to expose the
 control outputs and the data (read or write), to be latched on the following
 negedge. Control inputs stay consistent between the two phases.
 
-#### Bus Startup
-
-An internal signal `mux_sel` controls the output mux, toggling between address
-phase (`mux_sel=0`) and data phase (`mux_sel=1`) on every clock edge:
-
-```
-         ┌───┐   ┌───┐   ┌───┐   ┌───┐
-  clk    │   │   │   │   │   │   │   │
-      ───┘   └───┘   └───┘   └───┘   └───
-mux_sel  0 → 1   0   1   0   1   0   1
-           │   │ │   │ │   │ │   │
-           addr  data  addr  data
-```
-
-The transition happens after each edge (via non-blocking assignment), so the
-old value is what the external world sees at the capturing edge: address is on
-the pins at posedge (mux_sel was 0), data at negedge (mux_sel was 1).
-
-During reset, `mux_sel` is held at 0 — the output pins are stuck in address
-phase. After reset release, the first posedge starts the toggle and the bus
-protocol runs normally.
-
-**Reset deassertion requirement:** `rst_n` must deassert synchronous to
-`negedge clk` (i.e., while `clk` is low), so the first active edge is always
-a posedge. This is standard "async assert, sync deassert" practice. It
-guarantees that the first negedge after reset is a valid data phase
-(`mux_sel=1`), eliminating the need for any startup write-suppression logic
-in the demux. A 2-DFF synchronizer on the negedge satisfies this requirement
-in systems where reset may arrive asynchronously.
-
 ### Pinout
 
 **Address Phase**
@@ -114,6 +84,12 @@ in systems where reset may arrive asynchronously.
 - ESR is set to {I=1, T=0}
 - All registers are cleared to zero
 
+**Reset deassertion requirement:** Reset may be asserted asynchronously, but it
+must deassert synchronous to `negedge clk`. This guarantees the CPU does not
+reset halfway through a cycle of the bus protocol, and it also ensures correct
+setup and hold timing. A 2-DFF reset synchronizer on the negedge satisfies this
+requirement in systems where reset may arrive asynchronously.
+
 ### Interrupts
 
 RISCY-V02 supports maskable IRQ and non-maskable NMI interrupts.
@@ -143,11 +119,11 @@ everything needed for interrupt nesting.
 NMI handlers typically reset, halt, or spin. This is typical of modern RISC
 CPUs: NMI is intended for fatal hardware fault handling.
 
-**Interrupt latency:** 2 cycles from instruction completion to first handler
-instruction fetch (dispatch-time redirect + 2-cycle vector fetch). NMI edge
-detection is combinational -- if the falling edge arrives on the same cycle
-that the FSM is ready, the NMI is taken immediately with no additional
-detection delay.
+**Interrupt latency:** 2 cycles from instruction completion in execute stage to
+first handler instruction fetch (dispatch-time redirect + 2-cycle vector
+fetch). NMI edge detection is combinational -- if the falling edge arrives on
+the same cycle that the FSM is ready, the NMI is taken immediately with no
+additional detection delay.
 
 [Interrupt implementation](#interrupt-implementation) details are described
 later.
