@@ -75,6 +75,7 @@ async def test_reset_pin_trace(dut):
     dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 5)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
 
     dut._log.info("=== Pin trace after reset release ===")
@@ -113,6 +114,7 @@ async def test_reset_with_nop_program(dut):
     dut.ui_in.value = 0x07
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 5)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
 
     dut._log.info("=== Pin trace: all-NOP program ===")

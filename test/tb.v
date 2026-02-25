@@ -4,6 +4,11 @@
  * Models the external bus environment: a demux address register feeding a
  * 64KB async SRAM.
  *
+ * Reset requirement: rst_n must deassert synchronous to negedge clk (i.e.,
+ * while clk is low), so the first active edge is always a posedge.  This
+ * is standard "async assert, sync deassert" practice and eliminates the
+ * need for any startup write-suppression logic.
+ *
  * Bus timing (one CPU cycle = one clk period):
  *
  *   posedge clk — address phase:
@@ -13,11 +18,6 @@
  *   negedge clk — data phase:
  *     CPU reads uio_in (for fetches and loads).
  *     Writes are captured: if RWB==0 (uo_out[0]), ram[addr] <= uio_out.
- *
- * Write capture is gated on bus_running, a one-shot DFF that models the
- * demux's startup requirement: after reset, the CPU's output mux is stuck
- * in address phase until the first posedge.  Before then, uo_out carries
- * AB[7:0], not RWB/SYNC, so the demux must suppress write capture.
  */
 
 `default_nettype none
@@ -63,18 +63,6 @@ module tb ();
       .rst_n  (rst_n)
   );
 
-  // Bus startup guard: models the demux's write-suppression requirement.
-  //
-  // After reset, the CPU's output mux is stuck in address phase (mux_sel=0)
-  // until the first posedge starts the toggle.  Any negedge before that
-  // first posedge has uo_out = AB[7:0], not RWB — the demux must not
-  // interpret it as a write.  bus_running goes high after the first posedge
-  // and stays high, gating write capture below.
-  reg bus_running;
-  always @(posedge clk or negedge rst_n)
-    if (!rst_n) bus_running <= 1'b0;
-    else        bus_running <= 1'b1;
-
   // 64KB RAM — zero-initialized.  Program contents are written by cocotb
   // before reset, so the `initial` here is equivalent to flash being
   // blank at manufacturing.
@@ -99,11 +87,13 @@ module tb ();
   // Write capture: at negedge clk (data phase).
   //
   // At negedge the bus is in data phase: uo_out[0] = RWB, uio_out = data.
-  // RWB=0 means the CPU is writing.  Gated on bus_running to suppress
-  // writes before the first posedge after reset (see bus startup guard).
+  // RWB=0 means the CPU is writing.  Gated on rst_n to suppress writes
+  // while the clock runs during reset.  No additional startup guard is
+  // needed — rst_n deasserts synchronous to negedge clk, so the first
+  // negedge after reset is always a valid data phase (mux_sel=1).
   // -----------------------------------------------------------------------
   always @(negedge clk) begin
-    if (bus_running && !uo_out[0])
+    if (rst_n && !uo_out[0])
       ram[addr] <= uio_out;
   end
 

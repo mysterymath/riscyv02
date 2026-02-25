@@ -190,6 +190,7 @@ async def test_single_step(dut):
     dut.ui_in.value = 0x02
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 5)
 

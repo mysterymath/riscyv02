@@ -67,17 +67,16 @@ old value is what the external world sees at the capturing edge: address is on
 the pins at posedge (mux_sel was 0), data at negedge (mux_sel was 1).
 
 During reset, `mux_sel` is held at 0 — the output pins are stuck in address
-phase. After reset release, `mux_sel` remains at 0 until the first `posedge
-clk`, which starts the toggle. Any negedge between reset release and that
-first posedge is still in address phase: `uo_out[0]` carries AB[0], not RWB.
-External logic (demux, memory controller) must suppress write capture during
-this window.
+phase. After reset release, the first posedge starts the toggle and the bus
+protocol runs normally.
 
-In the normal case (reset releases while `clk` is low), the first edge is a
-posedge and no suppression window exists. If reset releases while `clk` is
-high, the immediately following negedge is in address phase and must be
-ignored for writes. A single DFF that goes high after the first posedge is
-sufficient to gate write capture.
+**Reset deassertion requirement:** `rst_n` must deassert synchronous to
+`negedge clk` (i.e., while `clk` is low), so the first active edge is always
+a posedge. This is standard "async assert, sync deassert" practice. It
+guarantees that the first negedge after reset is a valid data phase
+(`mux_sel=1`), eliminating the need for any startup write-suppression logic
+in the demux. A 2-DFF synchronizer on the negedge satisfies this requirement
+in systems where reset may arrive asynchronously.
 
 ### Pinout
 

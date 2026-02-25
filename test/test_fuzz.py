@@ -134,6 +134,7 @@ async def test_fuzz(dut):
         dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
         dut.rst_n.value = 0
         await ClockCycles(dut.clk, 20)
+        await FallingEdge(dut.clk)
         dut.rst_n.value = 1
         await FallingEdge(dut.clk)  # Let first post-reset negedge settle
 

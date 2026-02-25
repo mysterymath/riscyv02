@@ -68,6 +68,7 @@ async def test_cycle_count_cli(dut):
     dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     # Measure from first SYNC to next
     def get_sync():
@@ -197,6 +198,7 @@ async def test_cycle_count_reti(dut):
     dut.ui_in.value = 0x07  # RDY=1, NMIB=1, IRQB=1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
 
     for _ in range(200):
@@ -238,6 +240,7 @@ async def test_cycle_count_wai(dut):
     dut.ui_in.value = 0x06  # RDY=1, NMIB=1, IRQB=0
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
 
     for _ in range(100):
@@ -278,6 +281,7 @@ async def test_cycle_count_stp(dut):
     dut.ui_in.value = 0x07
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
 
     for _ in range(100):
@@ -320,6 +324,7 @@ async def test_cycle_count_brk(dut):
     dut.ui_in.value = 0x07
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
 
     for _ in range(100):

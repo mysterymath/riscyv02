@@ -5,7 +5,7 @@
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles
+from cocotb.triggers import ClockCycles, FallingEdge
 from test_helpers import *
 
 
@@ -29,6 +29,7 @@ async def test_reset_i_state(dut):
     dut.ui_in.value = 0x06  # IRQB=0 (asserted!)
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 100)
 
@@ -57,6 +58,7 @@ async def test_cli_enables_irq(dut):
     dut.ui_in.value = 0x07
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 20)
     dut.ui_in.value = 0x06
@@ -90,6 +92,7 @@ async def test_sei_disables_irq(dut):
     dut.ui_in.value = 0x07
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 50)
     dut.ui_in.value = 0x06
@@ -122,6 +125,7 @@ async def test_reti(dut):
     dut.ui_in.value = 0x07
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 30)
     dut.ui_in.value = 0x06
@@ -187,6 +191,7 @@ async def test_wai(dut):
     dut.ui_in.value = 0x07
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 50)
 
@@ -254,6 +259,7 @@ async def test_nmib_low_during_reset_no_spurious_nmi(dut):
     dut.ui_in.value = 0x05  # RDY=1, NMIB=0 (asserted!), IRQB=1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 100)
 
@@ -281,6 +287,7 @@ async def test_nmi(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 30)
 
@@ -317,6 +324,7 @@ async def test_i_bit_masking(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 50)
     _set_ui(dut, rdy=True, irqb=False, nmib=True)
@@ -355,6 +363,7 @@ async def test_irq_during_multicycle(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 40)
     _set_ui(dut, rdy=True, irqb=False, nmib=True)
@@ -389,6 +398,7 @@ async def test_cli_atomicity(dut):
     dut.ui_in.value = 0x06
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 50)
 
@@ -416,6 +426,7 @@ async def test_nmi_edge_triggered(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 30)
 
@@ -461,6 +472,7 @@ async def test_nmi_priority_over_irq(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 50)
     _set_ui(dut, rdy=True, irqb=False, nmib=False)
@@ -500,6 +512,7 @@ async def test_nmi_during_multicycle(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 40)
     _set_ui(dut, rdy=True, irqb=True, nmib=False)
@@ -534,6 +547,7 @@ async def test_nmi_second_edge(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 30)
 
@@ -573,6 +587,7 @@ async def test_nmi_during_rdy_low(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 30)
 
@@ -625,6 +640,7 @@ async def test_wai_irq(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 50)
     _set_ui(dut, rdy=True, irqb=False, nmib=True)
@@ -665,6 +681,7 @@ async def test_wai_nmi(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 50)
     _set_ui(dut, rdy=True, irqb=True, nmib=False)
@@ -705,6 +722,7 @@ async def test_wai_masked_irq_wakes(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 50)
     _set_ui(dut, rdy=True, irqb=False, nmib=True)
@@ -752,6 +770,7 @@ async def test_brk_masks_irq(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 50)
     _set_ui(dut, rdy=True, irqb=False, nmib=True)
@@ -800,6 +819,7 @@ async def test_brk_restores_i(dut):
     dut.ui_in.value = 0x06
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 300)
 
@@ -839,6 +859,7 @@ async def test_epcr(dut):
     dut.ui_in.value = 0x06
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 300)
 
@@ -887,6 +908,7 @@ async def test_epcw_redirect(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 300)
 
@@ -935,6 +957,7 @@ async def test_srw_enables_irq(dut):
     dut.ui_in.value = 0x06  # IRQB asserted
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 300)
 
@@ -969,6 +992,7 @@ async def test_irq_interrupts_jr(dut):
     dut.ui_in.value = 0x06
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 300)
 
@@ -1022,6 +1046,7 @@ async def test_nmi_during_brk_redirect(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
 
     # Let BRK dispatch, then pulse NMI during its target fetch
@@ -1081,6 +1106,7 @@ async def test_nmi_during_reti_redirect(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
 
     # Assert IRQ to trigger the handler
@@ -1128,6 +1154,7 @@ async def test_srr_includes_esr(dut):
     dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 50)
     _set_ui(dut, rdy=True, irqb=False, nmib=True)
@@ -1180,6 +1207,7 @@ async def test_srw_restores_esr(dut):
     dut.ui_in.value = 0x06       # IRQB asserted
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 300)
 

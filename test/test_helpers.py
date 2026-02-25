@@ -23,11 +23,17 @@ __all__ = [
 
 
 async def _reset(dut):
-    """Apply reset sequence."""
+    """Apply reset sequence.
+
+    rst_n deasserts after a falling edge (while clk is low), satisfying the
+    bus protocol's sync-deassert requirement: the first active edge after
+    reset is always a posedge.
+    """
     dut.ena.value = 1
     dut.ui_in.value = 0x06  # RDY=1, NMIB=1 (inactive)
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 20)
+    await FallingEdge(dut.clk)
     dut.rst_n.value = 1
 
 
