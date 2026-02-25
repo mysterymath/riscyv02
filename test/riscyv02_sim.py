@@ -387,6 +387,8 @@ class RISCYV02Sim:
                     self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
                     self.pc = target
                     self._redirect = True
+                else:
+                    self._1cycle_complete = True
                 return []
 
             if opcode == 15:            # BNZ (×2 format: imm8 << 1)
@@ -395,6 +397,8 @@ class RISCYV02Sim:
                     self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
                     self.pc = target
                     self._redirect = True
+                else:
+                    self._1cycle_complete = True
                 return []
 
             if opcode == 16:            # CEQI (sign-ext imm, equality, sets T)
@@ -454,6 +458,8 @@ class RISCYV02Sim:
                     self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
                     self.pc = target
                     self._redirect = True
+                else:
+                    self._1cycle_complete = True
                 return []
             if funct1 == 1:             # BF
                 if not self.t_bit:
@@ -461,6 +467,8 @@ class RISCYV02Sim:
                     self._fast_redirect = (next_pc & 0xFF00) == (target & 0xFF00)
                     self.pc = target
                     self._redirect = True
+                else:
+                    self._1cycle_complete = True
                 return []
             return []
 
@@ -600,10 +608,12 @@ class RISCYV02Sim:
 
             if funct4 == 0:               # SEI
                 self.i_bit = True
+                self._1cycle_complete = True
                 return []
 
             if funct4 == 1:               # CLI
                 self.i_bit = False
+                self._1cycle_complete = True
                 return []
 
             if funct4 == 2:               # WAI
@@ -631,6 +641,7 @@ class RISCYV02Sim:
                 self.i_bit = bool(val & 2)
                 self.t_bit = bool(val & 1)
                 self.esr = (val >> 2) & 3
+                self._1cycle_complete = True
                 return []
 
             if funct4 == 8:               # RETI

@@ -13,8 +13,10 @@
 // All decode properties are derived from named instruction fields (opcode, funct3,
 // funct4, imm8, etc.) and format-level group signals.
 //
-// All instructions dispatch to E_EXEC_LO, then optionally continue to
-// E_EXEC_HI (two-cycle ops). Memory instructions proceed from E_EXEC_HI
+// All instructions dispatch to E_EXEC_LO. Simple instructions (SEI, CLI,
+// SRW, not-taken branches) complete in 1 exec cycle. Two-cycle ops
+// (ALU reg/imm, shifts, comparisons, AUIPC, cross-page branches)
+// continue to E_EXEC_HI. Memory instructions proceed from E_EXEC_HI
 // to E_MEM_LO/HI for bus access.
 //
 // Register file ports are 16 bits wide. All regfile writes are deferred to
@@ -510,11 +512,15 @@ module riscyv02_execute (
             next_tmp_lo = rev8(shifter_result);
           end
         end else if (is_pc_rel) begin
+          // Not-taken branches: complete in 1 exec cycle
+          if ((is_branch && !((!(|r1)) ^ opcode[0]))
+           || (is_t_branch && !(t_bit ^ ir[5])))
+            insn_completing = 1'b1;
           // Same-page taken: high byte unchanged, 1 exec cycle (3 total)
-          if (((is_branch   && (!(|r1) ^ opcode[0]))
-            || (is_t_branch && (t_bit ^ ir[5]))
-            || (is_jump_imm && !ir[5] && ir[7:6] == {2{ir[15]}}))
-           && alu_co == ir[15]) begin
+          else if (((is_branch   && (!(|r1) ^ opcode[0]))
+                 || (is_t_branch && (t_bit ^ ir[5]))
+                 || (is_jump_imm && !ir[5] && ir[7:6] == {2{ir[15]}}))
+                && alu_co == ir[15]) begin
             jump            = 1'b1;
             next_pc         = {pc[15:8], alu_result[7:1]};
             insn_completing = 1'b1;
@@ -533,6 +539,14 @@ module riscyv02_execute (
           insn_i_bit = esr[1];
           next_t_bit = esr[0];
           jump       = 1'b1;
+          insn_completing = 1'b1;
+        end else if (is_sei || is_cli) begin
+          insn_i_bit      = is_cli ? 1'b0 : 1'b1;
+          insn_completing = 1'b1;
+        end else if (is_srw) begin
+          insn_i_bit      = r1[1];
+          next_t_bit      = r1[0];
+          next_esr        = r1[3:2];
           insn_completing = 1'b1;
         end
         next_carry_r = alu_co;
@@ -568,12 +582,13 @@ module riscyv02_execute (
           next_state = E_IDLE;
         end else begin
           // Execute high byte: completes this cycle
+          // (SEI/CLI/SRW/not-taken branches complete at E_EXEC_LO)
           insn_completing = 1'b1;
-          if (is_i_alu_wr || is_alu_rrr || is_epcr || is_srr) begin
+          if (is_i_alu_wr || is_alu_rrr || is_epcr || is_srr)
             w_we = 1'b1;
-          end else if (is_epcw) begin
+          else if (is_epcw)
             next_epc = {alu_result, tmp[7:0]};
-          end else if (is_cmp_imm || is_cmp_rr) begin
+          else if (is_cmp_imm || is_cmp_rr) begin
             if (is_ceqi || is_ceq)
               next_t_bit = ~((|tmp[7:0]) || (|alu_result));
             else if (is_cltui || is_cltu)
@@ -613,13 +628,6 @@ module riscyv02_execute (
               w_data = {pc, 1'b0};
               w_we   = 1'b1;
             end
-          end
-          if (is_sei) insn_i_bit = 1'b1;
-          if (is_cli) insn_i_bit = 1'b0;
-          if (is_srw) begin
-            insn_i_bit = r1[1];
-            next_t_bit = r1[0];
-            next_esr   = r1[3:2];
           end
           next_state = E_IDLE;
         end

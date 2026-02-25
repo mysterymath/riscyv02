@@ -17,8 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 19,686 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,448 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 19,604 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,366 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -482,24 +482,27 @@ Throughput is measured from one instruction boundary (SYNC) to the next. Three f
 2. **Bus contention (+1 per byte transferred):** memory loads/stores take the bus from fetch to transfer data. The 2 address-compute cycles (E_EXEC_LO, E_EXEC_HI) are hidden behind the fetch, but each bus transfer cycle adds 1 to the total.
 3. **Redirect penalty (execute exposed):** taken branches and jumps flush the speculative fetch, so execute cycles are no longer hidden. Total = execute cycles + 2 fresh fetch cycles.
 
-| Instruction | Cycles | Why |
-|---|---|---|
-| ALU / shifts / compares | 2 | Fetch-limited (execute hidden) |
-| SEI / CLI / SRR / SRW / EPCR / EPCW | 2 | Fetch-limited (execute hidden) |
-| Branch not taken | 2 | Fetch-limited (execute hidden) |
-| Branch taken, same page | 3 | Redirect: 1 execute + 2 fetch |
-| Branch taken, page crossing | 4 | Redirect: 2 execute + 2 fetch |
-| Byte load / store | 3 | Fetch floor + 1 bus transfer |
-| Word load / store | 4 | Fetch floor + 2 bus transfers |
-| J same page | 3 | Redirect: 1 execute + 2 fetch |
-| J page crossing / JAL | 4 | Redirect: 2 execute + 2 fetch |
-| JR same page | 3 | Redirect: 1 execute + 2 fetch |
-| JR page crossing / JALR | 4 | Redirect: 2 execute + 2 fetch |
-| IRQ / NMI | 2 | Redirect at dispatch: 0 execute + 2 fetch |
-| RETI / INT | 3 | Redirect: 1 execute + 2 fetch |
-| WAI (wake) | 2 | Fetch-limited (execute hidden) |
-| WAI (halt) | -- | Halted until interrupt |
-| STP | 1 | Enters halt (no fetch) |
+| Instruction | Cycles | Exec | Why |
+|---|---|---|---|
+| ALU / shifts / compares | 2 | 2 | Fetch-limited (execute hidden) |
+| SRR / EPCR / EPCW | 2 | 2 | Fetch-limited (execute hidden) |
+| SEI / CLI / SRW | 2 | 1 | Fetch-limited (execute hidden) |
+| Branch not taken | 2 | 1 | Fetch-limited (execute hidden) |
+| Branch taken, same page | 3 | 1 | Redirect: 1 execute + 2 fetch |
+| Branch taken, page crossing | 4 | 2 | Redirect: 2 execute + 2 fetch |
+| Byte load / store | 3 | 3 | Fetch floor + 1 bus transfer |
+| Word load / store | 4 | 4 | Fetch floor + 2 bus transfers |
+| J same page | 3 | 1 | Redirect: 1 execute + 2 fetch |
+| J page crossing / JAL | 4 | 2 | Redirect: 2 execute + 2 fetch |
+| JR same page | 3 | 1 | Redirect: 1 execute + 2 fetch |
+| JR page crossing / JALR | 4 | 2 | Redirect: 2 execute + 2 fetch |
+| IRQ / NMI | 2 | 0 | Redirect at dispatch: 0 execute + 2 fetch |
+| RETI / INT | 3 | 1 | Redirect: 1 execute + 2 fetch |
+| WAI (wake) | 2 | 1 | Fetch-limited (execute hidden) |
+| WAI (halt) | -- | -- | Halted until interrupt |
+| STP | 1 | 1 | Enters halt (no fetch) |
+
+**Exec** — cycles the execute unit is busy before the CPU can recognize a pending interrupt. For fetch-limited instructions (exec ≤ 2), this is hidden behind the 2-cycle fetch and doesn't affect throughput, but a 1-cycle exec allows an interrupt to preempt the second fetch cycle.
 
 ### Self-Modifying Code
 
