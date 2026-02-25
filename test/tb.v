@@ -49,8 +49,10 @@ module tb ();
   wire [7:0] uio_out;
   wire [7:0] uio_oe;
 
-  // SRAM read data: continuous from registered address.
-  wire [7:0] uio_in = ram[addr];
+  // Bidirectional I/O pin model: when uio_oe drives (address phase / writes),
+  // uio_in reads back uio_out (the CPU's own output).  When tristated (read
+  // data phase), uio_in sees SRAM data — matching real pad behavior.
+  wire [7:0] uio_in = (uio_oe & uio_out) | (~uio_oe & ram[addr]);
 
   tt_um_riscyv02 user_project (
       .ui_in  (ui_in),
