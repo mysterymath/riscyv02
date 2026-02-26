@@ -80,8 +80,8 @@ module tt_um_riscyv02 (
   reg nmi_pending;
   always @(negedge clk or negedge rst_n)
     if (!rst_n)            nmi_pending <= 1'b0;
-    else if (exec_nmi_ack) nmi_pending <= 1'b0;
     else if (nmi_edge)     nmi_pending <= 1'b1;
+    else if (exec_nmi_ack) nmi_pending <= 1'b0;
 
   // -----------------------------------------------------------------------
   // Mux select: dual-edge register (shared with 6502 comparison model).

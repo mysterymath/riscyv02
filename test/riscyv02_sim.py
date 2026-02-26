@@ -31,6 +31,15 @@
 #   If an interrupt fires during a redirect's target fetch, the target
 #   instruction never executes. EPC captures the target address; RETI
 #   will re-fetch it.
+#
+# NMI handshake:
+#   NMIB is edge-triggered (falling edge latches a pending NMI). A new
+#   edge is always captured, even during an in-progress NMI. The CPU
+#   takes a pending NMI at the next interruptible point, provided it is
+#   not already handling one (nmi_ack clear). After taking an NMI:
+#     cycle N:   NMI taken, nmi_ack set, nmi_pending held
+#     cycle N+1: nmi_ack clears nmi_pending
+#     cycle N+2: cleared nmi_pending clears nmi_ack; CPU receptive again
 
 
 def sext8(v):
@@ -116,7 +125,12 @@ class RISCYV02Sim:
     # ------------------------------------------------------------------
 
     def _check_interrupt(self, irqb, nmi_edge):
-        """Check for pending interrupts. Returns True if one was taken."""
+        """Check for pending interrupts at an interruptible point.
+
+        The CPU won't take a new NMI while still handling the previous one
+        (nmi_ack set). nmi_ack is not modified before this check, so it
+        reflects the start-of-cycle state.
+        """
         take_nmi = (self.nmi_pending or nmi_edge) and not self.nmi_ack
         take_irq = not irqb and not self.i_bit and not take_nmi
         if take_nmi or take_irq:
@@ -130,19 +144,21 @@ class RISCYV02Sim:
 
     def tick(self, irqb, nmib, rdy):
         """Advance one clock cycle. Called at falling edge."""
-        # NMI edge detection (ungated — runs every cycle)
+        # NMI edge detection (runs every cycle, regardless of CPU state)
         nmi_edge = self.nmi_prev and not nmib
         self.nmi_prev = nmib
 
-        # Snapshot pre-update values (simultaneous updates)
-        old_nmi_ack = self.nmi_ack
-        old_nmi_pending = self.nmi_pending
+        # Capture start-of-cycle NMI state for end-of-cycle handshake update
+        nmi_was_pending = self.nmi_pending
+        nmi_was_handling = self.nmi_ack
 
-        # nmi_pending update (ungated, every cycle)
-        if old_nmi_ack:
-            self.nmi_pending = False
-        elif nmi_edge:
+        # NMI pending latch (runs every cycle, regardless of CPU state).
+        # A new edge is always captured — it must never be masked by a
+        # stale acknowledgment from the previous NMI.
+        if nmi_edge:
             self.nmi_pending = True
+        elif self.nmi_ack:
+            self.nmi_pending = False
 
         # Clock gating
         wake = self.nmi_pending or nmi_edge or not irqb
@@ -160,9 +176,6 @@ class RISCYV02Sim:
                 self.current_dout = dout & 0xFF
                 self._bus_idx += 1
             return
-
-        if old_nmi_ack and not old_nmi_pending:
-            self.nmi_ack = False
 
         if self.waiting:
             self.waiting = False
@@ -183,6 +196,13 @@ class RISCYV02Sim:
         if self._bus_idx >= self._interrupt_point:
             if self._check_interrupt(irqb, nmi_edge):
                 self._bus_idx = 0
+
+        # NMI handshake completion: the CPU stops handling an NMI once the
+        # pending flag has cleared.  A new NMI taken this cycle (nmi_ack
+        # just went high) keeps the handling flag set.
+        nmi_just_taken = self.nmi_ack and not nmi_was_handling
+        if not nmi_just_taken and not nmi_was_pending:
+            self.nmi_ack = False
 
         # Consume next bus entry
         addr, rwb, dout = self._bus_seq[self._bus_idx]
