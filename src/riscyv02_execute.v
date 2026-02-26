@@ -63,7 +63,7 @@ module riscyv02_execute (
     output reg  [7:0]  dout,
     output reg         rwb,
     output wire        ir_accept,
-    output reg         nmi_ack,      // NMI acknowledged (registered, for clearing nmi_pending)
+    output wire        nmi_ack,      // NMI acknowledged (combinational, clears nmi_pending)
     output wire        waiting,      // WAI: halted until interrupt (gates cpu_clk)
     output wire        stopped,      // STP: halted permanently, only reset recovers
     output reg         wai_woken,    // WAI wake committed (keeps cpu_clk running)
@@ -435,7 +435,7 @@ module riscyv02_execute (
 
   // Interrupt control
   wire fsm_ready = (state == E_IDLE) || insn_completing;
-  wire take_nmi = fsm_ready && (nmi_pending || nmi_edge) && !nmi_ack;
+  wire take_nmi = fsm_ready && (nmi_pending || nmi_edge);
   wire take_irq = fsm_ready && !irqb && !insn_i_bit && !take_nmi;
   assign ir_accept = fsm_ready && ir_valid && !take_nmi && !take_irq && !jump;
   assign waiting = (state == E_IDLE) && is_wai;
@@ -733,15 +733,9 @@ module riscyv02_execute (
     end
   end
 
-  // NMI handshake: set has priority (take_nmi fires via nmi_edge
-  // before nmi_pending is registered, so nmi_pending may still be 0).
-  always @(negedge clk or negedge rst_n) begin
-    if (!rst_n)
-      nmi_ack <= 1'b0;
-    else if (take_nmi)
-      nmi_ack <= 1'b1;
-    else if (!nmi_pending)
-      nmi_ack <= 1'b0;
-  end
+  // NMI acknowledgment: combinational — clears nmi_pending the same
+  // negedge the FSM processes the NMI.  No multi-cycle handshake needed;
+  // fsm_ready prevents re-taking while the handler runs.
+  assign nmi_ack = take_nmi;
 
 endmodule

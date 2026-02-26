@@ -77,11 +77,45 @@ module tt_um_riscyv02 (
 
   wire exec_nmi_ack;
 
+  // -----------------------------------------------------------------------
+  // NMI pending latch — cross-domain handshake
+  //
+  // nmi_pending should SET on the ungated clock (capture edges even when
+  // the CPU is stalled or waiting) but CLEAR on the gated clock (only
+  // when the CPU actually processes the NMI).  A single register can't
+  // be clocked by two clocks, so we synthesize this indirectly:
+  //
+  //   cpu_rdy_latched mirrors the ICG's internal latch.  The ICG
+  //   (sg13g2_lgcp_1) is transparent-low: during CLK=0 it follows
+  //   cpu_rdy; at posedge CLK it captures and holds.  A posedge FF
+  //   sampling cpu_rdy has the same capture point, so at every ungated
+  //   negedge, cpu_rdy_latched == 1 iff the ICG produced a gated
+  //   negedge on that same instant — i.e., the CPU is actually clocked.
+  //
+  //   Conditioning the pending clear on cpu_rdy_latched ensures:
+  //     - WAI wake: cpu_rdy goes high combinationally at the ungated
+  //       negedge (via wake), but cpu_rdy_latched still reflects the
+  //       *previous* posedge capture (0, since the CPU was halted).
+  //       The clear is blocked; nmi_edge sets pending normally.
+  //       On the *next* negedge, cpu_rdy_latched = 1 (captured at the
+  //       intervening posedge), and the CPU's first gated negedge
+  //       processes the NMI and clears pending simultaneously.
+  //     - RDY stall: cpu_rdy_latched = 0, so stale exec_nmi_ack from
+  //       the frozen execute state can't spuriously clear pending.
+  //     - Normal operation: cpu_rdy_latched = 1, exec_nmi_ack fires
+  //       the same negedge execute takes the NMI, pending clears
+  //       immediately.  Next cycle: pending = 0, no double-take.
+  // -----------------------------------------------------------------------
+  reg cpu_rdy_latched;
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n) cpu_rdy_latched <= 1'b0;
+    else        cpu_rdy_latched <= cpu_rdy;
+
   reg nmi_pending;
   always @(negedge clk or negedge rst_n)
-    if (!rst_n)            nmi_pending <= 1'b0;
-    else if (nmi_edge)     nmi_pending <= 1'b1;
-    else if (exec_nmi_ack) nmi_pending <= 1'b0;
+    if (!rst_n)                                    nmi_pending <= 1'b0;
+    else if (cpu_rdy_latched && exec_nmi_ack)      nmi_pending <= 1'b0;
+    else if (nmi_edge)                             nmi_pending <= 1'b1;
 
   // -----------------------------------------------------------------------
   // Mux select: dual-edge register (shared with 6502 comparison model).

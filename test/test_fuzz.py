@@ -119,7 +119,7 @@ def _snap_sim(sim, include_regs=False):
         f"SIM[addr=0x{sim.current_addr:04X} sync={sim.current_sync}"
         f" rwb={sim.current_rwb} idx={sim._bus_idx}/{len(sim._bus_seq)}"
         f" ipt={sim._interrupt_point} pc=0x{sim.pc:04X}]"
-        f" nmi[pend={sim.nmi_pending} ack={sim.nmi_ack}]"
+        f" nmi[pend={sim.nmi_pending}]"
     )
     if include_regs:
         s += f" regs={['%04X' % r for r in sim.regs]}"
