@@ -76,6 +76,7 @@ class RISCYV02Sim:
         self.t_bit = False      # T flag (condition result)
         self.esr = 0b10         # Exception status register: {I=1, T=0}
         self.waiting = False
+        self.wai_woken = False  # Once woken, stay active until a non-WAI executes
         self.stopped = False
 
         # NMI state
@@ -147,7 +148,7 @@ class RISCYV02Sim:
         # CPU active check: the CPU stalls on RDY=0, and halts on WAI/STP
         # (unless woken by an interrupt source).
         interrupt_wake = self.nmi_pending or nmi_edge or not irqb
-        self.cpu_active = rdy and not self.stopped and (not self.waiting or interrupt_wake)
+        self.cpu_active = rdy and not self.stopped and (not self.waiting or interrupt_wake or self.wai_woken)
         if not self.cpu_active:
             # WAI/STP drain: the halt takes effect during execute, but the
             # next fetch has already started. The CPU completes one more bus
@@ -163,6 +164,7 @@ class RISCYV02Sim:
 
         if self.waiting:
             self.waiting = False
+            self.wai_woken = True
 
         # Stores are not visible to the immediately following instruction
         # fetch (pipelined ahead), so defer commits until _dispatch().
@@ -175,6 +177,9 @@ class RISCYV02Sim:
         if self._bus_idx >= len(self._bus_seq):
             took_int = self._dispatch(irqb, nmi_edge)
             self._bus_idx = 0
+            # Wake commitment ends when a non-WAI instruction dispatches.
+            if not self.waiting:
+                self.wai_woken = False
 
         # After the execute phase, the CPU is interruptible. Check before
         # consuming each remaining entry (the target fetch for redirects).
@@ -182,6 +187,7 @@ class RISCYV02Sim:
         if not took_int and self._bus_idx >= self._interrupt_point:
             if self._check_interrupt(irqb, nmi_edge):
                 self._bus_idx = 0
+                self.wai_woken = False
 
         # Consume next bus entry
         addr, rwb, dout = self._bus_seq[self._bus_idx]
