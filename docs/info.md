@@ -17,8 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 19,604 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,366 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 19,674 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,438 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
