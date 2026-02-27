@@ -333,6 +333,9 @@ class Asm:
         self.prog[self.pc + 1] = (word >> 8) & 0xFF
         self.pc += 2
 
+    def string(self, s):
+        self.db(*s.encode(), 0)
+
     # I-type instructions
     def li(self, rd, imm):      self._emit(_encode_li(rd, imm))
     def addi(self, rd, imm):    self._emit(_encode_addi(rd, imm))
@@ -452,6 +455,21 @@ class Asm:
         """Self-loop: J -1."""
         self._emit(_spin())
 
+    def la(self, rd, target):
+        """Load 16-bit address: LUI rd, hi; ADDI rd, lo."""
+        if isinstance(target, str):
+            self.fixups.append(('la', self.pc, rd, target))
+            self._emit((0, 0))  # LUI placeholder
+            self._emit((0, 0))  # ADDI placeholder
+        else:
+            hi = (target >> 8) & 0xFF
+            lo = target & 0xFF
+            if lo & 0x80:
+                hi = (hi + 1) & 0xFF
+            lo_s = lo - 256 if lo & 0x80 else lo
+            self._emit(_encode_lui(rd, hi))
+            self._emit(_encode_addi(rd, lo_s))
+
     # Output methods
     def segments(self):
         """Return [(start_addr, bytes), ...] of contiguous segments."""
@@ -503,6 +521,22 @@ class Asm:
                 assert label in self.labels, f"undefined label: {label}"
                 imm = (self.labels[label] - addr) // 2 - 1
                 bytepair = (_encode_j_insn if kind == 'j' else _encode_jal_insn)(imm)
+            elif kind == 'la':
+                _, addr, rd, label = fixup
+                assert label in self.labels, f"undefined label: {label}"
+                target = self.labels[label]
+                hi = (target >> 8) & 0xFF
+                lo = target & 0xFF
+                if lo & 0x80:
+                    hi = (hi + 1) & 0xFF
+                lo_s = lo - 256 if lo & 0x80 else lo
+                lui = _encode_lui(rd, hi)
+                addi = _encode_addi(rd, lo_s)
+                self.prog[addr] = lui[0]
+                self.prog[addr + 1] = lui[1]
+                self.prog[addr + 2] = addi[0]
+                self.prog[addr + 3] = addi[1]
+                continue
             self.prog[addr] = bytepair[0]
             self.prog[addr + 1] = bytepair[1]
         return self.prog
