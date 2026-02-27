@@ -80,13 +80,29 @@ set_input_delay $input_delay_value -clock $clocks -clock_fall \
 # -----------------------------------------------------------------------
 # Output delays — dual-edge constraints for muxed bus
 # -----------------------------------------------------------------------
-# Posedge constraint on all outputs (address phase sampling edge).
-set_output_delay $output_delay_value -clock $clocks [all_outputs]
+# Output hold guarantee: all outputs remain stable for at least 5ns after
+# the launching clock edge, matching the hold time requirement of 74HC
+# series DFFs (tH = 5ns). This is critical for external demux logic
+# (DFFs latching address/data on the same edge that triggers the phase
+# switch). The -min constraint forces the resizer to insert delay buffers
+# on any output path faster than 5ns.
+set output_hold_value -5
 
-# Negedge constraint on muxed bus outputs (data phase sampling edge).
-# These pins carry both address and data; the false paths below ensure
-# each path is only checked against its correct sampling edge.
-set_output_delay $output_delay_value -clock clk_data -add_delay \
+# Setup (max) — posedge constraint on all outputs (address phase).
+set_output_delay -max $output_delay_value -clock $clocks [all_outputs]
+# Hold (min) — outputs must not change for 10ns after posedge.
+set_output_delay -min $output_hold_value -clock $clocks [all_outputs]
+
+# Setup (max) — negedge constraint on muxed bus outputs (data phase).
+set_output_delay -max $output_delay_value -clock clk_data -add_delay \
+    [get_ports {uio_out[0] uio_out[1] uio_out[2] uio_out[3] \
+                uio_out[4] uio_out[5] uio_out[6] uio_out[7] \
+                uo_out[0] uo_out[1] uo_out[2] uo_out[3] \
+                uo_out[4] uo_out[5] uo_out[6] uo_out[7] \
+                uio_oe[0] uio_oe[1] uio_oe[2] uio_oe[3] \
+                uio_oe[4] uio_oe[5] uio_oe[6] uio_oe[7]}]
+# Hold (min) — outputs must not change for 10ns after negedge.
+set_output_delay -min $output_hold_value -clock clk_data -add_delay \
     [get_ports {uio_out[0] uio_out[1] uio_out[2] uio_out[3] \
                 uio_out[4] uio_out[5] uio_out[6] uio_out[7] \
                 uo_out[0] uo_out[1] uo_out[2] uo_out[3] \
