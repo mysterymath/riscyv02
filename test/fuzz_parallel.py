@@ -53,6 +53,24 @@ def main():
 
     print(f"\n{args.jobs} workers running. Ctrl-C to stop all.\n")
 
+    # Track file positions for tailing logs
+    log_pos = {i: 0 for i, _, _ in procs}
+    KEYWORDS = ("Progress:", "Final:", "MISMATCH", "FAIL", "ERROR")
+
+    def tail_logs():
+        for i, _, log in procs:
+            try:
+                with open(log, "r") as f:
+                    f.seek(log_pos[i])
+                    for line in f:
+                        if any(kw in line for kw in KEYWORDS):
+                            # Strip cocotb timestamp prefix, keep the meat
+                            msg = line.strip()
+                            print(f"[w{i}] {msg}")
+                    log_pos[i] = f.tell()
+            except FileNotFoundError:
+                pass
+
     def kill_all():
         for _, p, _ in procs:
             try:
@@ -63,6 +81,7 @@ def main():
     try:
         while procs:
             time.sleep(1)
+            tail_logs()
             still_running = []
             for i, p, log in procs:
                 ret = p.poll()
@@ -71,12 +90,13 @@ def main():
                 elif ret != 0:
                     print(f"FAIL: Worker {i} exited with code {ret} — see {log}")
                 else:
-                    print(f"OK:   Worker {i} finished — see {log}")
+                    print(f"OK:   Worker {i} finished")
             procs = still_running
     except KeyboardInterrupt:
         print("\nCtrl-C received, killing all workers...")
         kill_all()
     finally:
+        tail_logs()  # flush any remaining lines
         # Clean up results files
         for i in range(args.jobs):
             f = f"results_fuzz_{i}.xml"
