@@ -147,6 +147,8 @@ async def test_fuzz(dut):
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
+    debug = os.environ.get('FUZZ_DEBUG', '')
+
     total_mismatches = 0
     total_failures = 0
     mode_counts = [0] * len(FUZZ_MODES)
@@ -206,9 +208,22 @@ async def test_fuzz(dut):
 
                 rtl_ab = (rtl_uio << 8) | rtl_uo
                 sim_ab = (sim_uio << 8) | sim_uo
+                dbg = ""
+                if debug:
+                    es = _safe_int(dut.user_project.u_execute.state.value)
+                    ei = _safe_int(dut.user_project.u_execute.ir.value)
+                    w = _safe_int(dut.user_project.exec_waiting.value)
+                    cr = _safe_int(dut.user_project.cpu_rdy.value)
+                    wk = _safe_int(dut.user_project.wake.value)
+                    gl = _safe_int(dut.user_project.u_cpu_icg.gate_latched.value)
+                    fs = _safe_int(dut.user_project.u_fetch.state.value)
+                    ia = _safe_int(dut.user_project.u_execute.ir_accept.value)
+                    dbg = (f" | est={es} ir=0x{ei:04X} wait={w}"
+                           f" rdy={cr} wake={wk} gate={gl}"
+                           f" fst={fs} ira={ia}")
                 trace_buf.append(
                     f"c{cycle} posedge: RTL_AB=0x{rtl_ab:04X}"
-                    f" SIM_AB=0x{sim_ab:04X}")
+                    f" SIM_AB=0x{sim_ab:04X}{dbg}")
 
                 mismatch_this_edge = False
                 for sig, rv, sv in [("uio_oe", rtl_oe, sim_oe),

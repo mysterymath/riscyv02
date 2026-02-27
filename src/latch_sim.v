@@ -7,6 +7,6 @@ module sg13g2_lgcp_1 (GCLK, GATE, CLK);
   input GATE, CLK;
   reg gate_latched;
   always @(CLK or GATE)
-    if (!CLK) gate_latched <= GATE;  // Latch on low phase (transparent-low)
+    if (!CLK) gate_latched = GATE;  // Transparent-low latch: tracks GATE immediately
   assign GCLK = CLK & gate_latched;
 endmodule
