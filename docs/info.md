@@ -65,6 +65,10 @@ negedge. Control inputs stay consistent between the two phases.
 - `ui_in[1]` = NMIB (active-low non-maskable interrupt, edge-triggered)
 - `ui_in[2]` = RDY (active-high ready signal)
 
+See [Demux: Reconstructing the Bus](#demux-reconstructing-the-bus) for how to
+demultiplex these pins into separate address, data, and control signals for
+connecting to async SRAM and peripherals.
+
 ### Architecture
 
 - **8x 16-bit general-purpose registers**: R0-R7 (3-bit encoding)
@@ -135,6 +139,70 @@ Flash the [demo board firmware](#demo-board-firmware) onto the TT demoboard's RP
 ## External hardware
 
 None — the TT demoboard's RP2350 provides SRAM emulation and I/O. No additional PCB or components are needed.
+
+## Demux: Reconstructing the Bus
+
+The muxed TT pins must be demultiplexed back into separate address, data, and
+control signals before connecting to SRAM, ROM, or peripherals. A reference
+implementation is provided in
+[`src/tt_um_riscyv02_demux.v`](https://github.com/mysterymath/riscyv02/blob/main/src/tt_um_riscyv02_demux.v);
+what follows is a complete description of the technique.
+
+### Address Latch
+
+Capture `{uio_out, uo_out}` into a 16-bit posedge DFF at posedge clk. At that
+instant, the chip's internal `mux_sel` is still 0 (address phase) because its
+toggle FF hasn't fired yet, so the address is stable with tCQ hold time.
+
+```
+ADDR[15:0] <= {uio_out[7:0], uo_out[7:0]}   @ posedge clk
+```
+
+### RWB and SYNC: Safe-Default Gating
+
+During the address phase (clk LOW), `uo_out` carries address bits — garbage if
+interpreted as control signals. A naive approach (capturing RWB/SYNC into
+negedge DFFs) leaves them one half-cycle stale, causing spurious writes on
+write-to-read transitions when using standard SRAM write-enable formulas.
+
+Instead, gate RWB and SYNC combinationally with clk to present safe defaults
+during the address phase:
+
+```
+RWB  = uo_out[0] | ~clk     (1 = read/safe during address phase)
+SYNC = uo_out[1] & clk      (0 = inactive during address phase)
+```
+
+During the data phase (clk HIGH), the real values pass through unmodified.
+
+### Async SRAM Connection
+
+With safe-defaulted RWB and PHI2 (= clk), the standard 65C02 SRAM formulas
+work directly:
+
+```
+WE# = ~(PHI2 & ~RWB) = ~clk | uo_out[0]
+OE# = ~(PHI2 &  RWB) = ~(clk & uo_out[0])
+```
+
+Both signals are forced inactive during the address phase (clk LOW), preventing
+glitches. During the data phase:
+- **Writes:** WE# goes LOW while clk is HIGH and RWB is 0. Data latches on the
+  WE# rising edge (clk falling).
+- **Reads:** OE# goes LOW while clk is HIGH and RWB is 1. Read data must be
+  valid before the negedge for the CPU to capture it.
+
+### Data Bus Direction
+
+`DATA_OE` (derived from `uio_oe == 8'hFF`) is HIGH during both address phase
+(address output) and write data phase. External bus transceivers should gate it
+with PHI2:
+
+```
+DATA_DIR = PHI2 & DATA_OE    (1 = CPU driving, 0 = memory driving)
+```
+
+Or simply use WE#/OE# directly, which already incorporate the phase gating.
 
 ## Demo Board Firmware
 
