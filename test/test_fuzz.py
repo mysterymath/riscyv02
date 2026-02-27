@@ -9,6 +9,7 @@
 import itertools
 import os
 import random
+import signal
 import time
 from collections import deque
 
@@ -17,6 +18,13 @@ from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, RisingEdge, FallingEdge
 
 from riscyv02_sim import RISCYV02Sim
+
+_stop_requested = False
+
+def _sigint_handler(signum, frame):
+    global _stop_requested
+    _stop_requested = True
+    signal.signal(signal.SIGINT, signal.SIG_DFL)  # second Ctrl-C kills immediately
 
 
 TRACE_DEPTH = 500  # Number of entries to keep in the circular buffer
@@ -149,13 +157,20 @@ async def test_fuzz(dut):
 
     debug = os.environ.get('FUZZ_DEBUG', '')
 
+    signal.signal(signal.SIGINT, _sigint_handler)
+
     total_mismatches = 0
     total_failures = 0
     mode_counts = [0] * len(FUZZ_MODES)
     start_time = time.monotonic()
     counter = itertools.count() if n_iters == 0 else range(n_iters)
+    iteration = -1
 
     for iteration in counter:
+        if _stop_requested:
+            dut._log.info("Ctrl-C received, stopping after %d iterations", iteration)
+            break
+
         iter_seed = seed + iteration
         rng = random.Random(iter_seed)
 
@@ -323,5 +338,14 @@ async def test_fuzz(dut):
                 f"Progress: {done} seeds tested, {total_failures} failures,"
                 f" {rate:.1f} seeds/sec [{mode_summary}]")
 
-    if n_iters > 0:
+    elapsed = time.monotonic() - start_time
+    done = iteration + 1 if not _stop_requested else iteration
+    rate = done / elapsed if elapsed > 0 else 0
+    mode_summary = " ".join(
+        f"{FUZZ_MODES[m]}={mode_counts[m]}" for m in sorted(FUZZ_MODES))
+    dut._log.info(
+        f"Final: {done} seeds tested, {total_failures} failures,"
+        f" {rate:.1f} seeds/sec [{mode_summary}]")
+
+    if n_iters > 0 and not _stop_requested:
         assert total_mismatches == 0, f"Total mismatches: {total_mismatches}"

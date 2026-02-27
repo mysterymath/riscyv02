@@ -42,6 +42,10 @@ TOPLEVEL = tb
 # List test modules to run, separated by commas and without the .py suffix:
 COCOTB_TEST_MODULES = test_reset,test_memory,test_alu,test_control,test_interrupts,test_cycles,test_overlap,test_fuzz
 
+ifdef NODUMP
+COMPILE_ARGS += -DNODUMP
+endif
+
 # include cocotb's make rules to take care of the simulator setup
 include $(shell cocotb-config --makefiles)/Makefile.sim
 
