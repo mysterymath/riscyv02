@@ -5,7 +5,8 @@ Launches multiple cocotb fuzz workers with non-overlapping seeds,
 separate build dirs, and no VCD dumping.
 
 Usage:
-    python fuzz_parallel.py -j 16              # 16 workers, infinite
+    python fuzz_parallel.py -j 16              # 16 workers, RTL
+    python fuzz_parallel.py -j 8 --gates       # 8 workers, gate-level
     python fuzz_parallel.py -j 32 --seed 5000  # custom start seed
     python fuzz_parallel.py -j 8 --iters 1000  # finite per worker
 """
@@ -25,12 +26,18 @@ def main():
     parser.add_argument("-j", "--jobs", type=int, required=True, help="Number of workers")
     parser.add_argument("--seed", type=int, default=0, help="Starting seed (default: 0)")
     parser.add_argument("--iters", type=int, default=0, help="Iterations per worker (0=infinite)")
+    parser.add_argument("--gates", action="store_true", help="Run gate-level simulation (requires PDK_ROOT)")
     args = parser.parse_args()
 
+    if args.gates and not os.environ.get("PDK_ROOT"):
+        print("ERROR: --gates requires PDK_ROOT to be set", file=sys.stderr)
+        sys.exit(1)
+
+    prefix = "gl_fuzz" if args.gates else "fuzz"
     procs = []
     for i in range(args.jobs):
         seed = args.seed + i * SEED_SPACING
-        log = f"fuzz_{i}.log"
+        log = f"{prefix}_{i}.log"
         env = {
             **os.environ,
             "FUZZ_SEED": str(seed),
@@ -38,11 +45,13 @@ def main():
         }
         cmd = [
             "make",
-            f"SIM_BUILD=sim_build/fuzz_{i}",
+            f"SIM_BUILD=sim_build/{prefix}_{i}",
             "NODUMP=1",
             "COCOTB_TEST_MODULES=test_fuzz",
-            f"COCOTB_RESULTS_FILE=results_fuzz_{i}.xml",
+            f"COCOTB_RESULTS_FILE=results_{prefix}_{i}.xml",
         ]
+        if args.gates:
+            cmd.append("GATES=yes")
         with open(log, "w") as f:
             p = subprocess.Popen(
                 cmd, env=env, stdout=f, stderr=subprocess.STDOUT,
@@ -99,7 +108,7 @@ def main():
         tail_logs()  # flush any remaining lines
         # Clean up results files
         for i in range(args.jobs):
-            f = f"results_fuzz_{i}.xml"
+            f = f"results_{prefix}_{i}.xml"
             if os.path.exists(f):
                 os.remove(f)
 
