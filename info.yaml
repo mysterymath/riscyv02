@@ -3,7 +3,7 @@ project:
   title:        "RISCY-V02"
   author:       "mysterymath"
   discord:      ""
-  description:  "16-bit RISC processor, pin-compatible with WDC 65C02"
+  description:  "16-bit RISC processor, logically pin-compatible with WDC 6502"
   language:     "Verilog"
   clock_hz:     71428571
 
