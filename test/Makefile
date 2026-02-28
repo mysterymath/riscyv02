@@ -56,7 +56,7 @@ $(SIM_BUILD)/sg13g2_stdcell_func.v: $(PDK_ROOT)/ihp-sg13g2/libs.ref/sg13g2_stdce
 	python3 patch_stdcell.py < $< > $@
 
 PROJECT_DIR = $(CURDIR)/..
-CLOCK_PERIOD ?= 14
+CLOCK_PERIOD ?= 70
 TT_VENV ?= $(HOME)/ttsetup/venv
 
 .PHONY: harden metrics

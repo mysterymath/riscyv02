@@ -39,11 +39,27 @@ set half_period [expr $::env(CLOCK_PERIOD) / 2.0]
 create_clock -name clk_data -period $::env(CLOCK_PERIOD) \
     -waveform [list $half_period $::env(CLOCK_PERIOD)]
 
+# Generated clock after delay chain — internal logic domain.
+# The delay chain shifts all internal transitions ~10ns after the raw
+# clock edge, providing output hold intrinsically.  Find the driver pin
+# of the clk_int net (hierarchy naming varies across tools).
+set clk_int_driver [get_pins -of_objects [get_nets clk_int] -filter "direction == output"]
+create_generated_clock -name clk_int \
+    -source [get_ports $clock_port] -divide_by 1 \
+    $clk_int_driver
+
+# Input registers (raw clk) → internal logic (clk_int):
+# Setup: checked normally — data path must fit within the delay chain window.
+# Hold: shift the check back one cycle.  Data from input registers is stable
+# for a full period (70ns); the hold risk is against the *previous* clk_int
+# capture (60ns ago), not the same-edge capture (10ns from now).
+set_multicycle_path -hold 1 -from [get_clocks $clock_port] -to [get_clocks clk_int]
+
 # -----------------------------------------------------------------------
 # I/O delays
 # -----------------------------------------------------------------------
 set input_delay_value [expr $::env(CLOCK_PERIOD) * $::env(IO_DELAY_CONSTRAINT) / 100]
-set output_delay_value [expr $::env(CLOCK_PERIOD) * $::env(IO_DELAY_CONSTRAINT) / 100]
+set output_delay_value 3
 puts "\[INFO] Setting output delay to: $output_delay_value"
 puts "\[INFO] Setting input delay to: $input_delay_value"
 
@@ -80,13 +96,10 @@ set_input_delay $input_delay_value -clock $clocks -clock_fall \
 # -----------------------------------------------------------------------
 # Output delays — dual-edge constraints for muxed bus
 # -----------------------------------------------------------------------
-# Output hold guarantee: all outputs remain stable for at least 5ns after
-# the launching clock edge, matching the hold time requirement of 74HC
-# series DFFs (tH = 5ns). This is critical for external demux logic
-# (DFFs latching address/data on the same edge that triggers the phase
-# switch). The -min constraint forces the resizer to insert delay buffers
-# on any output path faster than 5ns.
-set output_hold_value -5
+# Output hold guarantee: all outputs remain stable for at least 10ns after
+# the launching clock edge.  The clock delay chain provides ~10ns of hold
+# intrinsically; the -min constraint verifies this in STA.
+set output_hold_value -10
 
 # Setup (max) — posedge constraint on all outputs (address phase).
 set_output_delay -max $output_delay_value -clock $clocks [all_outputs]
@@ -160,6 +173,7 @@ set_load $cap_load [all_outputs]
 # -----------------------------------------------------------------------
 puts "\[INFO] Setting clock uncertainty to: $::env(CLOCK_UNCERTAINTY_CONSTRAINT)"
 set_clock_uncertainty $::env(CLOCK_UNCERTAINTY_CONSTRAINT) $clocks
+set_clock_uncertainty $::env(CLOCK_UNCERTAINTY_CONSTRAINT) [get_clocks clk_int]
 
 puts "\[INFO] Setting clock transition to: $::env(CLOCK_TRANSITION_CONSTRAINT)"
 set_clock_transition $::env(CLOCK_TRANSITION_CONSTRAINT) $clocks

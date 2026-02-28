@@ -19,6 +19,7 @@ In comparison to the 6502, it provides:
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
 | 19,516 transistors (TT IHP) | 13,176 transistors (TT IHP) |
 | 13,280 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 20,418 transistors with output hold (see Timing) | — |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -581,9 +582,33 @@ To **single-step**, monitor SYNC during data phases and pull RDY low when it goe
 
 For **wait states**, external logic decodes the address during the address phase and pulls RDY low before the data-phase clock edge if the access needs more time. When the memory is ready, RDY goes high and the CPU continues.
 
-## Input Timing
+## Timing
 
-All inputs have a 4ns setup requirement before the capturing edge: RDY before posedge clk, data bus before negedge clk. Outputs are valid 4ns after their launching edge.
+### Output Hold
+
+The "with output hold" transistor count includes a 42-stage delay chain (~10ns at
+fast corner) between the `clk` pin and all internal logic, plus 16 input
+registers on the raw clock. The delay chain shifts all output transitions ~10ns
+after each clock edge, providing output hold time for direct connection to async
+SRAM and peripherals. The input registers decouple external input timing from the
+delayed internal clock, keeping input hold requirements minimal (~0.1ns).
+
+These structures are necessary for drop-in 65C02 replacement at real-world bus
+speeds but are not part of the logical design comparison against the 6502 — the
+6502 baseline doesn't need them because its bus timing already provides adequate
+hold.
+
+### Timing Constraints
+
+| Parameter | Value | Edge | Notes |
+|---|---|---|---|
+| Clock period | 70ns (14.3 MHz) | — | Matched to 1 MHz bus × 70:1 TT clock ratio |
+| Output setup (address) | 3ns before posedge | posedge | AB[15:0] valid before posedge sampling |
+| Output setup (data) | 3ns before negedge | negedge | DO[7:0], RWB, SYNC valid before negedge sampling |
+| Output hold (all) | 10ns after edge | both | Delay chain provides; all outputs stable ≥10ns |
+| Input setup (data bus) | per IO_DELAY_CONSTRAINT | negedge | uio_in captured at negedge by input registers |
+| Input setup (control) | per IO_DELAY_CONSTRAINT | negedge | IRQB, NMIB, RDY captured at negedge |
+| Input hold (all) | ~0.1ns | negedge | Raw-clock input registers; minimal hold |
 
 ## Instruction Encoding
 

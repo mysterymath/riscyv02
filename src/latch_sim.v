@@ -10,3 +10,10 @@ module sg13g2_lgcp_1 (GCLK, GATE, CLK);
     if (!CLK) gate_latched = GATE;  // Transparent-low latch: tracks GATE immediately
   assign GCLK = CLK & gate_latched;
 endmodule
+
+// Delay cell — zero delay in functional simulation
+module sg13g2_dlygate4sd3_1 (X, A);
+  output X;
+  input A;
+  assign X = A;
+endmodule

@@ -42,9 +42,32 @@ module tt_um_riscyv02 (
 );
 
   // -----------------------------------------------------------------------
+  // Clock delay chain — ~10ns output hold (fast corner)
+  // -----------------------------------------------------------------------
+  wire clk_int;
+  clk_delay_chain u_clk_delay (.in(clk), .out(clk_int));
+
+  // -----------------------------------------------------------------------
+  // Input registers — all external inputs captured on raw negedge clk
+  // (before delay chain).  Gives ~0.1ns hold requirement on all pins.
+  // Bypassed in FUNCTIONAL sim so RTL behavior is unchanged.
+  // -----------------------------------------------------------------------
+`ifdef FUNCTIONAL
+  wire [7:0] din     = uio_in;
+  wire [7:0] ui_in_s = ui_in;
+`else
+  reg [7:0] din_r, ui_in_r;
+  always @(negedge clk or negedge rst_n)
+    if (!rst_n) begin din_r <= 8'h00; ui_in_r <= 8'h00; end
+    else        begin din_r <= uio_in; ui_in_r <= ui_in; end
+  wire [7:0] din     = din_r;
+  wire [7:0] ui_in_s = ui_in_r;
+`endif
+
+  // -----------------------------------------------------------------------
   // RDY input and clock gating
   // -----------------------------------------------------------------------
-  wire rdy = ui_in[2];
+  wire rdy = ui_in_s[2];
 
   // Gated clock for CPU logic — freezes when RDY=0, waiting (WAI), or stopped (STP)
   wire exec_waiting, exec_stopped;
@@ -52,7 +75,7 @@ module tt_um_riscyv02 (
   wire cpu_rdy = rdy && !exec_stopped && (!exec_waiting || wake);
   wire cpu_clk;
   sg13g2_lgcp_1 u_cpu_icg (
-    .CLK  (clk),
+    .CLK  (clk_int),
     .GATE (cpu_rdy),
     .GCLK (cpu_clk)
   );
@@ -66,10 +89,10 @@ module tt_um_riscyv02 (
   // releases is missed — same as the 6502, whose reset sequence clears
   // any pending NMI.
   // -----------------------------------------------------------------------
-  wire nmib = ui_in[1];  // Active-low non-maskable interrupt (edge-triggered)
+  wire nmib = ui_in_s[1];  // Active-low non-maskable interrupt (edge-triggered)
 
   reg nmib_prev;
-  always @(negedge clk or negedge rst_n)
+  always @(negedge clk_int or negedge rst_n)
     if (!rst_n) nmib_prev <= 1'b0;
     else        nmib_prev <= nmib;
 
@@ -109,12 +132,12 @@ module tt_um_riscyv02 (
   //       immediately.  Next cycle: pending = 0, no double-take.
   // -----------------------------------------------------------------------
   reg cpu_rdy_latched;
-  always @(posedge clk or negedge rst_n)
+  always @(posedge clk_int or negedge rst_n)
     if (!rst_n) cpu_rdy_latched <= 1'b0;
     else        cpu_rdy_latched <= cpu_rdy;
 
   reg nmi_pending;
-  always @(negedge clk or negedge rst_n)
+  always @(negedge clk_int or negedge rst_n)
     if (!rst_n)                                    nmi_pending <= 1'b0;
     else if (cpu_rdy_latched && exec_nmi_ack)      nmi_pending <= 1'b0;
     else if (nmi_edge)                             nmi_pending <= 1'b1;
@@ -138,12 +161,12 @@ module tt_um_riscyv02 (
   wire mux_sel = q ^ q_d;
 
   reg q;
-  always @(posedge clk or negedge rst_n)
+  always @(posedge clk_int or negedge rst_n)
     if (!rst_n)        q <= 1'b0;
     else if (!mux_sel) q <= ~q;
 
   reg q_d;
-  always @(negedge clk or negedge rst_n)
+  always @(negedge clk_int or negedge rst_n)
     if (!rst_n)       q_d <= 1'b0;
     else if (mux_sel) q_d <= ~q_d;
 
@@ -170,7 +193,7 @@ module tt_um_riscyv02 (
   riscyv02_fetch u_fetch (
     .clk        (cpu_clk),
     .rst_n      (rst_n),
-    .uio_in     (uio_in),
+    .uio_in     (din),
     .bus_free   (!exec_bus_active),
     .ir_accept  (exec_ir_accept),
     .flush      (flush),
@@ -181,12 +204,12 @@ module tt_um_riscyv02 (
   );
 
   // Interrupt inputs
-  wire irqb = ui_in[0];  // Active-low interrupt request (level-sensitive)
+  wire irqb = ui_in_s[0];  // Active-low interrupt request (level-sensitive)
 
   riscyv02_execute u_execute (
     .clk           (cpu_clk),
     .rst_n         (rst_n),
-    .uio_in        (uio_in),
+    .uio_in        (din),
     .irqb          (irqb),
     .nmi_pending   (nmi_pending),
     .nmi_edge      (nmi_edge),
@@ -256,7 +279,7 @@ module tt_um_riscyv02 (
   end
 
   // Unused
-  wire _unused = &{ena, ui_in[7:3], 1'b0};
+  wire _unused = &{ena, ui_in_s[7:3], 1'b0};
 
 endmodule
 
@@ -281,4 +304,24 @@ module bus_keep_1 (
     output wire out
 );
     assign out = in;
+endmodule
+
+// =========================================================================
+// Clock delay chain — provides output hold time by delaying internal clock.
+// N × sg13g2_dlygate4sd3_1 ≈ 10ns hold at fast corner (242ps/cell).
+// =========================================================================
+(* keep_hierarchy *)
+module clk_delay_chain #(parameter N = 42) (
+    input  wire in,
+    output wire out
+);
+    wire [N:0] chain;
+    assign chain[0] = in;
+    genvar i;
+    generate
+        for (i = 0; i < N; i = i + 1) begin : dly
+            sg13g2_dlygate4sd3_1 u (.A(chain[i]), .X(chain[i+1]));
+        end
+    endgenerate
+    assign out = chain[N];
 endmodule
