@@ -42,14 +42,7 @@ module tt_um_riscyv02 (
 );
 
   // -----------------------------------------------------------------------
-  // Clock delay chain — ~10ns output hold (fast corner)
-  // -----------------------------------------------------------------------
-  wire clk_int;
-  clk_delay_chain u_clk_delay (.in(clk), .out(clk_int));
-
-  // -----------------------------------------------------------------------
-  // Input registers — all external inputs captured on raw negedge clk
-  // (before delay chain).  Gives ~0.1ns hold requirement on all pins.
+  // Input registers — all external inputs captured on negedge clk.
   // Bypassed in FUNCTIONAL sim so RTL behavior is unchanged.
   // -----------------------------------------------------------------------
 `ifdef FUNCTIONAL
@@ -75,7 +68,7 @@ module tt_um_riscyv02 (
   wire cpu_rdy = rdy && !exec_stopped && (!exec_waiting || wake);
   wire cpu_clk;
   sg13g2_lgcp_1 u_cpu_icg (
-    .CLK  (clk_int),
+    .CLK  (clk),
     .GATE (cpu_rdy),
     .GCLK (cpu_clk)
   );
@@ -92,7 +85,7 @@ module tt_um_riscyv02 (
   wire nmib = ui_in_s[1];  // Active-low non-maskable interrupt (edge-triggered)
 
   reg nmib_prev;
-  always @(negedge clk_int or negedge rst_n)
+  always @(negedge clk or negedge rst_n)
     if (!rst_n) nmib_prev <= 1'b0;
     else        nmib_prev <= nmib;
 
@@ -132,12 +125,12 @@ module tt_um_riscyv02 (
   //       immediately.  Next cycle: pending = 0, no double-take.
   // -----------------------------------------------------------------------
   reg cpu_rdy_latched;
-  always @(posedge clk_int or negedge rst_n)
+  always @(posedge clk or negedge rst_n)
     if (!rst_n) cpu_rdy_latched <= 1'b0;
     else        cpu_rdy_latched <= cpu_rdy;
 
   reg nmi_pending;
-  always @(negedge clk_int or negedge rst_n)
+  always @(negedge clk or negedge rst_n)
     if (!rst_n)                                    nmi_pending <= 1'b0;
     else if (cpu_rdy_latched && exec_nmi_ack)      nmi_pending <= 1'b0;
     else if (nmi_edge)                             nmi_pending <= 1'b1;
@@ -161,12 +154,12 @@ module tt_um_riscyv02 (
   wire mux_sel = q ^ q_d;
 
   reg q;
-  always @(posedge clk_int or negedge rst_n)
+  always @(posedge clk or negedge rst_n)
     if (!rst_n)        q <= 1'b0;
     else if (!mux_sel) q <= ~q;
 
   reg q_d;
-  always @(negedge clk_int or negedge rst_n)
+  always @(negedge clk or negedge rst_n)
     if (!rst_n)       q_d <= 1'b0;
     else if (mux_sel) q_d <= ~q_d;
 
@@ -306,22 +299,3 @@ module bus_keep_1 (
     assign out = in;
 endmodule
 
-// =========================================================================
-// Clock delay chain — provides output hold time by delaying internal clock.
-// N × sg13g2_dlygate4sd3_1 ≈ 10ns hold at fast corner (242ps/cell).
-// =========================================================================
-(* keep_hierarchy *)
-module clk_delay_chain #(parameter N = 42) (
-    input  wire in,
-    output wire out
-);
-    wire [N:0] chain;
-    assign chain[0] = in;
-    genvar i;
-    generate
-        for (i = 0; i < N; i = i + 1) begin : dly
-            sg13g2_dlygate4sd3_1 u (.A(chain[i]), .X(chain[i+1]));
-        end
-    endgenerate
-    assign out = chain[N];
-endmodule

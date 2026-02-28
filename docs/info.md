@@ -17,9 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 19,516 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,280 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
-| 20,418 transistors with output hold (see Timing) | — |
+| 19,934 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,698 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -584,31 +583,60 @@ For **wait states**, external logic decodes the address during the address phase
 
 ## Timing
 
-### Output Hold
+### Board-Level Timing
 
-The "with output hold" transistor count includes a 42-stage delay chain (~10ns at
-fast corner) between the `clk` pin and all internal logic, plus 16 input
-registers on the raw clock. The delay chain shifts all output transitions ~10ns
-after each clock edge, providing output hold time for direct connection to async
-SRAM and peripherals. The input registers decouple external input timing from the
-delayed internal clock, keeping input hold requirements minimal (~0.1ns).
+The SDC models the full round-trip through the TT mux (see
+[TT Mux Timing](#tt-mux-timing) for details). All constraints are STA-verified
+at the board pin boundary — the numbers below are what external memory and
+peripherals actually see.
 
-These structures are necessary for drop-in 65C02 replacement at real-world bus
-speeds but are not part of the logical design comparison against the 6502 — the
-6502 baseline doesn't need them because its bus timing already provides adequate
-hold.
+| Parameter | Value | Notes |
+|---|---|---|
+| Clock period | 70ns (14.3 MHz) | |
+| Output setup (address) | 6.9ns before posedge | AB[15:0]; slow corner worst case |
+| Output setup (data) | 10.7ns before negedge | DO[7:0], RWB, SYNC; slow corner worst case |
+| Output hold (all) | >11ns after launching edge | Guaranteed by mux path delay (see below) |
+| Input setup | 14ns before negedge | All inputs captured on negedge clk |
+| Input hold | 0ns | DFF hold times are negative across all corners |
 
-### Timing Constraints
+### TT Mux Timing
 
-| Parameter | Value | Edge | Notes |
-|---|---|---|---|
-| Clock period | 70ns (14.3 MHz) | — | Matched to 1 MHz bus × 70:1 TT clock ratio |
-| Output setup (address) | 3ns before posedge | posedge | AB[15:0] valid before posedge sampling |
-| Output setup (data) | 3ns before negedge | negedge | DO[7:0], RWB, SYNC valid before negedge sampling |
-| Output hold (all) | 10ns after edge | both | Delay chain provides; all outputs stable ≥10ns |
-| Input setup (data bus) | per IO_DELAY_CONSTRAINT | negedge | uio_in captured at negedge by input registers |
-| Input setup (control) | per IO_DELAY_CONSTRAINT | negedge | IRQB, NMIB, RDY captured at negedge |
-| Input hold (all) | ~0.1ns | negedge | Raw-clock input registers; minimal hold |
+The TT mux sits between the project tile and the board pins. It is a purely
+combinational path — no registers in the data path. Every signal (clock in,
+data/address out, data in) passes through it, adding asymmetric delay:
+
+| Segment | Input (pad→project) | Output (project→pad) |
+|---|---|---|
+| IO pad (IHP liberty, slow) | ~0.7ns | ~4.0ns |
+| tt_ctrl (pad↔spine) | 2.75ns | 2.25ns |
+| tt_mux (spine↔project) | 2.5ns | 7.5ns |
+| **Total** | **~5.7ns** | **~16.5ns** |
+
+The `set_max_delay` constraints in the TT SDC are identical across all TT
+branches (IHP and Sky130); no IHP-specific characterization exists yet. IO pad
+delays come from the IHP liberty models. Measured Sky130 round-trip is ~20ns
+(~10% less than the constraint-derived 22ns); IHP silicon data is not yet
+available.
+
+**Impact on output setup.** The mux adds a full round-trip penalty to output
+setup: the clock arrives at the project ~5.7ns late, and the output arrives at
+the board pin ~16.5ns late. The total round-trip cost is ~22ns. The SDC models
+this as `set_output_delay 22`, so all remaining slack is real board-level setup
+margin. At the slow corner, the worst-case output path has 6.9ns of slack —
+enough for any reasonable external latch or SRAM setup time.
+
+**Impact on output hold.** The mux *guarantees* board-level hold. Even at the
+fast corner with minimum delays (mux clock input ~3ns + CK→Q ~0.3ns + mux
+output ~8ns ≈ 11.3ns), the output transition at the board pin arrives >11ns
+after the clock edge at the board pin. This far exceeds the ~2ns hold
+requirement of typical external latches and SRAM. The mux makes an explicit
+delay chain unnecessary — the previous 42-cell delay chain (~10ns at fast
+corner, ~900 transistors) was removed once this analysis was complete.
+
+**Pin-to-pin skew.** The mux path is not perfectly matched across all pins.
+TT 3.5 silicon measurements show <2ns of pin-to-pin skew. The SDC adds this
+as setup-only clock uncertainty (`set_clock_uncertainty -setup`), since the skew
+affects output setup margin but not internal hold paths.
 
 ## Instruction Encoding
 
