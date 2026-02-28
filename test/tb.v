@@ -28,15 +28,7 @@ module tb ();
   initial begin
 `ifndef NODUMP
     $dumpfile("tb.fst");
-    $dumpvars(0, user_project);
-    $dumpvars(0, clk);
-    $dumpvars(0, rst_n);
-    $dumpvars(0, ena);
-    $dumpvars(0, uio_in);
-    $dumpvars(0, uo_out);
-    $dumpvars(0, uio_out);
-    $dumpvars(0, uio_oe);
-    $dumpvars(0, addr);
+    $dumpvars(0, tb);
 `endif
     #1;
   end
