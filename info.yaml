@@ -4,7 +4,7 @@ project:
   version:      "1.0"
   author:       "mysterymath"
   discord:      ""
-  description:  "16-bit RISC processor, logically pin-compatible with WDC 6502"
+  description:  "16-bit RISC processor, logically pin-compatible with WDC 65C02 (fMax 17.5 MHz)"
   language:     "Verilog"
   clock_hz:     14285714
 

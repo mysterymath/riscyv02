@@ -592,12 +592,17 @@ peripherals actually see.
 
 | Parameter | Value | Notes |
 |---|---|---|
-| Clock period | 70ns (14.3 MHz) | |
+| Clock period | 70ns (14.3 MHz) | fMax = 17.5 MHz (57ns), see below |
 | Output setup (address) | 7.1ns before posedge | AB[15:0]; slow corner worst case |
 | Output setup (data) | 59.3ns before negedge | DO[7:0], RWB, SYNC; slow corner worst case |
 | Output hold (all) | >11ns after launching edge | Guaranteed by mux path delay (see below) |
 | Input setup | 14ns before negedge | All inputs captured on negedge clk |
 | Input hold | 0ns | DFF hold times are negative across all corners |
+
+**Maximum clock speed.** STA-verified fMax is **17.5 MHz** (57ns period, 0.25ns
+slack at the slow corner). At 56ns the design fails timing by -0.22ns. The
+default 70ns period provides 7.1ns of margin — comfortably exceeding the
+fastest WDC W65C02S (14 MHz).
 
 ### TT Mux Timing
 
