@@ -17,8 +17,8 @@ In comparison to the 6502, it provides:
 | 4-cycle calls, 3-4 cycle returns | 6-cycle calls/returns |
 | 2-byte instructions | 1-3 byte instructions, ~2.25 bytes avg (Megaman 5) |
 | 3-cycle 16-bit stack-relative load/store byte | 5/6-cycle 16-bit stack-relative load/store byte |
-| 19,934 transistors (TT IHP) | 13,176 transistors (TT IHP) |
-| 13,698 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
+| 19,516 transistors (TT IHP) | 13,176 transistors (TT IHP) |
+| 13,280 SRAM-adjusted transistors | 13,176 SRAM-adjusted transistors |
 
 This project exists to provide evidence against a notion floating around in the
 retrocomputing scene: that the 6502 was a "local optima" in the design space
@@ -593,8 +593,8 @@ peripherals actually see.
 | Parameter | Value | Notes |
 |---|---|---|
 | Clock period | 70ns (14.3 MHz) | |
-| Output setup (address) | 6.9ns before posedge | AB[15:0]; slow corner worst case |
-| Output setup (data) | 10.7ns before negedge | DO[7:0], RWB, SYNC; slow corner worst case |
+| Output setup (address) | 7.1ns before posedge | AB[15:0]; slow corner worst case |
+| Output setup (data) | 59.3ns before negedge | DO[7:0], RWB, SYNC; slow corner worst case |
 | Output hold (all) | >11ns after launching edge | Guaranteed by mux path delay (see below) |
 | Input setup | 14ns before negedge | All inputs captured on negedge clk |
 | Input hold | 0ns | DFF hold times are negative across all corners |
@@ -622,16 +622,16 @@ available.
 setup: the clock arrives at the project ~5.7ns late, and the output arrives at
 the board pin ~16.5ns late. The total round-trip cost is ~22ns. The SDC models
 this as `set_output_delay 22`, so all remaining slack is real board-level setup
-margin. At the slow corner, the worst-case output path has 6.9ns of slack —
-enough for any reasonable external latch or SRAM setup time.
+margin. At the slow corner, the worst-case address output path has 7.1ns of slack —
+enough for any reasonable external latch or SRAM setup time. Data-phase outputs
+have ~59ns of slack (simple registered paths, not through the state decode
+chain).
 
 **Impact on output hold.** The mux *guarantees* board-level hold. Even at the
 fast corner with minimum delays (mux clock input ~3ns + CK→Q ~0.3ns + mux
 output ~8ns ≈ 11.3ns), the output transition at the board pin arrives >11ns
 after the clock edge at the board pin. This far exceeds the ~2ns hold
-requirement of typical external latches and SRAM. The mux makes an explicit
-delay chain unnecessary — the previous 42-cell delay chain (~10ns at fast
-corner, ~900 transistors) was removed once this analysis was complete.
+requirement of typical external latches and SRAM. The mux makes an explicit delay chain unnecessary.
 
 **Pin-to-pin skew.** The mux path is not perfectly matched across all pins.
 TT 3.5 silicon measurements show <2ns of pin-to-pin skew. The SDC adds this

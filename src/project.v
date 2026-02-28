@@ -41,21 +41,8 @@ module tt_um_riscyv02 (
     input  wire       rst_n
 );
 
-  // -----------------------------------------------------------------------
-  // Input registers — all external inputs captured on negedge clk.
-  // Bypassed in FUNCTIONAL sim so RTL behavior is unchanged.
-  // -----------------------------------------------------------------------
-`ifdef FUNCTIONAL
   wire [7:0] din     = uio_in;
   wire [7:0] ui_in_s = ui_in;
-`else
-  reg [7:0] din_r, ui_in_r;
-  always @(negedge clk or negedge rst_n)
-    if (!rst_n) begin din_r <= 8'h00; ui_in_r <= 8'h00; end
-    else        begin din_r <= uio_in; ui_in_r <= ui_in; end
-  wire [7:0] din     = din_r;
-  wire [7:0] ui_in_s = ui_in_r;
-`endif
 
   // -----------------------------------------------------------------------
   // RDY input and clock gating
