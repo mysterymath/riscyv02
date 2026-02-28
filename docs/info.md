@@ -65,9 +65,8 @@ negedge. Control inputs stay consistent between the two phases.
 - `ui_in[1]` = NMIB (active-low non-maskable interrupt, edge-triggered)
 - `ui_in[2]` = RDY (active-high ready signal)
 
-See [Demux: Reconstructing the Bus](#demux-reconstructing-the-bus) for how to
-demultiplex these pins into separate address, data, and control signals for
-connecting to async SRAM and peripherals.
+See the Demux section below for how to demultiplex these pins into separate
+address, data, and control signals for connecting to async SRAM and peripherals.
 
 ### Architecture
 
@@ -129,12 +128,11 @@ fetch). NMI edge detection is combinational -- if the falling edge arrives on
 the same cycle that the FSM is ready, the NMI is taken immediately with no
 additional detection delay.
 
-[Interrupt implementation](#interrupt-implementation) details are described
-later.
+Interrupt implementation details are described later.
 
 ## How to test
 
-Flash the [demo board firmware](#demo-board-firmware) onto the TT demoboard's RP2350. The firmware emulates 64 KiB of SRAM and a UART peripheral, providing everything the CPU needs to run programs. Load a test binary into the firmware's `mem[]` array, connect to the demoboard's USB serial port, and verify output via the memory-mapped UART.
+Flash the demo board firmware onto the TT demoboard's RP2350. The firmware emulates 64 KiB of SRAM and a UART peripheral, providing everything the CPU needs to run programs. Load a test binary into the firmware's `mem[]` array, connect to the demoboard's USB serial port, and verify output via the memory-mapped UART.
 
 ## External hardware
 
@@ -376,11 +374,11 @@ R6 is a normal GPR — callee-saved, and interrupt handlers that use it must sav
 | SLL | Shift left logical | rd = rs1 << rs2[3:0] | 2 | |
 | SLLI | Shift left immediate | rd <<= shamt | 2 | |
 | SLLT | Shift left, link T | T = rd[15]; rd = {rd[14:0], 0} | 2 | |
-| RLT | Rotate left through T | T = rd[15]; rd = {rd[14:0], old_T} | 2 | [4](#notes) |
+| RLT | Rotate left through T | T = rd[15]; rd = {rd[14:0], old_T} | 2 | Note 4 |
 | SRL | Shift right logical | rd = rs1 >> rs2[3:0] (logical) | 2 | |
 | SRLI | Shift right logical imm | rd >>= shamt (logical) | 2 | |
 | SRLT | Shift right, link T | T = rd[0]; rd = {0, rd[15:1]} | 2 | |
-| RRT | Rotate right through T | T = rd[0]; rd = {old_T, rd[15:1]} | 2 | [4](#notes) |
+| RRT | Rotate right through T | T = rd[0]; rd = {old_T, rd[15:1]} | 2 | Note 4 |
 | SRA | Shift right arithmetic | rd = rs1 >> rs2[3:0] (arithmetic) | 2 | |
 | SRAI | Shift right arith imm | rd >>= shamt (arithmetic) | 2 | |
 
@@ -399,10 +397,10 @@ R6 is a normal GPR — callee-saved, and interrupt handlers that use it must sav
 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
-| BZ | Branch if zero | if rs == 0: PC += sext(imm8) << 1 | 2 / 3-4 | [1](#notes) |
-| BNZ | Branch if non-zero | if rs != 0: PC += sext(imm8) << 1 | 2 / 3-4 | [1](#notes) |
-| BT | Branch if T set | if T == 1: PC += sext(imm8) << 1 | 2 / 3-4 | [1](#notes) |
-| BF | Branch if T clear | if T == 0: PC += sext(imm8) << 1 | 2 / 3-4 | [1](#notes) |
+| BZ | Branch if zero | if rs == 0: PC += sext(imm8) << 1 | 2 / 3-4 | Note 1 |
+| BNZ | Branch if non-zero | if rs != 0: PC += sext(imm8) << 1 | 2 / 3-4 | Note 1 |
+| BT | Branch if T set | if T == 1: PC += sext(imm8) << 1 | 2 / 3-4 | Note 1 |
+| BF | Branch if T clear | if T == 0: PC += sext(imm8) << 1 | 2 / 3-4 | Note 1 |
 
 **Loads**
 
@@ -411,9 +409,9 @@ R6 is a normal GPR — callee-saved, and interrupt handlers that use it must sav
 | LI | Load immediate | rd = sext(imm8) | 2 | |
 | LUI | Load upper immediate | rd = imm8 << 8 | 2 | |
 | AUIPC | Add upper imm to PC | rd = (PC+2) + (imm8 << 8) | 2 | |
-| LW | Load word | rd = MEM16[R0 + sext(imm8)] | 4 | [2](#notes) |
-| LWS | Load word (SP) | rd = MEM16[R7 + sext(imm8)] | 4 | [2](#notes) |
-| LWR | Load word (register) | rd = MEM16[rs1] | 4 | [2](#notes) |
+| LW | Load word | rd = MEM16[R0 + sext(imm8)] | 4 | Note 2 |
+| LWS | Load word (SP) | rd = MEM16[R7 + sext(imm8)] | 4 | Note 2 |
+| LWR | Load word (register) | rd = MEM16[rs1] | 4 | Note 2 |
 | LB | Load byte signed | rd = sext(MEM[R0 + sext(imm8)]) | 3 | |
 | LBS | Load byte signed (SP) | rd = sext(MEM[R7 + sext(imm8)]) | 3 | |
 | LBR | Load byte signed (reg) | rd = sext(MEM[rs1]) | 3 | |
@@ -425,9 +423,9 @@ R6 is a normal GPR — callee-saved, and interrupt handlers that use it must sav
 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
-| SW | Store word | MEM16[R0 + sext(imm8)] = rs | 4 | [2](#notes) |
-| SWS | Store word (SP) | MEM16[R7 + sext(imm8)] = rs | 4 | [2](#notes) |
-| SWR | Store word (register) | MEM16[rs1] = rs2 | 4 | [2](#notes) |
+| SW | Store word | MEM16[R0 + sext(imm8)] = rs | 4 | Note 2 |
+| SWS | Store word (SP) | MEM16[R7 + sext(imm8)] = rs | 4 | Note 2 |
+| SWR | Store word (register) | MEM16[rs1] = rs2 | 4 | Note 2 |
 | SB | Store byte | MEM[R0 + sext(imm8)] = rs[7:0] | 3 | |
 | SBS | Store byte (SP) | MEM[R7 + sext(imm8)] = rs[7:0] | 3 | |
 | SBR | Store byte (register) | MEM[rs1] = rs2[7:0] | 3 | |
@@ -436,8 +434,8 @@ R6 is a normal GPR — callee-saved, and interrupt handlers that use it must sav
 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
-| J | Jump | PC += sext(imm10) << 1 | 3-4 | [3](#notes) |
-| JR | Jump register | PC = rs + sext(imm8) | 3-4 | [3](#notes) |
+| J | Jump | PC += sext(imm10) << 1 | 3-4 | Note 3 |
+| JR | Jump register | PC = rs + sext(imm8) | 3-4 | Note 3 |
 | JAL | Jump and link | R6 = PC+2; PC += sext(imm10) << 1 | 4 | |
 | JALR | Jump and link register | R6 = PC+2; PC = rs + sext(imm8) | 4 | |
 
@@ -445,15 +443,15 @@ R6 is a normal GPR — callee-saved, and interrupt handlers that use it must sav
 
 | Mnemonic | Name | Effect | Cycles | |
 |---|---|---|---|---|
-| CLI | Clear interrupt disable | I = 0 | 2 | [5](#notes) |
-| SEI | Set interrupt disable | I = 1 | 2 | [5](#notes) |
+| CLI | Clear interrupt disable | I = 0 | 2 | Note 5 |
+| SEI | Set interrupt disable | I = 1 | 2 | Note 5 |
 | SRR | Status register read | rd = {12'b0, ESR, I, T} | 2 | |
-| SRW | Status register write | ESR = rs[3:2]; {I, T} = rs[1:0] | 2 | [5](#notes) |
+| SRW | Status register write | ESR = rs[3:2]; {I, T} = rs[1:0] | 2 | Note 5 |
 | EPCR | Read EPC | rd = EPC | 2 | |
 | EPCW | Write EPC | EPC = rs | 2 | |
-| INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 3 | [5](#notes), [7](#notes) |
-| RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 3 | [5](#notes), [6](#notes) |
-| WAI | Wait for interrupt | halt until interrupt | 2 / halt | [8](#notes) |
+| INT | Software interrupt | ESR={I,T}; EPC=PC+2; I=1; PC=(vec+1)*2 | 3 | Note 5, Note 7 |
+| RETI | Return from interrupt | {I, T} = ESR; PC = EPC | 3 | Note 5, Note 6 |
+| WAI | Wait for interrupt | halt until interrupt | 2 / halt | Note 8 |
 | STP | Stop | halt until reset | 1 | |
 
 ### Notes
