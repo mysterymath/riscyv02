@@ -41,7 +41,7 @@ The full datasheet is in **[docs/info.md](docs/info.md)**, covering:
 |---|---|
 | Top module | `tt_um_riscyv02` |
 | Tiles | 1x2 |
-| Clock | 71.4 MHz (14ns period) |
+| Clock | 17.5 MHz (57ns period) |
 | Process | IHP sg13g2 |
 | Language | Verilog |
 
