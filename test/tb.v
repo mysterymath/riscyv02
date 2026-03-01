@@ -43,6 +43,20 @@ module tb ();
   wire [7:0] uio_out;
   wire [7:0] uio_oe;
 
+  // 64KB RAM — zero-initialized.  Program contents are written by cocotb
+  // before reset, so the `initial` here is equivalent to flash being
+  // blank at manufacturing.
+  reg [7:0] ram [0:65535];
+  integer i;
+  initial for (i = 0; i < 65536; i = i + 1) ram[i] = 8'h00;
+
+  // -----------------------------------------------------------------------
+  // Address register: models the demux's posedge-triggered address capture.
+  //
+  // Resets to 0x0000, matching the real demux and the CPU's reset PC.
+  // -----------------------------------------------------------------------
+  reg [15:0] addr;
+
   // Bidirectional I/O pin model: when uio_oe drives (address phase / writes),
   // uio_in reads back uio_out (the CPU's own output).  When tristated (read
   // data phase), uio_in sees SRAM data — matching real pad behavior.
@@ -58,20 +72,6 @@ module tb ();
       .clk    (clk),
       .rst_n  (rst_n)
   );
-
-  // 64KB RAM — zero-initialized.  Program contents are written by cocotb
-  // before reset, so the `initial` here is equivalent to flash being
-  // blank at manufacturing.
-  reg [7:0] ram [0:65535];
-  integer i;
-  initial for (i = 0; i < 65536; i = i + 1) ram[i] = 8'h00;
-
-  // -----------------------------------------------------------------------
-  // Address register: models the demux's posedge-triggered address capture.
-  //
-  // Resets to 0x0000, matching the real demux and the CPU's reset PC.
-  // -----------------------------------------------------------------------
-  reg [15:0] addr;
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n)
       addr <= 16'h0000;

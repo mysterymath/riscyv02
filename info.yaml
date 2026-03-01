@@ -1,6 +1,7 @@
 # Tiny Tapeout project information
 project:
   title:        "RISCY-V02"
+  version:      "1.0"
   author:       "mysterymath"
   discord:      ""
   description:  "16-bit RISC processor, logically pin-compatible with WDC 6502"
