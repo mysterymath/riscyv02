@@ -586,7 +586,7 @@ For **wait states**, external logic decodes the address during the address phase
 ### Board-Level Timing
 
 The SDC models the full round-trip through the TT mux (see
-[TT Mux Timing](#tt-mux-timing) for details). All constraints are STA-verified
+TT Mux Timing below for details). All constraints are STA-verified
 at the board pin boundary — the numbers below are what external memory and
 peripherals actually see.
 
