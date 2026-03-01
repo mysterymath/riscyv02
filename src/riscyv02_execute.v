@@ -163,7 +163,6 @@ module riscyv02_execute (
   wire is_si_t_rotate = is_si_t && ir[13];
 
   // R-type shifts (opcode 27, funct2 1-3)
-  wire is_sll = is_alu2 && funct2 == 2'd1;
   wire is_srl = is_alu2 && funct2 == 2'd2;
   wire is_sra = is_alu2 && funct2 == 2'd3;
 
@@ -382,7 +381,9 @@ module riscyv02_execute (
   wire [3:0] shamt = is_shift_rr ? r2[3:0] : is_si_t ? 4'd1 : ir[11:8];
 
   reg  [14:0] shifter_din;
+  /* verilator lint_off UNOPTFLAT */
   wire [7:0]  shifter_result;
+  /* verilator lint_on UNOPTFLAT */
 
   riscyv02_shifter u_shifter (
     .din    (shifter_din),
@@ -435,7 +436,9 @@ module riscyv02_execute (
   // Interrupt control
   wire fsm_ready = (state == E_IDLE) || insn_completing;
   wire take_nmi = fsm_ready && (nmi_pending || nmi_edge);
+  /* verilator lint_off UNOPTFLAT */
   wire take_irq = fsm_ready && !irqb && !insn_i_bit && !take_nmi;
+  /* verilator lint_on UNOPTFLAT */
   assign ir_accept = fsm_ready && ir_valid && !take_nmi && !take_irq && !jump;
   assign waiting = (state == E_IDLE) && is_wai;
   assign stopped = (state == E_IDLE) && is_stp;

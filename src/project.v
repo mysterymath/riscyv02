@@ -75,7 +75,9 @@ module tt_um_riscyv02 (
 
   wire nmi_edge = nmib_prev && !nmib;
 
+  /* verilator lint_off UNOPTFLAT */
   wire exec_nmi_ack;
+  /* verilator lint_on UNOPTFLAT */
 
   // -----------------------------------------------------------------------
   // NMI pending latch — cross-domain handshake
@@ -153,7 +155,9 @@ module tt_um_riscyv02 (
   wire [15:0] fetch_ab;
 
   wire        exec_bus_active;
+  /* verilator lint_off UNOPTFLAT */
   wire        exec_ir_accept;
+  /* verilator lint_on UNOPTFLAT */
   wire [15:0] exec_ab;
   wire [7:0]  exec_dout;
   wire        exec_rwb;
